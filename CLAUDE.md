@@ -15,6 +15,13 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Non-negotiables
 
+- **Identity comes from the authenticated principal, never a request body.**
+  Every buyer route derives `buyer_id` from a buyer token, every seller route
+  derives `seller_id` from a seller token, and `/admin/*` requires an admin
+  token (`auth.py`). Do not add a `buyer_id`/`seller_id` field to a request
+  body — that reintroduces impersonation. Auth is pilot-grade HMAC (shared
+  secret via `MARKETPLACE_SECRET`); the upgrade path is a real user store +
+  provider (see `ROADMAP.md`). Details and the closed findings: `SECURITY.md`.
 - **Information asymmetry is enforced by the model layer**, not by hand-curated
   dict keys. `BuyerJobView` and `SellerJobView` are separate Pydantic models;
   every buyer-facing endpoint returns the buyer view, every seller-facing

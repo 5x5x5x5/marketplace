@@ -1,5 +1,6 @@
 """In-memory state. No persistence in v1."""
 
+from datetime import datetime
 from uuid import UUID
 
 from .models import (
@@ -34,7 +35,9 @@ class Store:
         return self.availability.pop((seller_id, service_type_id), None) is not None
 
     def available_for(self, service_type_id: str) -> list[AvailabilityRecord]:
-        return [a for a in self.availability.values() if a.service_type_id == service_type_id]
+        # Snapshot with list() so a concurrent add/remove can't raise
+        # "dictionary changed size during iteration".
+        return [a for a in list(self.availability.values()) if a.service_type_id == service_type_id]
 
     # Profiles — auto-create on first reference so ad-hoc IDs work.
     def get_or_create_seller(self, seller_id: str) -> SellerProfile:
@@ -57,6 +60,17 @@ class Store:
             if j.service_type_id == service_type_id
             and j.status in (JobStatus.QUOTED, JobStatus.MATCHED)
         )
+
+    def sweep_expired_quotes(self, now: datetime) -> int:
+        """Drop quotes past their TTL. Called opportunistically on quote creation.
+
+        ponytail: sweep-on-write, no background task. A TTL store or cron is a
+        post-persistence concern.
+        """
+        expired = [qid for qid, q in self.quotes.items() if q.expires_at < now]
+        for qid in expired:
+            del self.quotes[qid]
+        return len(expired)
 
     # Transactions
     def record_transaction(self, tx: Transaction) -> Transaction:

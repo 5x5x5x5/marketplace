@@ -12,6 +12,17 @@ Two-sided marketplace where the platform sets the buyer-facing price and the sel
 
 Buyer- and seller-facing responses use distinct view models that exclude the other side's number. Only admin endpoints see both.
 
+## Auth
+
+Every request carries a bearer token asserting a role (`buyer`/`seller`/`admin`) and a subject id. Identity is taken from the token, **never** from the request body — that's what stops one party impersonating another. Auth is pilot-grade HMAC (`src/marketplace/auth.py`); set `MARKETPLACE_SECRET` outside local dev. See `SECURITY.md` and `ROADMAP.md`.
+
+```python
+from marketplace.auth import mint_token
+headers = {"Authorization": f"Bearer {mint_token('buyer', 'alice')}"}
+```
+
+`GET /healthz` is unauthenticated.
+
 ## Commands
 
 ```bash
@@ -25,23 +36,25 @@ uv run uvicorn marketplace.api:app --reload
 
 ## Endpoints
 
+All routes below require a bearer token of the matching role; identity is taken from the token.
+
 **Buyer**
 
-| Method | Path             | Body                              | Returns       |
-|--------|------------------|-----------------------------------|---------------|
-| POST   | `/quotes`        | `{buyer_id, service_type_id}`     | `Quote`       |
-| POST   | `/jobs`          | `{quote_id}`                      | `BuyerJobView` (no `seller_payout`) |
-| GET    | `/jobs/{id}?role=buyer` | —                          | `BuyerJobView` |
+| Method | Path             | Body                     | Returns       |
+|--------|------------------|--------------------------|---------------|
+| POST   | `/quotes`        | `{service_type_id}`      | `Quote`       |
+| POST   | `/jobs`          | `{quote_id}`             | `BuyerJobView` (no `seller_payout`) |
+| GET    | `/jobs/{id}`     | —                        | `BuyerJobView` (owning buyer only) |
 
 **Seller**
 
-| Method | Path                                            | Body                | Returns       |
-|--------|-------------------------------------------------|---------------------|---------------|
-| POST   | `/availability`                                 | `{seller_id, service_type_id}` | `{status: ok}` |
-| DELETE | `/availability/{seller_id}/{service_type_id}`   | —                   | `{status: ok}` |
-| GET    | `/jobs/offered?seller_id=...`                   | —                   | `list[SellerJobView]` (no `buyer_price`) |
-| POST   | `/jobs/{id}/accept`                             | `{seller_id}`       | `{status: ok}` |
-| POST   | `/jobs/{id}/complete`                           | `{seller_id}`       | `Transaction`  |
+| Method | Path                                 | Body                | Returns       |
+|--------|--------------------------------------|---------------------|---------------|
+| POST   | `/availability`                      | `{service_type_id}` | `{status: ok}` |
+| DELETE | `/availability/{service_type_id}`    | —                   | `{status: ok}` |
+| GET    | `/jobs/offered?limit=&offset=`       | —                   | `list[SellerJobView]` (no `buyer_price`) |
+| POST   | `/jobs/{id}/accept`                  | —                   | `{status: ok}` |
+| POST   | `/jobs/{id}/complete`                | —                   | `Transaction`  |
 
 **Admin**
 
@@ -76,4 +89,4 @@ All in `src/marketplace/pricing.py`. New adjusters are registered with the `@reg
 
 ## Out of scope (v1)
 
-Payment, geo, real auth, persistence, real-time push, cancellation beyond status, seller bidding, ML pricing.
+Payment, geo, persistence, real-time push, cancellation beyond status, seller bidding, ML pricing. Auth is pilot-grade only (HMAC tokens, no user store) — production auth is a roadmap item.

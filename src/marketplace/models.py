@@ -29,9 +29,9 @@ class JobStatus(StrEnum):
 
 
 class ServiceType(BaseModel):
-    id: str
-    base_buyer_price: float = Field(gt=0)
-    base_seller_payout: float = Field(gt=0)
+    id: str = Field(min_length=1, max_length=128)
+    base_buyer_price: float = Field(gt=0, allow_inf_nan=False)
+    base_seller_payout: float = Field(gt=0, allow_inf_nan=False)
 
 
 class Quote(BaseModel):
@@ -144,11 +144,13 @@ class SellerJobView(BaseModel):
 
 
 # ---------- Request bodies ----------
+#
+# Buyer/seller identity is NOT a body field: it comes from the authenticated
+# principal (see `auth.py`). Accepting it here would let anyone act as anyone.
 
 
 class QuoteRequest(BaseModel):
-    buyer_id: str
-    service_type_id: str
+    service_type_id: str = Field(min_length=1, max_length=128)
 
 
 class JobCreateRequest(BaseModel):
@@ -156,11 +158,27 @@ class JobCreateRequest(BaseModel):
 
 
 class AvailabilityRequest(BaseModel):
-    seller_id: str
-    service_type_id: str
+    service_type_id: str = Field(min_length=1, max_length=128)
 
 
-class SellerActionRequest(BaseModel):
-    """Body for accept and complete — both just need the seller_id."""
+# ---------- Admin request bodies (validated at the trust boundary) ----------
 
-    seller_id: str
+
+class ServiceTypeBody(BaseModel):
+    base_buyer_price: float = Field(gt=0, allow_inf_nan=False)
+    base_seller_payout: float = Field(gt=0, allow_inf_nan=False)
+
+
+class PipelinesBody(BaseModel):
+    buyer: list[str] = Field(default_factory=list[str], max_length=64)
+    seller: list[str] = Field(default_factory=list[str], max_length=64)
+
+
+class MarginFloorBody(BaseModel):
+    absolute: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    pct: float = Field(default=0.0, ge=0, lt=1, allow_inf_nan=False)
+    ceiling_multiplier: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+
+
+class MatchingStrategyBody(BaseModel):
+    strategy: str = Field(min_length=1, max_length=64)
