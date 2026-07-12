@@ -76,21 +76,55 @@ headers = {"Authorization": f"Bearer {mint_token('buyer', 'alice')}"}
 `POST /jobs/{id}/cancel` · `POST /jobs/{id}/review`
 
 **Seller** (`/v1/seller/…`) — `PUT|GET /profile` (own capacity) ·
-`POST|DELETE /availability[/{service_type_id}]` · `GET /offers` · `GET /jobs` ·
-`POST /offers/{id}/accept` · `POST /offers/{id}/decline` · `POST /jobs/{id}/complete`
+`POST /payments/onboard` · `POST|DELETE /availability[/{service_type_id}]` ·
+`GET /offers` · `GET /jobs` · `POST /offers/{id}/accept` ·
+`POST /offers/{id}/decline` · `POST /jobs/{id}/complete`
 
 **Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·
 `PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
 `PUT /config/matching_strategy` · `PUT /config/adjuster_params/{name}` ·
-`PUT /sellers/{id}` (tier/capacity) · `GET /transactions` · `GET /margins/summary` ·
-`GET /audit` · `GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep`
+`PUT /sellers/{id}` (tier/capacity) · `GET /transactions` · `GET /payouts` ·
+`POST /payouts/{id}/retry` · `GET /margins/summary` · `GET /audit` ·
+`GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep`
+
+**Payments** — `POST /payments/webhook` (provider event sink, unauthenticated,
+signature-verified)
 
 ## Job & offer state machine
 
-- **Job**: `pending → accepted → completed`; plus `expired` (no seller took it) and
-  `cancelled`.
+- **Job**: `pending → awaiting_payment? → accepted → completed`; plus `expired`
+  (no seller took it, or payment never arrived) and `cancelled`. A job only
+  parks in `awaiting_payment` when the provider's charge doesn't clear inline.
 - **Offer**: `offered → accepted | declined | expired`. Expiry/decline re-match to
   the next eligible seller (lazy sweep on reads + `POST /admin/jobs/sweep`).
+
+## Payments
+
+Escrow, not commission: accepting an offer charges the buyer and the money lands
+on the platform's balance; completing the job transfers `seller_payout` to the
+seller. The spread stays on the platform by construction — it's just the
+difference between the two amounts, not a Stripe `application_fee`.
+
+Provider selection is env-driven: unset `STRIPE_SECRET_KEY` and the app uses a
+deterministic in-memory fake (instant-succeeding charges, scriptable for
+dev/tests); set it and the app talks to Stripe (Connect, controller-properties
+accounts) instead. Never run the Stripe adapter against a live account from this
+template — it's unit-tested for signature verification only.
+
+If a charge doesn't clear inline (the real-world case), the job holds in
+`awaiting_payment` — the seller's capacity slot is held, and the buyer view
+carries `client_secret` to confirm client-side. The provider's webhook
+(`POST /v1/payments/webhook`) then moves the job to `accepted`. Unconfirmed
+charges past `PAYMENT_TTL_MINUTES` are expired by the same sweep that expires
+offers; a job whose payment already succeeded is never swept.
+
+Money-mutating client POSTs (`/jobs`, `/offers/{id}/accept`,
+`/jobs/{id}/complete`, …) accept an `Idempotency-Key` header — the first
+response is replayed byte-for-byte on a retry with the same key, scoped per
+authenticated principal.
+
+Configuring a real Stripe account: point its webhook at
+`POST /v1/payments/webhook` and set `STRIPE_WEBHOOK_SECRET` to verify signatures.
 
 ## Built-in adjusters (`pricing.py`)
 
@@ -113,6 +147,6 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
 ## Out of scope / next
 
-Payments (Stripe Connect destination charges map to the spread), notifications,
-idempotency keys, seller→buyer reviews, a background scheduler, and replacing the
-pilot HMAC auth with a real provider. See `ROADMAP.md`.
+Notifications, trust & safety (disputes/chargebacks, partial refunds, fraud
+review), a background scheduler, and replacing the pilot HMAC auth with a real
+provider. See `ROADMAP.md`.

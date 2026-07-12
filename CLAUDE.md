@@ -40,6 +40,21 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   transitions, and capacity checks use `session.get(..., with_for_update=True)`.
   There is no process-level lock; don't add one.
 - **Pyright strict** across `src/` and `tests/`. Do not drop to basic mode.
+- **Providers are only reached through `payments/port.py`.** `fake.py` and
+  `stripe_provider.py` are the only two implementations; never `import stripe`
+  outside `stripe_provider.py`, and never call a provider SDK directly from
+  `api.py`. Selection (`payments/__init__.get_provider`) is env-driven
+  (`STRIPE_SECRET_KEY`).
+- **`Payment`/`Payout` record cash movement; `Transaction` stays the margin
+  ledger.** Don't merge them — `Transaction.margin` is booked at completion
+  regardless of payout provider status; `Payment`/`Payout` track the charge/
+  transfer lifecycle against the provider.
+- **`AWAITING_PAYMENT` holds a capacity slot.** A job parked there while a charge
+  settles still counts against the seller's capacity — it is not free
+  availability. Don't change `repo.active_job_count` to exclude it.
+- **Webhook handling stays dedup-idempotent.** Every inbound event is recorded
+  in `WebhookEvent` keyed on the provider's event id before it's applied; a
+  replay must no-op, never re-apply.
 
 ## Subtle bits
 
@@ -59,10 +74,20 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   checked under a row lock on accept. Availability is not removed on accept.
 - `live_demand` = PENDING + ACCEPTED jobs for the service type + 1; `live_supply`
   = available sellers at quote time.
+- The fake payment provider (`payments/fake.py`) is a module singleton
+  (`payments.fake_provider`), so app code and test-scripted state see the same
+  instance; an autouse fixture resets it between tests. Don't instantiate a
+  second `FakeProvider` — script the singleton instead.
+- Outbound idempotency keys to the provider are derived from the job id
+  (`charge:{job_id}`, `transfer:{job_id}`, `refund:{job_id}`, `acct:{seller_id}`),
+  not a random value — a retry of the same operation reuses the same key on
+  purpose, so it replays the original result instead of double-charging.
 
 ## Explicit non-goals (roadmap, not now)
 
-Payments (Stripe Connect destination charges = the spread), notifications,
-idempotency keys, seller→buyer reviews, a background scheduler (lazy sweep +
+Notifications, seller→buyer reviews, a background scheduler (lazy sweep +
 admin trigger instead), gateway rate-limiting, and replacing pilot HMAC auth with
-a real provider. Seller bidding is out (this is not an auction).
+a real provider. Seller bidding is out (this is not an auction). Payments now
+ship (Stripe Connect via `payments/port.py`, fake provider for dev/tests); a
+Stripe test account run and disputes/chargebacks + partial refunds are still
+ahead — see `ROADMAP.md`.
