@@ -30,9 +30,10 @@ class Side(StrEnum):
 
 class JobStatus(StrEnum):
     PENDING = "pending"  # created, an offer is out (or being (re)matched)
-    ACCEPTED = "accepted"  # a seller committed
+    AWAITING_PAYMENT = "awaiting_payment"  # seller committed; buyer's charge not yet secured
+    ACCEPTED = "accepted"  # a seller committed AND the money is secured
     COMPLETED = "completed"
-    EXPIRED = "expired"  # no seller took it
+    EXPIRED = "expired"  # no seller took it (or payment never arrived)
     CANCELLED = "cancelled"
 
 
@@ -41,6 +42,21 @@ class OfferStatus(StrEnum):
     ACCEPTED = "accepted"
     DECLINED = "declined"
     EXPIRED = "expired"
+
+
+class PaymentStatus(StrEnum):
+    PENDING = "pending"  # created; awaiting buyer confirmation / provider settlement
+    SUCCEEDED = "succeeded"
+    FAILED = (
+        "failed"  # includes voided/cancelled charges — ponytail: one bucket, split if ops needs it
+    )
+    REFUNDED = "refunded"
+
+
+class PayoutStatus(StrEnum):
+    PENDING = "pending"
+    PAID = "paid"
+    FAILED = "failed"  # transfer rejected/errored; admin retries via /v1/admin/payouts/{id}/retry
 
 
 # ---------- Response views ----------
