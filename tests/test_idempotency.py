@@ -56,13 +56,21 @@ def test_keys_are_scoped_per_principal(
     assert a.json()["id"] != b.json()["id"]  # not a replay across principals
 
 
-def test_error_responses_replay_too(
-    client: TestClient, basic_service: str, auth: AuthFactory
-) -> None:
+def test_error_responses_replay_too(client: TestClient, auth: AuthFactory, admin: Header) -> None:
+    """A stored error replays even after the world changes - proof of replay, not re-execution."""
     buyer = _idem(auth("buyer", "alice"), "bad-quote")
     r1 = client.post("/v1/quotes", json={"service_type_id": "nope"}, headers=buyer)
+    assert r1.status_code == 404
+    # Make the identical request valid: a re-executed call would now return 200.
+    client.put(
+        "/v1/admin/config/service_types/nope",
+        json={"base_buyer_price": 20, "base_seller_payout": 14},
+        headers=admin,
+    )
+    client.put("/v1/admin/config/pipelines/nope", json={"buyer": [], "seller": []}, headers=admin)
     r2 = client.post("/v1/quotes", json={"service_type_id": "nope"}, headers=buyer)
-    assert r1.status_code == r2.status_code == 404
+    assert r2.status_code == 404  # replayed from the store
+    assert r1.json() == r2.json()
 
 
 def test_oversized_key_rejected(client: TestClient, auth: AuthFactory) -> None:
