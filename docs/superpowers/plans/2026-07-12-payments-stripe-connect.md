@@ -1287,16 +1287,24 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
         select(Job).where(Job.status == JobStatus.AWAITING_PAYMENT, Job.accepted_at < deadline)
     ).all()
     for job in stale:
+        # Re-lock (payment first, then job — same order as _apply_payment_event)
+        # and re-check: a concurrent payment_succeeded webhook may have accepted
+        # this job between the unlocked select above and now. Never expire a paid job.
         payment = session.scalar(
             select(Payment).where(Payment.job_id == job.id).with_for_update()
         )
-        if payment is not None and payment.status is not PaymentStatus.SUCCEEDED:
+        locked_job = session.get(Job, job.id, with_for_update=True)
+        if locked_job is None or locked_job.status != JobStatus.AWAITING_PAYMENT:
+            continue
+        if payment is not None:
+            if payment.status is PaymentStatus.SUCCEEDED:
+                continue  # paid — the webhook owns this job's fate, not the sweep
             try:
                 provider.cancel_charge(payment.provider_payment_id)
             except PaymentError:
                 continue  # provider hiccup: leave it; the next sweep retries
             payment.status = PaymentStatus.FAILED
-        job.status = JobStatus.EXPIRED
+        locked_job.status = JobStatus.EXPIRED
 
 
 def _sweep(session: Session, provider: PaymentProvider) -> None:

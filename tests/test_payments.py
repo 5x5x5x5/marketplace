@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Job, Payment
+from marketplace.entities import Job, Payment, SellerProfile
 from marketplace.models import PaymentStatus
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
@@ -162,13 +162,44 @@ def test_webhook_success_activates_the_job(
     assert view["payment_status"] == "succeeded"
 
 
-def test_webhook_dedup_is_a_noop(
+def test_webhook_dedup_is_a_noop(client: TestClient, auth: AuthFactory) -> None:
+    """A replayed event is not re-applied — state changed since the first
+    delivery must survive the replay untouched."""
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1"))
+    event = {
+        "event_id": "evt_dup",
+        "kind": "account_updated",
+        "object_id": "acct_fake_s1",
+        "payments_ready": False,
+    }
+    assert client.post("/v1/payments/webhook", json=event).json() == {"status": "ok"}
+    # Flip the state the event had set; a re-applied duplicate would flip it back.
+    with SessionLocal() as s:
+        prof = s.get(SellerProfile, "s1")
+        assert prof is not None and prof.payments_ready is False
+        prof.payments_ready = True
+        s.commit()
+    assert client.post("/v1/payments/webhook", json=event).json() == {"status": "duplicate"}
+    with SessionLocal() as s:
+        prof = s.get(SellerProfile, "s1")
+        assert prof is not None and prof.payments_ready is True  # replay did NOT re-apply
+
+
+def test_late_failure_never_undoes_success(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    _job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
-    event = {"event_id": "evt_dup", "kind": "payment_succeeded", "object_id": pid}
-    assert client.post("/v1/payments/webhook", json=event).json() == {"status": "ok"}
-    assert client.post("/v1/payments/webhook", json=event).json() == {"status": "duplicate"}
+    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_s", "kind": "payment_succeeded", "object_id": pid},
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_late_f", "kind": "payment_failed", "object_id": pid},
+    )
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()
+    assert view["status"] == "accepted"
+    assert view["payment_status"] == "succeeded"
 
 
 def test_webhook_failure_records_but_keeps_waiting(
@@ -195,7 +226,6 @@ def test_webhook_account_updated_flips_readiness(client: TestClient, auth: AuthF
             "payments_ready": False,
         },
     )
-    from marketplace.entities import SellerProfile
 
     with SessionLocal() as s:
         prof = s.get(SellerProfile, "s1")
