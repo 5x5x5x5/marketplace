@@ -99,3 +99,11 @@ def test_fake_parses_unsigned_json_webhooks() -> None:
     assert event.kind == "payment_succeeded"
     assert event.object_id == "pay_fake_1"
     assert event.payments_ready is None
+
+
+def test_payment_tables_registered() -> None:
+    from marketplace.entities import Base
+
+    assert {"payments", "payouts", "webhook_events", "idempotency_keys"} <= set(
+        Base.metadata.tables
+    )
