@@ -39,6 +39,10 @@ class StripeProvider:
     name = "stripe"
 
     def __init__(self, secret_key: str, webhook_secret: str) -> None:
+        # An empty secret would make construct_event compute HMACs with an empty
+        # key — forged webhooks would pass "verification". Fail fast instead.
+        if not webhook_secret:
+            raise RuntimeError("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set")
         self._client = stripe.StripeClient(secret_key)
         self._webhook_secret = webhook_secret
 
@@ -104,6 +108,16 @@ class StripeProvider:
     def cancel_charge(self, provider_payment_id: str) -> None:
         try:
             self._client.v1.payment_intents.cancel(provider_payment_id)
+        except stripe.InvalidRequestError as exc:
+            # Stripe errors when cancelling an already-canceled PI. A void that
+            # succeeded before a DB rollback must stay retryable, so treat
+            # "already canceled" as success instead of wedging the job forever.
+            try:
+                pi = self._client.v1.payment_intents.retrieve(provider_payment_id)
+            except stripe.StripeError as retrieve_exc:
+                raise PaymentError(str(retrieve_exc)) from retrieve_exc
+            if pi.status != "canceled":  # already-voided is success; anything else is real
+                raise PaymentError(str(exc)) from exc
         except stripe.StripeError as exc:
             raise PaymentError(str(exc)) from exc
 

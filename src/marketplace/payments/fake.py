@@ -33,6 +33,7 @@ class FakeProvider:
         self.fail_next_call: bool = False
         self.cancelled: list[str] = []
         self.refunded: list[str] = []
+        self.transfer_keys: list[str] = []
 
     def reset(self) -> None:
         self.next_charge_status = PaymentStatus.SUCCEEDED
@@ -40,6 +41,7 @@ class FakeProvider:
         self.fail_next_call = False
         self.cancelled.clear()
         self.refunded.clear()
+        self.transfer_keys.clear()
 
     def _maybe_fail(self) -> None:
         if self.fail_next_call:
@@ -73,6 +75,7 @@ class FakeProvider:
         )
 
     def cancel_charge(self, provider_payment_id: str) -> None:
+        self._maybe_fail()
         self.cancelled.append(provider_payment_id)
 
     def refund(self, provider_payment_id: str, *, idempotency_key: str) -> RefundResult:
@@ -89,6 +92,7 @@ class FakeProvider:
         job_id: str,
         idempotency_key: str,
     ) -> TransferResult:
+        self.transfer_keys.append(idempotency_key)  # every attempt, so tests see retry keys
         self._maybe_fail()
         status = self.next_transfer_status
         self.next_transfer_status = PayoutStatus.PAID

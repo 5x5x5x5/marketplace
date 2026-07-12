@@ -33,6 +33,12 @@ def provider() -> StripeProvider:
     return StripeProvider("sk_test_dummy", SECRET)
 
 
+def test_empty_webhook_secret_fails_fast() -> None:
+    """An empty secret would verify forged webhooks (HMAC with an empty key)."""
+    with pytest.raises(RuntimeError):
+        StripeProvider("sk_test_dummy", "")
+
+
 def test_valid_signature_maps_payment_succeeded(provider: StripeProvider) -> None:
     payload = _event("payment_intent.succeeded", {"id": "pi_123"})
     event = provider.parse_webhook(payload, _signed(payload))

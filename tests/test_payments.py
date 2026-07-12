@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from marketplace.db import SessionLocal
 from marketplace.entities import Job, Payment, SellerProfile
-from marketplace.models import PaymentStatus
+from marketplace.models import PaymentStatus, PayoutStatus
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
 
@@ -40,6 +40,17 @@ def test_onboard_is_idempotent(client: TestClient, auth: AuthFactory) -> None:
     first = client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1")).json()
     second = client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1")).json()
     assert first == second
+
+
+def test_onboard_provider_outage_is_502_then_recovers(
+    client: TestClient, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    fake_payments.fail_next_call = True
+    r = client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1"))
+    assert r.status_code == 502  # provider outage, not a 500
+    r2 = client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1"))
+    assert r2.status_code == 200
+    assert r2.json()["payments_ready"] is True
 
 
 def test_unonboarded_seller_never_matched(
@@ -258,6 +269,27 @@ def test_payment_timeout_expires_job_and_frees_slot(
     assert job2["status"] == "pending"
 
 
+def test_sweep_void_failure_leaves_job_for_next_sweep(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    """A failed void must not expire the job — the next sweep retries the void."""
+    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        assert job is not None
+        job.accepted_at = datetime.now(UTC) - timedelta(minutes=999)
+        s.commit()
+
+    fake_payments.fail_next_call = True
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()  # sweep on read
+    assert view["status"] == "awaiting_payment"  # void failed → left for the next sweep
+    assert fake_payments.cancelled == []
+
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()  # next sweep
+    assert view["status"] == "expired"
+    assert fake_payments.cancelled == [pid]
+
+
 def _completed_job(client: TestClient, auth: AuthFactory, sid: str) -> str:
     onboard_and_avail(client, auth, sid, "s1")
     job = new_job(client, auth, sid, "alice")
@@ -313,8 +345,39 @@ def test_admin_retries_failed_payout(
     r = client.post(f"/v1/admin/payouts/{payout_id}/retry", headers=admin)
     assert r.status_code == 200
     assert r.json()["status"] == "paid"
+    # No transfer was ever created (plain outage) → the retry replays the
+    # ORIGINAL idempotency key, so it can never double-pay.
+    assert fake_payments.transfer_keys == [f"transfer:{job['id']}"] * 2
     # Retrying a paid payout is a 409, not a double transfer.
     assert client.post(f"/v1/admin/payouts/{payout_id}/retry", headers=admin).status_code == 409
+
+
+def test_reversed_transfer_retry_forces_a_new_transfer(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    """A transfer that was created then reversed must NOT be replayed via the
+    original key — that returns the same reversed transfer and records PAID
+    with no money moved. The retry must use a fresh key."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))
+    fake_payments.next_transfer_status = PayoutStatus.FAILED  # created, then reversed
+    r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    assert r.status_code == 200
+    payout = client.get("/v1/admin/payouts", headers=admin).json()[0]
+    assert payout["status"] == "failed"
+    assert payout["provider_transfer_id"] is not None  # the reversed transfer exists
+
+    r = client.post(f"/v1/admin/payouts/{payout['id']}/retry", headers=admin)
+    assert r.status_code == 200
+    assert r.json()["status"] == "paid"
+    assert len(fake_payments.transfer_keys) == 2
+    assert ":retry:" in fake_payments.transfer_keys[1]
+    assert fake_payments.transfer_keys[1] != fake_payments.transfer_keys[0]
 
 
 def test_buyer_cancels_awaiting_payment_voids_charge(
@@ -354,6 +417,40 @@ def test_admin_cancel_of_paid_job_refunds(
     # The seller's slot is freed.
     job2 = new_job(client, auth, basic_service, "bob")
     assert job2["status"] == "pending"
+
+
+def test_stale_success_never_resurrects_a_refund(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    """REFUNDED is terminal in the cash record: a late payment_succeeded (new
+    event id, so it passes dedup) must not flip the payment back to SUCCEEDED."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))  # instant success → paid
+
+    with SessionLocal() as s:
+        pid = s.scalar(
+            select(Payment.provider_payment_id).where(Payment.job_id == UUID(str(job["id"])))
+        )
+    assert pid is not None
+
+    r = client.post(f"/v1/admin/jobs/{job['id']}/cancel", headers=admin)
+    assert r.status_code == 200
+    view = client.get(f"/v1/jobs/{job['id']}", headers=auth("buyer", "alice")).json()
+    assert view["payment_status"] == "refunded"
+
+    r = client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_stale_success", "kind": "payment_succeeded", "object_id": pid},
+    )
+    assert r.json() == {"status": "ok"}  # recorded for dedup, applied as a no-op
+    view = client.get(f"/v1/jobs/{job['id']}", headers=auth("buyer", "alice")).json()
+    assert view["payment_status"] == "refunded"
+    assert view["status"] == "cancelled"
 
 
 def test_buyer_still_cannot_cancel_accepted(

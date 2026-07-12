@@ -43,7 +43,11 @@ Rough priority. Each is fork-agnostic — build generic here, specialize after f
 3. **Background scheduler** — replace the lazy offer-expiry / payment-timeout
    sweep with a cron/worker.
 4. **Observability & ops** — metrics, structured request logging, an error
-   envelope so a crafted body never surfaces a 500.
+   envelope so a crafted body never surfaces a 500. Payments hardening
+   follow-ups: the webhook handler is async-over-sync-`Session` (move DB work
+   off the event loop under load); a TTL sweep for the `idempotency_keys` /
+   `webhook_events` tables; a PG-gated cancel-vs-webhook race test; indexes on
+   `provider_account_id`/`provider_transfer_id`.
 5. **Admin RBAC** — beyond the single shared operator token.
 6. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
 7. **Auth** — replace pilot HMAC with a real user store + provider (fastapi-users /

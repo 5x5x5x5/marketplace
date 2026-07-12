@@ -167,7 +167,13 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
                 continue  # paid — the webhook owns this job's fate, not the sweep
             try:
                 provider.cancel_charge(payment.provider_payment_id)
-            except PaymentError:
+            except PaymentError as exc:
+                logger.warning(
+                    "void failed for payment %s (job %s), will retry next sweep: %s",
+                    payment.provider_payment_id,
+                    job.id,
+                    exc,
+                )
                 continue  # provider hiccup: leave it; the next sweep retries
             payment.status = PaymentStatus.FAILED
         locked_job.status = JobStatus.EXPIRED
@@ -307,15 +313,24 @@ def get_job_buyer(
 
 @buyer_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
 def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: ProviderDep) -> Job:
-    job = session.get(Job, job_id, with_for_update=True)
+    job = session.get(Job, job_id)  # unlocked: existence + ownership only
     if job is None or job.buyer_id != buyer_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    # Canonical lock order is Payment → Job everywhere (_apply_payment_event,
+    # _sweep_stale_payments). Locking Job first here would ABBA-deadlock against
+    # a racing webhook on Postgres; _release_payment re-selects this same locked
+    # Payment row inside the same transaction, which is fine.
+    session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
+    job = session.get(Job, job_id, with_for_update=True)
+    if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status not in (JobStatus.PENDING, JobStatus.AWAITING_PAYMENT):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
     try:
         _release_payment(session, provider, job)
-    except PaymentError:
+    except PaymentError as exc:
+        logger.warning("payment release failed for job %s: %s", job.id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     job.status = JobStatus.CANCELLED
     return job
@@ -400,7 +415,13 @@ def onboard_payments(
     fake provider); matching only offers jobs to ready sellers."""
     seller = repo.get_or_create_seller(session, seller_id)
     if seller.provider_account_id is None:
-        acct = provider.create_seller_account(seller_id, idempotency_key=f"acct:{seller_id}")
+        try:
+            acct = provider.create_seller_account(seller_id, idempotency_key=f"acct:{seller_id}")
+        except PaymentError as exc:
+            logger.warning("account creation failed for seller %s: %s", seller_id, exc)
+            raise HTTPException(
+                status_code=502, detail="payment provider unavailable, retry"
+            ) from None
         seller.provider_account_id = acct.provider_account_id
         seller.payments_ready = acct.payments_ready
         session.flush()
@@ -518,7 +539,8 @@ def accept_offer(
             job_id=str(job.id),
             idempotency_key=f"charge:{job.id}",
         )
-    except PaymentError:
+    except PaymentError as exc:
+        logger.warning("charge failed for job %s: %s", job.id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     session.add(
         Payment(
@@ -606,7 +628,9 @@ def complete_job(
             )
             payout.provider_transfer_id = transfer.provider_transfer_id
             payout.status = transfer.status
-        except PaymentError:
+        except PaymentError as exc:
+            # payout isn't flushed yet (no id), so identify it by job + seller.
+            logger.warning("transfer failed for job %s (seller %s): %s", job.id, seller_id, exc)
             payout.status = PayoutStatus.FAILED
     session.add(payout)
 
@@ -778,15 +802,26 @@ def retry_payout(
     seller = session.get(SellerProfile, payout.seller_id)
     if seller is None or seller.provider_account_id is None:
         raise HTTPException(status_code=409, detail="seller has no payment account yet")
+    # If no transfer was ever created (plain outage), replaying the original key
+    # is the safe retry — it can never double-pay. But if a transfer WAS created
+    # and later reversed (transfer.reversed → FAILED), replaying that key would
+    # return the same reversed transfer and record PAID with no money moved, so
+    # the retry must force a new transfer under a fresh key.
+    retry_key = (
+        f"transfer:{payout.job_id}"
+        if payout.provider_transfer_id is None
+        else f"transfer:{payout.job_id}:retry:{payout.provider_transfer_id}"
+    )
     try:
         transfer = provider.transfer_to_seller(
             provider_account_id=seller.provider_account_id,
             amount=payout.amount,
             currency=payout.currency,
             job_id=str(payout.job_id),
-            idempotency_key=f"transfer:{payout.job_id}",  # same key: replays are safe
+            idempotency_key=retry_key,
         )
-    except PaymentError:
+    except PaymentError as exc:
+        logger.warning("transfer retry failed for payout %s: %s", payout_id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     payout.provider_transfer_id = transfer.provider_transfer_id
     payout.status = transfer.status
@@ -831,6 +866,11 @@ def list_all_jobs(
 def admin_cancel_job(
     job_id: UUID, session: SessionDep, admin_id: AdminId, provider: ProviderDep
 ) -> Job:
+    job = session.get(Job, job_id)  # unlocked: existence only
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    # Canonical lock order is Payment → Job (see cancel_job) — never Job first.
+    session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
     job = session.get(Job, job_id, with_for_update=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -839,7 +879,8 @@ def admin_cancel_job(
     _expire_open_offers(session, job.id)
     try:
         _release_payment(session, provider, job)
-    except PaymentError:
+    except PaymentError as exc:
+        logger.warning("payment release failed for job %s: %s", job.id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     job.status = JobStatus.CANCELLED
     audit(session, admin_id, "cancel_job", str(job_id), {})
@@ -867,8 +908,8 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         payment = session.scalar(
             select(Payment).where(Payment.provider_payment_id == event.object_id).with_for_update()
         )
-        if payment is None:
-            return
+        if payment is None or payment.status is PaymentStatus.REFUNDED:
+            return  # refunded is terminal — late events never resurrect the charge
         if event.kind == "payment_succeeded":
             payment.status = PaymentStatus.SUCCEEDED
             job = session.get(Job, payment.job_id, with_for_update=True)
