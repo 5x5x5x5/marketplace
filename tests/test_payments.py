@@ -1,7 +1,13 @@
 """Payment flows against the fake provider: onboarding, gating."""
 
-from fastapi.testclient import TestClient
+from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+
+from marketplace.db import SessionLocal
+from marketplace.entities import Job, Payment
 from marketplace.models import PaymentStatus
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
@@ -124,3 +130,99 @@ def test_provider_outage_rolls_accept_back(
     r2 = client.post(f"/v1/seller/offers/{offer['id']}/accept", headers=seller)
     assert r2.status_code == 200
     assert r2.json()["status"] == "accepted"
+
+
+def _pending_accept(
+    client: TestClient, auth: AuthFactory, sid: str, fake: FakeProvider
+) -> tuple[str, str]:
+    """Set up a job accepted with a pending charge; return (job_id, provider_payment_id)."""
+    fake.next_charge_status = PaymentStatus.PENDING
+    onboard_and_avail(client, auth, sid, "s1")
+    job = new_job(client, auth, sid, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))
+    with SessionLocal() as s:
+        pid = s.scalar(
+            select(Payment.provider_payment_id).where(Payment.job_id == UUID(str(job["id"])))
+        )
+    assert pid is not None
+    return str(job["id"]), pid
+
+
+def test_webhook_success_activates_the_job(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    r = client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_1", "kind": "payment_succeeded", "object_id": pid},
+    )
+    assert r.json() == {"status": "ok"}
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()
+    assert view["status"] == "accepted"
+    assert view["payment_status"] == "succeeded"
+
+
+def test_webhook_dedup_is_a_noop(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    _job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    event = {"event_id": "evt_dup", "kind": "payment_succeeded", "object_id": pid}
+    assert client.post("/v1/payments/webhook", json=event).json() == {"status": "ok"}
+    assert client.post("/v1/payments/webhook", json=event).json() == {"status": "duplicate"}
+
+
+def test_webhook_failure_records_but_keeps_waiting(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_f", "kind": "payment_failed", "object_id": pid},
+    )
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()
+    assert view["status"] == "awaiting_payment"  # buyer can still retry confirmation
+    assert view["payment_status"] == "failed"
+
+
+def test_webhook_account_updated_flips_readiness(client: TestClient, auth: AuthFactory) -> None:
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1"))
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_a",
+            "kind": "account_updated",
+            "object_id": "acct_fake_s1",
+            "payments_ready": False,
+        },
+    )
+    from marketplace.entities import SellerProfile
+
+    with SessionLocal() as s:
+        prof = s.get(SellerProfile, "s1")
+        assert prof is not None and prof.payments_ready is False
+
+
+def test_malformed_webhook_is_400(client: TestClient) -> None:
+    r = client.post(
+        "/v1/payments/webhook", content=b"not json", headers={"content-type": "application/json"}
+    )
+    assert r.status_code == 400
+
+
+def test_payment_timeout_expires_job_and_frees_slot(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    # Age the job past the payment TTL (white-box, same precedent as seed_rating).
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        assert job is not None
+        job.accepted_at = datetime.now(UTC) - timedelta(minutes=999)
+        s.commit()
+
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()  # sweep on read
+    assert view["status"] == "expired"
+    assert fake_payments.cancelled == [pid]
+    # The seller's slot is free again.
+    job2 = new_job(client, auth, basic_service, "bob")
+    assert job2["status"] == "pending"

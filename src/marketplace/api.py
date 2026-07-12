@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -33,12 +33,14 @@ from .entities import (
     Job,
     Offer,
     Payment,
+    Payout,
     Pipeline,
     Quote,
     Review,
     SellerProfile,
     ServiceType,
     Transaction,
+    WebhookEvent,
 )
 from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
@@ -54,6 +56,7 @@ from .models import (
     OfferStatus,
     OnboardingOut,
     PaymentStatus,
+    PayoutStatus,
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
@@ -70,7 +73,7 @@ from .models import (
     to_money,
 )
 from .payments import get_provider
-from .payments.port import PaymentError, PaymentProvider
+from .payments.port import PaymentError, PaymentEvent, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY, PricingContext, run_pipeline
 from .repo import audit
 from .settings import settings
@@ -141,6 +144,29 @@ def _sweep_expired_offers(session: Session) -> None:
         job = session.get(Job, offer.job_id)
         if job is not None and job.status == JobStatus.PENDING:
             _match_and_offer(session, job)
+
+
+def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
+    """Jobs stuck AWAITING_PAYMENT past the TTL expire and free the seller's slot."""
+    deadline = _now() - timedelta(minutes=settings.payment_ttl_minutes)
+    stale = session.scalars(
+        select(Job).where(Job.status == JobStatus.AWAITING_PAYMENT, Job.accepted_at < deadline)
+    ).all()
+    for job in stale:
+        payment = session.scalar(select(Payment).where(Payment.job_id == job.id).with_for_update())
+        if payment is not None and payment.status is not PaymentStatus.SUCCEEDED:
+            try:
+                provider.cancel_charge(payment.provider_payment_id)
+            except PaymentError:
+                continue  # provider hiccup: leave it; the next sweep retries
+            payment.status = PaymentStatus.FAILED
+        job.status = JobStatus.EXPIRED
+
+
+def _sweep(session: Session, provider: PaymentProvider) -> None:
+    """Everything lazy maintenance does on reads: offer expiry + stale payments."""
+    _sweep_expired_offers(session)
+    _sweep_stale_payments(session, provider)
 
 
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
@@ -259,8 +285,10 @@ def list_buyer_jobs(
 
 
 @buyer_router.get("/jobs/{job_id}", response_model=BuyerJobView)
-def get_job_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> BuyerJobView:
-    _sweep_expired_offers(session)
+def get_job_buyer(
+    job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: ProviderDep
+) -> BuyerJobView:
+    _sweep(session, provider)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -392,11 +420,12 @@ def delete_availability(
 def list_offers(
     session: SessionDep,
     seller_id: SellerId,
+    provider: ProviderDep,
     status: OfferStatus | None = None,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> list[Offer]:
-    _sweep_expired_offers(session)
+    _sweep(session, provider)
     stmt = select(Offer).where(Offer.seller_id == seller_id)
     if status is not None:
         stmt = stmt.where(Offer.status == status)
@@ -713,9 +742,71 @@ def admin_cancel_job(job_id: UUID, session: SessionDep, admin_id: AdminId) -> Jo
 
 
 @admin_router.post("/jobs/sweep")
-def sweep(session: SessionDep, admin_id: AdminId) -> dict[str, str]:
-    _sweep_expired_offers(session)
+def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict[str, str]:
+    _sweep(session, provider)
     audit(session, admin_id, "sweep", "jobs", {})
+    return {"status": "ok"}
+
+
+# ---------- Payments router (webhooks) ----------
+
+payments_router = APIRouter(prefix="/v1/payments", tags=["payments"])
+
+
+def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
+    """Route a normalized provider event to the row it affects.
+
+    Unknown kinds and unknown ids are recorded (dedup) and ignored — providers
+    emit dozens of event types this app doesn't act on."""
+    if event.kind in ("payment_succeeded", "payment_failed"):
+        payment = session.scalar(
+            select(Payment).where(Payment.provider_payment_id == event.object_id).with_for_update()
+        )
+        if payment is None:
+            return
+        if event.kind == "payment_succeeded":
+            payment.status = PaymentStatus.SUCCEEDED
+            job = session.get(Job, payment.job_id, with_for_update=True)
+            if job is not None and job.status == JobStatus.AWAITING_PAYMENT:
+                job.status = JobStatus.ACCEPTED
+        elif payment.status is not PaymentStatus.SUCCEEDED:
+            payment.status = PaymentStatus.FAILED  # late failures never undo a success
+    elif event.kind == "account_updated":
+        seller = session.scalar(
+            select(SellerProfile).where(SellerProfile.provider_account_id == event.object_id)
+        )
+        if seller is not None and event.payments_ready is not None:
+            seller.payments_ready = event.payments_ready
+    elif event.kind in ("transfer_paid", "transfer_failed"):
+        payout = session.scalar(
+            select(Payout).where(Payout.provider_transfer_id == event.object_id).with_for_update()
+        )
+        if payout is not None:
+            payout.status = (
+                PayoutStatus.PAID if event.kind == "transfer_paid" else PayoutStatus.FAILED
+            )
+
+
+@payments_router.post("/webhook")
+async def payments_webhook(
+    request: Request, session: SessionDep, provider: ProviderDep
+) -> dict[str, str]:
+    """Provider event sink. Unauthenticated by design — authenticity comes from
+    the provider's signature, verified in parse_webhook. Duplicates no-op."""
+    payload = await request.body()
+    try:
+        event = provider.parse_webhook(payload, request.headers.get("stripe-signature"))
+    except WebhookSignatureError:
+        raise HTTPException(status_code=400, detail="invalid webhook signature") from None
+    except (PaymentError, ValueError, KeyError):
+        raise HTTPException(status_code=400, detail="malformed webhook payload") from None
+    duplicate = session.scalar(
+        select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
+    )
+    if duplicate is not None:
+        return {"status": "duplicate"}
+    session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
+    _apply_payment_event(session, event)
     return {"status": "ok"}
 
 
@@ -742,3 +833,4 @@ def healthz() -> dict[str, str]:
 app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)
+app.include_router(payments_router)
