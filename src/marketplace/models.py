@@ -1,16 +1,26 @@
-"""Pydantic models for the marketplace.
+"""API-facing Pydantic models and shared domain types.
 
-Two-sided concept: a `Job` ties a buyer-side `Quote` (the price the buyer agreed
-to) to a seller-side payout (the amount the seller will receive). The platform
-keeps the spread. Buyer- and seller-facing views deliberately omit the other
-side's number — see `BuyerJobView` and `SellerJobView`.
+These are the request/response DTOs and the domain enums/money helper. The
+persisted entities live in `entities.py` (SQLAlchemy); this module never imports
+the DB layer. Response views deliberately omit the other side's number — buyer
+views carry no `seller_payout`, seller views carry no `buyer_price`.
+
+Money is `Decimal`, quantized to 2 dp, and serialized as JSON strings.
 """
 
-from datetime import UTC, datetime
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+
+CENTS = Decimal("0.01")
+
+
+def to_money(value: float | int | str | Decimal) -> Decimal:
+    """Quantize any numeric to a 2-dp Decimal (half-up). The single money gate."""
+    return Decimal(str(value)).quantize(CENTS, rounding=ROUND_HALF_UP)
 
 
 class Side(StrEnum):
@@ -19,128 +29,137 @@ class Side(StrEnum):
 
 
 class JobStatus(StrEnum):
-    QUOTED = "quoted"
-    MATCHED = "matched"
+    PENDING = "pending"  # created, an offer is out (or being (re)matched)
+    ACCEPTED = "accepted"  # a seller committed
     COMPLETED = "completed"
+    EXPIRED = "expired"  # no seller took it
     CANCELLED = "cancelled"
 
 
-# ---------- Core entities ----------
+class OfferStatus(StrEnum):
+    OFFERED = "offered"
+    ACCEPTED = "accepted"
+    DECLINED = "declined"
+    EXPIRED = "expired"
 
 
-class ServiceType(BaseModel):
-    id: str = Field(min_length=1, max_length=128)
-    base_buyer_price: float = Field(gt=0, allow_inf_nan=False)
-    base_seller_payout: float = Field(gt=0, allow_inf_nan=False)
+# ---------- Response views ----------
 
 
-class Quote(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
+class QuoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
     buyer_id: str
     service_type_id: str
-    buyer_price: float
+    buyer_price: Decimal
+    created_at: datetime
     expires_at: datetime
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-class Job(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
-    quote_id: UUID
-    buyer_id: str
-    service_type_id: str
-    buyer_price: float
-    seller_id: str | None = None
-    seller_payout: float | None = None
-    status: JobStatus = JobStatus.QUOTED
-    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-class Transaction(BaseModel):
-    job_id: UUID
-    buyer_price: float
-    seller_payout: float
-    margin: float
-    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-# ---------- Profiles (used by adjusters and matching) ----------
-
-
-class SellerProfile(BaseModel):
-    id: str
-    tier: str = "standard"
-    rating: float = Field(default=4.0, ge=0, le=5)
-    completed_jobs: int = 0
-
-
-class BuyerProfile(BaseModel):
-    id: str
-    completed_jobs: int = 0
-
-
-class AvailabilityRecord(BaseModel):
-    seller_id: str
-    service_type_id: str
-    since: datetime = Field(default_factory=lambda: datetime.now(UTC))
-
-
-# ---------- Side-specific job views (information asymmetry) ----------
 
 
 class BuyerJobView(BaseModel):
     """What a buyer sees. `seller_payout` deliberately omitted."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     quote_id: UUID
     buyer_id: str
     service_type_id: str
-    buyer_price: float
+    buyer_price: Decimal
     seller_id: str | None
     status: JobStatus
     created_at: datetime
-
-    @classmethod
-    def from_job(cls, job: Job) -> "BuyerJobView":
-        return cls(
-            id=job.id,
-            quote_id=job.quote_id,
-            buyer_id=job.buyer_id,
-            service_type_id=job.service_type_id,
-            buyer_price=job.buyer_price,
-            seller_id=job.seller_id,
-            status=job.status,
-            created_at=job.created_at,
-        )
+    accepted_at: datetime | None
+    completed_at: datetime | None
 
 
 class SellerJobView(BaseModel):
-    """What a seller sees. `buyer_price` deliberately omitted."""
+    """What a seller sees for an accepted/completed job. `buyer_price` omitted."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    quote_id: UUID
     service_type_id: str
     seller_id: str
-    seller_payout: float
+    seller_payout: Decimal
     status: JobStatus
     created_at: datetime
+    accepted_at: datetime | None
+    completed_at: datetime | None
 
-    @classmethod
-    def from_job(cls, job: Job) -> "SellerJobView":
-        if job.seller_id is None or job.seller_payout is None:
-            raise ValueError("Job has no seller assigned")
-        return cls(
-            id=job.id,
-            quote_id=job.quote_id,
-            service_type_id=job.service_type_id,
-            seller_id=job.seller_id,
-            seller_payout=job.seller_payout,
-            status=job.status,
-            created_at=job.created_at,
-        )
+
+class SellerOfferView(BaseModel):
+    """An offer directed at a seller. `buyer_price` omitted."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    service_type_id: str
+    seller_id: str
+    seller_payout: Decimal
+    status: OfferStatus
+    offered_at: datetime
+    expires_at: datetime
+
+
+class TransactionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    job_id: UUID
+    buyer_price: Decimal
+    seller_payout: Decimal
+    margin: Decimal
+    completed_at: datetime
+
+
+class ReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    seller_id: str
+    rating: int
+    comment: str | None
+    created_at: datetime
+
+
+class ServiceTypeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    base_buyer_price: Decimal
+    base_seller_payout: Decimal
+
+
+class SellerProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    tier: str
+    capacity: int
+    rating: float | None
+    rating_count: int
+    completed_jobs: int
+
+
+class AuditOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    actor: str
+    action: str
+    target: str
+    created_at: datetime
+
+
+class MarginSummaryOut(BaseModel):
+    transactions: int
+    gross_revenue: Decimal
+    seller_payouts: Decimal
+    platform_margin: Decimal
+    take_rate: float
 
 
 # ---------- Request bodies ----------
@@ -161,12 +180,28 @@ class AvailabilityRequest(BaseModel):
     service_type_id: str = Field(min_length=1, max_length=128)
 
 
+class ReviewRequest(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class SellerProfileUpdate(BaseModel):
+    capacity: int = Field(ge=1, le=1000)
+
+
+class AdminSellerBody(BaseModel):
+    """Operator management of a seller: tier (drives payout multipliers) + capacity."""
+
+    tier: str | None = Field(default=None, max_length=64)
+    capacity: int | None = Field(default=None, ge=1, le=1000)
+
+
 # ---------- Admin request bodies (validated at the trust boundary) ----------
 
 
 class ServiceTypeBody(BaseModel):
-    base_buyer_price: float = Field(gt=0, allow_inf_nan=False)
-    base_seller_payout: float = Field(gt=0, allow_inf_nan=False)
+    base_buyer_price: Decimal = Field(gt=0, allow_inf_nan=False, max_digits=12, decimal_places=2)
+    base_seller_payout: Decimal = Field(gt=0, allow_inf_nan=False, max_digits=12, decimal_places=2)
 
 
 class PipelinesBody(BaseModel):
@@ -175,9 +210,15 @@ class PipelinesBody(BaseModel):
 
 
 class MarginFloorBody(BaseModel):
-    absolute: float = Field(default=0.0, ge=0, allow_inf_nan=False)
-    pct: float = Field(default=0.0, ge=0, lt=1, allow_inf_nan=False)
-    ceiling_multiplier: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    absolute: Decimal = Field(
+        default=Decimal(0), ge=0, allow_inf_nan=False, max_digits=12, decimal_places=2
+    )
+    pct: Decimal = Field(
+        default=Decimal(0), ge=0, lt=1, allow_inf_nan=False, max_digits=5, decimal_places=4
+    )
+    ceiling_multiplier: Decimal = Field(
+        default=Decimal(3), gt=0, allow_inf_nan=False, max_digits=6, decimal_places=2
+    )
 
 
 class MatchingStrategyBody(BaseModel):

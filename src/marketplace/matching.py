@@ -1,41 +1,32 @@
-"""Matching strategies.
+"""Matching strategies (pure).
 
-A strategy receives the already-quoted Job (with `buyer_price` set), a list of
-seller candidates, and the live config. It returns a `MatchResult` (chosen
-seller_id and the seller_payout that the seller pipeline produced for them) or
-`None` if no candidate satisfies the platform's margin floor.
+A strategy receives the quoted `buyer_price`, a list of eligible seller
+`Candidate`s (already filtered to those with spare capacity and not previously
+declined for this job), and the `PricingConfig`. It returns a `MatchResult`
+(chosen seller_id + the Decimal payout the seller pipeline produced) or `None`
+if no candidate satisfies the platform's margin floor.
 
 Strategies are registered into a global STRATEGIES table; the operator selects
-the active strategy at runtime via `Config.matching_strategy`.
+the active one via config. `seller_payout_for` is the single payout computation,
+shared with the quote probe in `api.py`.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from decimal import Decimal
 
-from .config import Config
-from .models import Job, SellerProfile, Side
+from .config import Candidate, MarginFloor, PricingConfig
+from .models import Side, to_money
 from .pricing import PricingContext, run_pipeline
-
-
-@dataclass
-class SellerCandidate:
-    seller_id: str
-    profile: SellerProfile
-    available_since: datetime
 
 
 @dataclass
 class MatchResult:
     seller_id: str
-    seller_payout: float
+    seller_payout: Decimal
 
 
-Strategy = Callable[
-    [Job, list[SellerCandidate], Config, dict[str, Any]],
-    MatchResult | None,
-]
+Strategy = Callable[[Decimal, list[Candidate], PricingConfig, int, int], MatchResult | None]
 
 STRATEGIES: dict[str, Strategy] = {}
 
@@ -48,51 +39,48 @@ def register_strategy(name: str) -> Callable[[Strategy], Strategy]:
     return wrap
 
 
-def _payout_for(
-    candidate: SellerCandidate, job: Job, config: Config, supply: int, demand: int
-) -> float:
-    service_type = config.service_types[job.service_type_id]
-    pipelines = config.get_pipelines(job.service_type_id)
+def seller_payout_for(
+    candidate: Candidate, cfg: PricingConfig, supply: int, demand: int
+) -> Decimal:
+    """The one place a seller's payout is computed. Returns a 2-dp Decimal."""
     ctx = PricingContext(
         side=Side.SELLER,
-        service_type=service_type,
-        buyer_id=job.buyer_id,
-        seller_id=candidate.seller_id,
-        seller_profile=candidate.profile,
+        seller_tier=candidate.tier,
         live_supply=supply,
         live_demand=demand,
     )
-    return run_pipeline(
-        service_type.base_seller_payout,
-        pipelines.seller,
-        ctx,
-        config.adjuster_params,
+    raw = run_pipeline(
+        float(cfg.service.base_seller_payout), cfg.seller_pipeline, ctx, cfg.adjuster_params
     )
+    return to_money(raw)
 
 
-def _passes_floor(buyer_price: float, payout: float, config: Config) -> bool:
-    floor = max(config.margin_floor.absolute, config.margin_floor.pct * buyer_price)
-    return (buyer_price - payout) >= floor
+def effective_floor(buyer_price: Decimal, floor: MarginFloor) -> Decimal:
+    return max(floor.absolute, to_money(floor.pct * buyer_price))
 
 
-def _supply_demand(extras: dict[str, Any], candidates: list[SellerCandidate]) -> tuple[int, int]:
-    return int(extras.get("supply", len(candidates))), int(extras.get("demand", 1))
+def passes_floor(buyer_price: Decimal, payout: Decimal, floor: MarginFloor) -> bool:
+    return (buyer_price - payout) >= effective_floor(buyer_price, floor)
+
+
+def _priced(
+    candidates: list[Candidate], buyer_price: Decimal, cfg: PricingConfig, supply: int, demand: int
+) -> list[tuple[Candidate, Decimal]]:
+    """(candidate, payout) pairs that clear the margin floor."""
+    out: list[tuple[Candidate, Decimal]] = []
+    for c in candidates:
+        payout = seller_payout_for(c, cfg, supply, demand)
+        if passes_floor(buyer_price, payout, cfg.margin_floor):
+            out.append((c, payout))
+    return out
 
 
 @register_strategy("cheapest_payout")
 def cheapest_payout(
-    job: Job,
-    candidates: list[SellerCandidate],
-    config: Config,
-    extras: dict[str, Any],
+    buyer_price: Decimal, candidates: list[Candidate], cfg: PricingConfig, supply: int, demand: int
 ) -> MatchResult | None:
     """Lowest payout that still respects the margin floor."""
-    supply, demand = _supply_demand(extras, candidates)
-    valid: list[tuple[SellerCandidate, float]] = []
-    for c in candidates:
-        p = _payout_for(c, job, config, supply, demand)
-        if _passes_floor(job.buyer_price, p, config):
-            valid.append((c, p))
+    valid = _priced(candidates, buyer_price, cfg, supply, demand)
     if not valid:
         return None
     valid.sort(key=lambda cp: (cp[1], cp[0].available_since))
@@ -102,31 +90,28 @@ def cheapest_payout(
 
 @register_strategy("fifo")
 def fifo(
-    job: Job,
-    candidates: list[SellerCandidate],
-    config: Config,
-    extras: dict[str, Any],
+    buyer_price: Decimal, candidates: list[Candidate], cfg: PricingConfig, supply: int, demand: int
 ) -> MatchResult | None:
     """First seller (by `available_since`) whose payout passes the floor."""
-    supply, demand = _supply_demand(extras, candidates)
-    for c in sorted(candidates, key=lambda c: c.available_since):
-        p = _payout_for(c, job, config, supply, demand)
-        if _passes_floor(job.buyer_price, p, config):
-            return MatchResult(seller_id=c.seller_id, seller_payout=p)
-    return None
+    valid = _priced(candidates, buyer_price, cfg, supply, demand)
+    if not valid:
+        return None
+    valid.sort(key=lambda cp: cp[0].available_since)
+    chosen, payout = valid[0]
+    return MatchResult(seller_id=chosen.seller_id, seller_payout=payout)
 
 
 @register_strategy("highest_rated")
 def highest_rated(
-    job: Job,
-    candidates: list[SellerCandidate],
-    config: Config,
-    extras: dict[str, Any],
+    buyer_price: Decimal, candidates: list[Candidate], cfg: PricingConfig, supply: int, demand: int
 ) -> MatchResult | None:
-    """Highest-rated seller whose payout passes the floor; ties broken by FIFO."""
-    supply, demand = _supply_demand(extras, candidates)
-    for c in sorted(candidates, key=lambda c: (-c.profile.rating, c.available_since)):
-        p = _payout_for(c, job, config, supply, demand)
-        if _passes_floor(job.buyer_price, p, config):
-            return MatchResult(seller_id=c.seller_id, seller_payout=p)
-    return None
+    """Highest-rated seller whose payout passes the floor; ties broken by FIFO.
+
+    An unrated seller (rating None) sorts below any rated one.
+    """
+    valid = _priced(candidates, buyer_price, cfg, supply, demand)
+    if not valid:
+        return None
+    valid.sort(key=lambda cp: (-(cp[0].rating or -1.0), cp[0].available_since))
+    chosen, payout = valid[0]
+    return MatchResult(seller_id=chosen.seller_id, seller_payout=payout)
