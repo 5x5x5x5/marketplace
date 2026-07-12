@@ -1,69 +1,60 @@
-"""Runtime-mutable configuration.
+"""Pricing/matching snapshots.
 
-Everything an operator can tune at runtime via the admin API lives here.
-No persistence in v1; the object resets on app restart.
+The pricing engine and matching strategies operate on these plain dataclasses,
+never on ORM rows or the DB session — so they stay pure and testable. The API
+layer loads a `PricingConfig` and a list of `Candidate`s from the database (see
+`repo.py`) and hands them to the pure core.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
-
-from .models import ServiceType
 
 
 @dataclass
 class MarginFloor:
     """Platform's minimum spread per matched pair.
 
-    Effective floor for a given quote = max(absolute, pct * buyer_price).
-    `ceiling_multiplier` caps how far the buyer-price bump can go before the
-    quote is rejected: rejected if (bump-corrected price > base * ceiling).
+    Effective floor for a quote = max(absolute, pct * buyer_price). The
+    `ceiling_multiplier` caps how far a floor-correcting bump can push the buyer
+    price before the quote is rejected.
     """
 
-    absolute: float = 0.0
-    pct: float = 0.0
-    ceiling_multiplier: float = 3.0
+    absolute: Decimal = Decimal(0)
+    pct: Decimal = Decimal(0)
+    ceiling_multiplier: Decimal = Decimal(3)
 
 
 @dataclass
-class Pipelines:
-    """Ordered adjuster names for each side, applied to the base price."""
+class ServiceSpec:
+    id: str
+    base_buyer_price: Decimal
+    base_seller_payout: Decimal
 
-    buyer: list[str] = field(default_factory=list[str])
-    seller: list[str] = field(default_factory=list[str])
+
+@dataclass
+class PricingConfig:
+    service: ServiceSpec
+    buyer_pipeline: list[str]
+    seller_pipeline: list[str]
+    adjuster_params: dict[str, dict[str, Any]]
+    margin_floor: MarginFloor
+    matching_strategy: str
 
 
-class Config:
-    """Singleton-style runtime config. Admin endpoints mutate this in place.
+@dataclass
+class Candidate:
+    """An available seller, with the facts pricing/matching need."""
 
-    `service_types`     id → ServiceType (base prices)
-    `pipelines`         service_type_id → Pipelines (buyer/seller adjuster lists)
-    `margin_floor`      platform's minimum spread rule
-    `matching_strategy` name from `marketplace.matching.STRATEGIES`
-    `adjuster_params`   adjuster_name → params dict (read by the adjuster)
-    """
+    seller_id: str
+    tier: str
+    rating: float | None
+    completed_jobs: int
+    available_since: datetime
+    active_jobs: int
+    capacity: int
 
-    def __init__(self) -> None:
-        self.service_types: dict[str, ServiceType] = {}
-        self.pipelines: dict[str, Pipelines] = {}
-        self.margin_floor: MarginFloor = MarginFloor()
-        self.matching_strategy: str = "cheapest_payout"
-        self.adjuster_params: dict[str, dict[str, Any]] = {}
-
-    def get_pipelines(self, service_type_id: str) -> Pipelines:
-        return self.pipelines.get(service_type_id, Pipelines())
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the config for GET /admin/config."""
-        return {
-            "service_types": {k: v.model_dump(mode="json") for k, v in self.service_types.items()},
-            "pipelines": {
-                k: {"buyer": v.buyer, "seller": v.seller} for k, v in self.pipelines.items()
-            },
-            "margin_floor": {
-                "absolute": self.margin_floor.absolute,
-                "pct": self.margin_floor.pct,
-                "ceiling_multiplier": self.margin_floor.ceiling_multiplier,
-            },
-            "matching_strategy": self.matching_strategy,
-            "adjuster_params": self.adjuster_params,
-        }
+    @property
+    def has_capacity(self) -> bool:
+        return self.active_jobs < self.capacity

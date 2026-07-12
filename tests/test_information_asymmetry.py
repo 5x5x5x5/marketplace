@@ -1,70 +1,63 @@
-"""Information-asymmetry tests.
-
-Buyer-role responses must NOT include `seller_payout`.
-Seller-role responses must NOT include `buyer_price`.
-Admin-role responses (via /admin/transactions) DO include both.
-"""
+"""Information asymmetry: buyers never see seller_payout, sellers never see buyer_price."""
 
 from fastapi.testclient import TestClient
 
-
-def _setup(client: TestClient, sid: str) -> tuple[str, str]:
-    r = client.post("/availability", json={"seller_id": "s1", "service_type_id": sid})
-    assert r.status_code == 200
-    r = client.post("/quotes", json={"buyer_id": "alice", "service_type_id": sid})
-    assert r.status_code == 200
-    quote_id = r.json()["id"]
-    r = client.post("/jobs", json={"quote_id": quote_id})
-    assert r.status_code == 200
-    job_id = r.json()["id"]
-    return job_id, "s1"
+from tests.conftest import AuthFactory, Header
 
 
-def test_buyer_view_omits_seller_payout(client: TestClient, basic_service: str) -> None:
-    job_id, _ = _setup(client, basic_service)
-    r = client.get(f"/jobs/{job_id}?role=buyer")
-    assert r.status_code == 200
-    body = r.json()
+def _offer(client: TestClient, sid: str, auth: AuthFactory) -> tuple[str, str]:
+    """Set up one PENDING job with an open offer to seller 's1'. Returns (job_id, offer_id)."""
+    seller = auth("seller", "s1")
+    buyer = auth("buyer", "alice")
+    client.post("/v1/seller/availability", json={"service_type_id": sid}, headers=seller)
+    qid = client.post("/v1/quotes", json={"service_type_id": sid}, headers=buyer).json()["id"]
+    job_id = client.post("/v1/jobs", json={"quote_id": qid}, headers=buyer).json()["id"]
+    offer_id = client.get("/v1/seller/offers", headers=seller).json()[0]["id"]
+    return job_id, offer_id
+
+
+def test_buyer_view_omits_seller_payout(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id, _ = _offer(client, basic_service, auth)
+    body = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()
     assert "seller_payout" not in body
-    assert "buyer_price" in body  # buyer is allowed to see what they pay
+    assert body["buyer_price"] == "20.00"  # buyer sees what they pay
 
 
-def test_create_job_response_omits_seller_payout(client: TestClient, basic_service: str) -> None:
-    """The POST /jobs response is the buyer view too."""
-    r = client.post("/availability", json={"seller_id": "s1", "service_type_id": basic_service})
-    assert r.status_code == 200
-    r = client.post("/quotes", json={"buyer_id": "alice", "service_type_id": basic_service})
-    quote_id = r.json()["id"]
-    r = client.post("/jobs", json={"quote_id": quote_id})
-    assert r.status_code == 200
-    body = r.json()
-    assert "seller_payout" not in body
+def test_seller_offer_omits_buyer_price(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    _offer(client, basic_service, auth)
+    offers = client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()
+    assert "buyer_price" not in offers[0]
+    assert offers[0]["seller_payout"] == "14.00"  # seller sees what they earn
 
 
-def test_seller_offered_view_omits_buyer_price(client: TestClient, basic_service: str) -> None:
-    _setup(client, basic_service)
-    r = client.get("/jobs/offered", params={"seller_id": "s1"})
-    assert r.status_code == 200
-    body = r.json()
-    assert len(body) == 1
-    offered = body[0]
-    assert "buyer_price" not in offered
-    assert "seller_payout" in offered  # the seller is allowed to see what they earn
+def test_seller_cannot_read_buyer_view(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id, _ = _offer(client, basic_service, auth)
+    # A seller token on the buyer endpoint is rejected by role, not just by ownership.
+    assert client.get(f"/v1/jobs/{job_id}", headers=auth("seller", "s1")).status_code == 403
 
 
-def test_admin_transaction_includes_both(client: TestClient, basic_service: str) -> None:
-    job_id, seller_id = _setup(client, basic_service)
-    r = client.post(f"/jobs/{job_id}/accept", json={"seller_id": seller_id})
-    assert r.status_code == 200
-    r = client.post(f"/jobs/{job_id}/complete", json={"seller_id": seller_id})
-    assert r.status_code == 200
+def test_buyer_cannot_read_seller_offers(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    _offer(client, basic_service, auth)
+    assert client.get("/v1/seller/offers", headers=auth("buyer", "alice")).status_code == 403
 
-    r = client.get("/admin/transactions")
-    assert r.status_code == 200
-    body = r.json()
-    assert len(body) == 1
-    tx = body[0]
-    assert "buyer_price" in tx
-    assert "seller_payout" in tx
-    assert "margin" in tx
-    assert tx["margin"] == tx["buyer_price"] - tx["seller_payout"]
+
+def test_admin_transaction_includes_both(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    seller = auth("seller", "s1")
+    job_id, offer_id = _offer(client, basic_service, auth)
+    client.post(f"/v1/seller/offers/{offer_id}/accept", headers=seller)
+    client.post(f"/v1/seller/jobs/{job_id}/complete", headers=seller)
+
+    tx = client.get("/v1/admin/transactions", headers=admin).json()[0]
+    assert tx["buyer_price"] == "20.00"
+    assert tx["seller_payout"] == "14.00"
+    assert tx["margin"] == "6.00"
