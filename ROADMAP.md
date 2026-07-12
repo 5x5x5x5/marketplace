@@ -7,33 +7,39 @@ users, then gets forked and specialized per market vertical. The differentiator
 
 ## Where we are
 
-- v1 scaffold: pricing pipelines + matching strategies + information asymmetry, in-memory.
-- Safe-to-pilot hardening (this branch): real identity, concurrency locks,
-  admin-input validation, resource caps. See `SECURITY.md`.
+- v1 scaffold: pricing pipelines + matching strategies + information asymmetry.
+- Safe-to-pilot hardening: real identity, concurrency, admin-input validation.
+- **Full template build (done):** Postgres + Alembic behind DI sessions, Decimal
+  money, the complete job/offer lifecycle (capacity, decline, timeout+re-match,
+  cancel, history), buyer→seller ratings, admin seller-tier management, `/v1`
+  versioning, token expiry, and an admin audit log. See `SECURITY.md`.
 
-## What every marketplace of this shape still needs
+## Done ✓
 
-Rough priority order. Each is a fork-agnostic capability — build it generic here,
-specialize after forking.
+Persistence (Postgres/SQLAlchemy/Alembic) · Decimal money · lifecycle
+completeness (cancel/decline/offer-timeout/re-match/graceful-expiry) · ratings
+write-path feeding `highest_rated` · seller tier + capacity management · `/v1`
+API versioning · admin audit log · token expiry.
 
-1. **Persistence** — Postgres + migrations. In-memory resets on restart and
-   blocks everything below. *Biggest single gap.*
-2. **Payments & payouts** — Stripe Connect. The spread model maps directly to
+## What's still ahead
+
+Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
+
+1. **Payments & payouts** — Stripe Connect. The spread maps directly to
    **destination charges**: the buyer's payment lands on the platform balance and
    a chosen amount transfers to the seller, so the platform keeps the spread by
-   construction. Also: seller onboarding/KYC, refunds, escrow/holds.
-3. **Lifecycle completeness** — cancellation (the `CANCELLED` status exists but
-   has no endpoint), offer timeout + re-match, refunds.
-4. **Trust & safety** — ratings/reviews write path (`SellerProfile.rating`
-   exists, nothing writes it), disputes, fraud/abuse controls, moderation.
-5. **Money correctness** — `Decimal` end-to-end, idempotency keys on money ops,
-   immutable audit ledger.
-6. **Notifications** — email/push on job offered/accepted/completed (async).
-7. **Observability & ops** — structured logging, metrics, health/readiness,
-   error handling that never 500s or leaks internals.
-8. **Admin RBAC + operator tooling** — beyond the single shared operator token.
-9. **API hardening** — versioning, CORS/TrustedHost, gateway rate-limiting,
-   request-size limits.
+   construction. Plus seller onboarding/KYC, refunds, escrow/holds.
+2. **Idempotency keys** on money-mutating POSTs (create-job, complete) — needs a
+   key table + header handling; important once payments are real.
+3. **Notifications** — email/push on offered/accepted/completed (async).
+4. **Trust & safety** — disputes, seller→buyer reviews, fraud/abuse, moderation.
+5. **Background scheduler** — replace the lazy offer-expiry sweep with a cron/worker.
+6. **Observability & ops** — metrics, structured request logging, an error
+   envelope so a crafted body never surfaces a 500.
+7. **Admin RBAC** — beyond the single shared operator token.
+8. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
+9. **Auth** — replace pilot HMAC with a real user store + provider (fastapi-users /
+   Supabase Auth).
 
 ## Build vs template: build
 

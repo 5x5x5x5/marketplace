@@ -1,8 +1,27 @@
 # Security posture
 
-This is a scaffold on its way to a real, multi-user marketplace template. A full
-read-only sweep was done on the v1 scaffold; the **safe-to-pilot hardening**
-branch closed the exploitable findings. Status below is against that branch.
+A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
+hardening** closed the exploitable findings (status table below). The subsequent
+**template build** moved state to Postgres and changed a few security-relevant
+mechanics — see the update note first.
+
+## Update — template build
+
+- **Concurrency is now the database's job.** The process-wide lock is gone;
+  quote consumption, job/offer status transitions, and seller-capacity checks use
+  `SELECT … FOR UPDATE` row locks. On Postgres these are real; the SQLite test
+  backend serializes writes, so the deterministic guard tests hold on both, and a
+  true-parallel test can run against Postgres via `DATABASE_URL`.
+- **Tokens now expire** (`exp` claim; `TOKEN_TTL_HOURS`), closing the
+  never-expiring-token gap. Still pilot-grade HMAC — not production auth.
+- **Seller capacity** is enforced under a row lock on accept, so a seller can't
+  exceed their configured concurrent-job limit even under racing accepts.
+- **Money is `Decimal`** end-to-end; the margin floor is enforced on quantized
+  values, removing the float sub-floor-leakage drift (old M3).
+- **Residual (Low, unchanged):** a hand-crafted non-compliant JSON body
+  (`NaN`/`Infinity`) is rejected (never stored) but currently surfaces as a 500
+  during error serialization rather than a clean 422. Needs a global error
+  envelope — a roadmap item.
 
 ## Threat model (pilot)
 
