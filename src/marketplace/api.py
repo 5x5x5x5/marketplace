@@ -42,6 +42,7 @@ from .entities import (
     Transaction,
     WebhookEvent,
 )
+from .idempotency import IdempotencyMiddleware
 from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
     AdminSellerBody,
@@ -927,6 +928,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
+app.add_middleware(IdempotencyMiddleware)
 
 
 @app.get("/healthz")
