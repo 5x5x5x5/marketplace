@@ -326,6 +326,8 @@ def test_buyer_cancels_awaiting_payment_voids_charge(
     assert r.json()["status"] == "cancelled"
     assert fake_payments.cancelled == [pid]
     assert fake_payments.refunded == []
+    view = client.get(f"/v1/jobs/{job_id}", headers=auth("buyer", "alice")).json()
+    assert view["payment_status"] == "failed"  # voided charge is recorded, not left pending
 
 
 def test_admin_cancel_of_paid_job_refunds(
