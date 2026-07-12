@@ -88,6 +88,8 @@ class BuyerJobView(BaseModel):
     created_at: datetime
     accepted_at: datetime | None
     completed_at: datetime | None
+    payment_status: PaymentStatus | None = None
+    client_secret: str | None = None  # buyer-side confirmation secret, only while awaiting payment
 
 
 class SellerJobView(BaseModel):

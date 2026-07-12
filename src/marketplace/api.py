@@ -32,6 +32,7 @@ from .entities import (
     Availability,
     Job,
     Offer,
+    Payment,
     Pipeline,
     Quote,
     Review,
@@ -52,6 +53,7 @@ from .models import (
     MatchingStrategyBody,
     OfferStatus,
     OnboardingOut,
+    PaymentStatus,
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
@@ -68,7 +70,7 @@ from .models import (
     to_money,
 )
 from .payments import get_provider
-from .payments.port import PaymentProvider
+from .payments.port import PaymentError, PaymentProvider
 from .pricing import REGISTRY, PricingContext, run_pipeline
 from .repo import audit
 from .settings import settings
@@ -146,6 +148,18 @@ def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
 
 
 # ---------- Buyer router ----------
+
+
+def _buyer_view(session: Session, job: Job) -> BuyerJobView:
+    """BuyerJobView plus the buyer's payment state (never the seller's numbers)."""
+    view = BuyerJobView.model_validate(job)
+    payment = session.scalar(select(Payment).where(Payment.job_id == job.id))
+    if payment is not None:
+        view.payment_status = payment.status
+        if job.status == JobStatus.AWAITING_PAYMENT:
+            view.client_secret = payment.client_secret
+    return view
+
 
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"])
 
@@ -245,12 +259,12 @@ def list_buyer_jobs(
 
 
 @buyer_router.get("/jobs/{job_id}", response_model=BuyerJobView)
-def get_job_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> Job:
+def get_job_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> BuyerJobView:
     _sweep_expired_offers(session)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
-    return job
+    return _buyer_view(session, job)
 
 
 @buyer_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
@@ -408,7 +422,9 @@ def list_seller_jobs(
 
 
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)
-def accept_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> Job:
+def accept_offer(
+    offer_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
+) -> Job:
     offer = session.get(Offer, offer_id, with_for_update=True)
     if offer is None or offer.seller_id != seller_id:
         raise HTTPException(status_code=404, detail="offer not found")
@@ -430,12 +446,44 @@ def accept_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> Jo
     if job is None or job.status != JobStatus.PENDING:
         raise HTTPException(status_code=409, detail="job is no longer open")
 
+    # Charge inside the locked region so capacity + payment commit atomically.
+    # On PaymentError everything rolls back and the offer stays acceptable; the
+    # outbound key means a retry gets the SAME PaymentIntent back — no strays.
+    # ponytail: holds a row lock across a network call; fine at template scale,
+    # move to a two-phase outbox if provider latency ever hurts.
+    try:
+        charge = provider.charge_buyer(
+            buyer_id=job.buyer_id,
+            amount=job.buyer_price,
+            currency=settings.currency,
+            job_id=str(job.id),
+            idempotency_key=f"charge:{job.id}",
+        )
+    except PaymentError:
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+    session.add(
+        Payment(
+            job_id=job.id,
+            buyer_id=job.buyer_id,
+            amount=job.buyer_price,
+            currency=settings.currency,
+            status=charge.status,
+            provider=provider.name,
+            provider_payment_id=charge.provider_payment_id,
+            client_secret=charge.client_secret,
+        )
+    )
+
     offer.status = OfferStatus.ACCEPTED
     offer.responded_at = _now()
-    job.status = JobStatus.ACCEPTED
     job.seller_id = seller_id
     job.seller_payout = offer.seller_payout
     job.accepted_at = _now()
+    job.status = (
+        JobStatus.ACCEPTED
+        if charge.status is PaymentStatus.SUCCEEDED
+        else JobStatus.AWAITING_PAYMENT
+    )
     session.flush()
     return job
 
