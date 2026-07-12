@@ -305,13 +305,17 @@ def get_job_buyer(
 
 
 @buyer_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
-def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> Job:
+def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: ProviderDep) -> Job:
     job = session.get(Job, job_id, with_for_update=True)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
-    if job.status != JobStatus.PENDING:
+    if job.status not in (JobStatus.PENDING, JobStatus.AWAITING_PAYMENT):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
+    try:
+        _release_payment(session, provider, job)
+    except PaymentError:
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     job.status = JobStatus.CANCELLED
     return job
 
@@ -352,6 +356,22 @@ def _expire_open_offers(session: Session, job_id: UUID) -> None:
     ).all():
         offer.status = OfferStatus.EXPIRED
         offer.responded_at = _now()
+
+
+def _release_payment(session: Session, provider: PaymentProvider, job: Job) -> None:
+    """Undo whatever the job's charge collected: void a pending PI, refund a
+    succeeded one. No-op when nothing was charged. Raises PaymentError upward."""
+    payment = session.scalar(select(Payment).where(Payment.job_id == job.id).with_for_update())
+    if payment is None:
+        return
+    if payment.status is PaymentStatus.SUCCEEDED:
+        provider.refund(payment.provider_payment_id, idempotency_key=f"refund:{job.id}")
+        payment.status = PaymentStatus.REFUNDED
+    elif payment.status is PaymentStatus.PENDING:
+        provider.cancel_charge(payment.provider_payment_id)
+        payment.status = (
+            PaymentStatus.FAILED
+        )  # ponytail: voided lands in FAILED, split if ops needs it
 
 
 @seller_router.put("/profile", response_model=SellerProfileOut)
@@ -807,13 +827,19 @@ def list_all_jobs(
 
 
 @admin_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
-def admin_cancel_job(job_id: UUID, session: SessionDep, admin_id: AdminId) -> Job:
+def admin_cancel_job(
+    job_id: UUID, session: SessionDep, admin_id: AdminId, provider: ProviderDep
+) -> Job:
     job = session.get(Job, job_id, with_for_update=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.EXPIRED):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
+    try:
+        _release_payment(session, provider, job)
+    except PaymentError:
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     job.status = JobStatus.CANCELLED
     audit(session, admin_id, "cancel_job", str(job_id), {})
     return job

@@ -315,3 +315,50 @@ def test_admin_retries_failed_payout(
     assert r.json()["status"] == "paid"
     # Retrying a paid payout is a 409, not a double transfer.
     assert client.post(f"/v1/admin/payouts/{payout_id}/retry", headers=admin).status_code == 409
+
+
+def test_buyer_cancels_awaiting_payment_voids_charge(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    r = client.post(f"/v1/jobs/{job_id}/cancel", headers=auth("buyer", "alice"))
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    assert fake_payments.cancelled == [pid]
+    assert fake_payments.refunded == []
+
+
+def test_admin_cancel_of_paid_job_refunds(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))  # instant success → paid
+
+    with SessionLocal() as s:
+        pid = s.scalar(
+            select(Payment.provider_payment_id).where(Payment.job_id == UUID(str(job["id"])))
+        )
+
+    r = client.post(f"/v1/admin/jobs/{job['id']}/cancel", headers=admin)
+    assert r.status_code == 200
+    assert fake_payments.refunded == [pid]
+    view = client.get(f"/v1/jobs/{job['id']}", headers=auth("buyer", "alice")).json()
+    assert view["payment_status"] == "refunded"
+    # The seller's slot is freed.
+    job2 = new_job(client, auth, basic_service, "bob")
+    assert job2["status"] == "pending"
+
+
+def test_buyer_still_cannot_cancel_accepted(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))
+    r = client.post(f"/v1/jobs/{job['id']}/cancel", headers=auth("buyer", "alice"))
+    assert r.status_code == 409  # paid + committed: only an admin unwinds this
