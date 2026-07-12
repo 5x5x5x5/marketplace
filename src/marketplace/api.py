@@ -51,6 +51,7 @@ from .models import (
     MarginSummaryOut,
     MatchingStrategyBody,
     OfferStatus,
+    OnboardingOut,
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
@@ -66,6 +67,8 @@ from .models import (
     TransactionOut,
     to_money,
 )
+from .payments import get_provider
+from .payments.port import PaymentProvider
 from .pricing import REGISTRY, PricingContext, run_pipeline
 from .repo import audit
 from .settings import settings
@@ -81,6 +84,7 @@ SellerId = Annotated[str, Depends(current_seller)]
 AdminId = Annotated[str, Depends(require_admin)]
 Limit = Annotated[int, Query(ge=1, le=MAX_PAGE)]
 Offset = Annotated[int, Query(ge=0)]
+ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 
 def _now() -> datetime:
@@ -312,6 +316,28 @@ def update_profile(
 @seller_router.get("/profile", response_model=SellerProfileOut)
 def get_profile(session: SessionDep, seller_id: SellerId) -> SellerProfile:
     return repo.get_or_create_seller(session, seller_id)
+
+
+@seller_router.post("/payments/onboard", response_model=OnboardingOut)
+def onboard_payments(
+    session: SessionDep, seller_id: SellerId, provider: ProviderDep
+) -> OnboardingOut:
+    """Create the seller's payment account (once) and return the onboarding link.
+
+    `payments_ready` flips via the provider's account webhook (instantly for the
+    fake provider); matching only offers jobs to ready sellers."""
+    seller = repo.get_or_create_seller(session, seller_id)
+    if seller.provider_account_id is None:
+        acct = provider.create_seller_account(seller_id, idempotency_key=f"acct:{seller_id}")
+        seller.provider_account_id = acct.provider_account_id
+        seller.payments_ready = acct.payments_ready
+        session.flush()
+    return OnboardingOut(
+        onboarding_url=provider.onboarding_link(
+            seller.provider_account_id, settings.onboarding_return_url
+        ),
+        payments_ready=seller.payments_ready,
+    )
 
 
 @seller_router.post("/availability")

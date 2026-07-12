@@ -9,6 +9,7 @@ def _offer(client: TestClient, sid: str, auth: AuthFactory) -> tuple[str, str]:
     """Set up one PENDING job with an open offer to seller 's1'. Returns (job_id, offer_id)."""
     seller = auth("seller", "s1")
     buyer = auth("buyer", "alice")
+    client.post("/v1/seller/payments/onboard", headers=seller)
     client.post("/v1/seller/availability", json={"service_type_id": sid}, headers=seller)
     qid = client.post("/v1/quotes", json={"service_type_id": sid}, headers=buyer).json()["id"]
     job_id = client.post("/v1/jobs", json={"quote_id": qid}, headers=buyer).json()["id"]

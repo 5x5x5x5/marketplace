@@ -11,6 +11,7 @@ from tests.conftest import AuthFactory, Header
 
 
 def _available(client: TestClient, auth: AuthFactory, sid: str, seller: str) -> None:
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", seller))
     client.post(
         "/v1/seller/availability", json={"service_type_id": sid}, headers=auth("seller", seller)
     )

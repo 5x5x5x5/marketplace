@@ -9,6 +9,7 @@ def _run_job_to_completion(
     client: TestClient, auth: AuthFactory, sid: str, seller: str, buyer: str
 ) -> str:
     """Full flow through completion. Returns the job id."""
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", seller))
     client.post(
         "/v1/seller/availability", json={"service_type_id": sid}, headers=auth("seller", seller)
     )
@@ -52,6 +53,7 @@ def test_cannot_review_twice(client: TestClient, basic_service: str, auth: AuthF
 def test_cannot_review_incomplete_job(
     client: TestClient, basic_service: str, auth: AuthFactory
 ) -> None:
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1"))
     client.post(
         "/v1/seller/availability",
         json={"service_type_id": basic_service},
@@ -73,6 +75,7 @@ def test_rating_feeds_highest_rated_matching(
     # carol completes a job and is reviewed 5; dave is unrated.
     job_id = _run_job_to_completion(client, auth, basic_service, "carol", "alice")
     client.post(f"/v1/jobs/{job_id}/review", json={"rating": 5}, headers=auth("buyer", "alice"))
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", "dave"))
     client.post(
         "/v1/seller/availability",
         json={"service_type_id": basic_service},

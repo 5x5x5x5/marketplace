@@ -160,6 +160,11 @@ class SellerProfileOut(BaseModel):
     completed_jobs: int
 
 
+class OnboardingOut(BaseModel):
+    onboarding_url: str
+    payments_ready: bool
+
+
 class AuditOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
