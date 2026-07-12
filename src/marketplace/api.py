@@ -56,6 +56,7 @@ from .models import (
     OfferStatus,
     OnboardingOut,
     PaymentStatus,
+    PayoutOut,
     PayoutStatus,
     PipelinesBody,
     QuoteOut,
@@ -541,7 +542,9 @@ def decline_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> d
 
 
 @seller_router.post("/jobs/{job_id}/complete", response_model=TransactionOut)
-def complete_job(job_id: UUID, session: SessionDep, seller_id: SellerId) -> Transaction:
+def complete_job(
+    job_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
+) -> Transaction:
     job = session.get(Job, job_id, with_for_update=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -561,8 +564,33 @@ def complete_job(job_id: UUID, session: SessionDep, seller_id: SellerId) -> Tran
         margin=to_money(job.buyer_price - job.seller_payout),
     )
     session.add(tx)
+
+    # Escrow exit: move the payout to the seller. A transfer failure does NOT
+    # fail completion — the work happened; the debt is recorded and retried via
+    # POST /v1/admin/payouts/{id}/retry.
+    seller = repo.get_or_create_seller(session, seller_id)
+    payout = Payout(
+        job_id=job.id, seller_id=seller_id, amount=job.seller_payout, currency=settings.currency
+    )
+    if seller.provider_account_id is None:
+        payout.status = PayoutStatus.FAILED  # unonboarded (shouldn't match, but never lose money)
+    else:
+        try:
+            transfer = provider.transfer_to_seller(
+                provider_account_id=seller.provider_account_id,
+                amount=job.seller_payout,
+                currency=settings.currency,
+                job_id=str(job.id),
+                idempotency_key=f"transfer:{job.id}",
+            )
+            payout.provider_transfer_id = transfer.provider_transfer_id
+            payout.status = transfer.status
+        except PaymentError:
+            payout.status = PayoutStatus.FAILED
+    session.add(payout)
+
     repo.get_or_create_buyer(session, job.buyer_id).completed_jobs += 1
-    repo.get_or_create_seller(session, seller_id).completed_jobs += 1
+    seller.completed_jobs += 1
     session.flush()
     return tx
 
@@ -701,6 +729,48 @@ def list_transactions(
 ) -> list[Transaction]:
     rows = session.scalars(select(Transaction).order_by(Transaction.completed_at.desc())).all()
     return _paginate(rows, limit, offset)
+
+
+@admin_router.get("/payouts", response_model=list[PayoutOut])
+def list_payouts(
+    session: SessionDep,
+    status: PayoutStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[Payout]:
+    stmt = select(Payout)
+    if status is not None:
+        stmt = stmt.where(Payout.status == status)
+    rows = session.scalars(stmt.order_by(Payout.created_at.desc())).all()
+    return _paginate(rows, limit, offset)
+
+
+@admin_router.post("/payouts/{payout_id}/retry", response_model=PayoutOut)
+def retry_payout(
+    payout_id: UUID, session: SessionDep, admin_id: AdminId, provider: ProviderDep
+) -> Payout:
+    payout = session.get(Payout, payout_id, with_for_update=True)
+    if payout is None:
+        raise HTTPException(status_code=404, detail="payout not found")
+    if payout.status is not PayoutStatus.FAILED:
+        raise HTTPException(status_code=409, detail=f"payout is {payout.status}, not failed")
+    seller = session.get(SellerProfile, payout.seller_id)
+    if seller is None or seller.provider_account_id is None:
+        raise HTTPException(status_code=409, detail="seller has no payment account yet")
+    try:
+        transfer = provider.transfer_to_seller(
+            provider_account_id=seller.provider_account_id,
+            amount=payout.amount,
+            currency=payout.currency,
+            job_id=str(payout.job_id),
+            idempotency_key=f"transfer:{payout.job_id}",  # same key: replays are safe
+        )
+    except PaymentError:
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+    payout.provider_transfer_id = transfer.provider_transfer_id
+    payout.status = transfer.status
+    audit(session, admin_id, "retry_payout", str(payout_id), {})
+    return payout
 
 
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)

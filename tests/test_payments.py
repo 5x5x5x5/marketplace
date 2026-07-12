@@ -256,3 +256,62 @@ def test_payment_timeout_expires_job_and_frees_slot(
     # The seller's slot is free again.
     job2 = new_job(client, auth, basic_service, "bob")
     assert job2["status"] == "pending"
+
+
+def _completed_job(client: TestClient, auth: AuthFactory, sid: str) -> str:
+    onboard_and_avail(client, auth, sid, "s1")
+    job = new_job(client, auth, sid, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))
+    r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    assert r.status_code == 200, r.text
+    return str(job["id"])
+
+
+def test_complete_transfers_the_payout(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    payouts = client.get("/v1/admin/payouts", headers=admin).json()
+    assert len(payouts) == 1
+    assert payouts[0]["job_id"] == job_id
+    assert payouts[0]["status"] == "paid"
+    assert str(payouts[0]["provider_transfer_id"]).startswith("tr_fake_")
+
+
+def test_transfer_outage_marks_payout_failed_but_completes(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))
+    fake_payments.fail_next_call = True
+    r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    assert r.status_code == 200  # the work happened; money owed is recorded, not dropped
+
+    failed = client.get("/v1/admin/payouts", params={"status": "failed"}, headers=admin).json()
+    assert len(failed) == 1 and failed[0]["provider_transfer_id"] is None
+
+
+def test_admin_retries_failed_payout(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    _accept_first_offer(client, auth("seller", "s1"))
+    fake_payments.fail_next_call = True
+    client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    payout_id = client.get("/v1/admin/payouts", headers=admin).json()[0]["id"]
+
+    r = client.post(f"/v1/admin/payouts/{payout_id}/retry", headers=admin)
+    assert r.status_code == 200
+    assert r.json()["status"] == "paid"
+    # Retrying a paid payout is a 409, not a double transfer.
+    assert client.post(f"/v1/admin/payouts/{payout_id}/retry", headers=admin).status_code == 409

@@ -132,6 +132,19 @@ class TransactionOut(BaseModel):
     completed_at: datetime
 
 
+class PayoutOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    seller_id: str
+    amount: Decimal
+    currency: str
+    status: PayoutStatus
+    provider_transfer_id: str | None
+    created_at: datetime
+
+
 class ReviewOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
