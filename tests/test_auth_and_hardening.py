@@ -1,14 +1,17 @@
 """Auth gates, capacity enforcement, admin-input validation, token expiry."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from marketplace import api
 from marketplace.auth import mint_token
 from marketplace.models import MarginFloorBody, ServiceTypeBody
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 
 
 def _available(client: TestClient, auth: AuthFactory, sid: str, seller: str) -> None:
@@ -112,6 +115,29 @@ def test_higher_capacity_allows_two(
         client.post(f"/v1/seller/offers/{offers[1]['id']}/accept", headers=seller).status_code
         == 200
     )
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel row locking is only real on Postgres")
+def test_concurrent_accept_respects_capacity(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """Two threads race to accept two offers to a capacity-1 seller; only one wins."""
+    _available(client, auth, basic_service, "solo")
+    seller = auth("seller", "solo")
+    _new_job(client, auth, basic_service, "alice")
+    _new_job(client, auth, basic_service, "bob")
+    offers = [o["id"] for o in client.get("/v1/seller/offers", headers=seller).json()]
+
+    barrier = threading.Barrier(len(offers))
+
+    def accept(offer_id: str) -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return c.post(f"/v1/seller/offers/{offer_id}/accept", headers=seller).status_code
+
+    with ThreadPoolExecutor(max_workers=len(offers)) as pool:
+        codes = list(pool.map(accept, offers))
+    assert codes.count(200) == 1, codes
 
 
 # ---------- Validation ----------
