@@ -18,7 +18,11 @@ users, then gets forked and specialized per market vertical. The differentiator
   payment-timeout sweep, cancel void/refund, admin payout retry, and client
   idempotency keys. **Verified against a real Stripe test account 2026-07-13**:
   full escrow loop (connected-account onboarding → PaymentIntent → signed
-  webhook → transfer) ran with zero adapter changes.
+  webhook → transfer) ran with zero adapter changes, plus the adversarial
+  paths — card decline + same-PI recovery, buyer void (PI canceled at Stripe),
+  admin refund (charge refunded at Stripe), transfer reversal → payout retry
+  under a fresh idempotency key (new transfer, not a replay), and the
+  payment-timeout sweep voiding a live PaymentIntent.
 
 ## Done ✓
 
