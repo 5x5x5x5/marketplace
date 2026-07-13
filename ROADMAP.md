@@ -16,8 +16,9 @@ users, then gets forked and specialized per market vertical. The differentiator
 - **Payments (done):** escrow via a provider port (Stripe Connect + a
   deterministic fake), seller onboarding gate, signed/deduped webhooks,
   payment-timeout sweep, cancel void/refund, admin payout retry, and client
-  idempotency keys — verify against a real Stripe test account before
-  processing real money.
+  idempotency keys. **Verified against a real Stripe test account 2026-07-13**:
+  full escrow loop (connected-account onboarding → PaymentIntent → signed
+  webhook → transfer) ran with zero adapter changes.
 
 ## Done ✓
 
@@ -28,10 +29,10 @@ API versioning · admin audit log · token expiry · **payments & payouts**
 (seller onboarding gate, escrow charge-at-accept/transfer-at-complete, async
 payment via signed+deduped webhook, payment-timeout sweep, cancel void/refund,
 admin payout retry — Stripe Connect controller-properties accounts, fake
-provider for dev/tests; the Stripe adapter is unit-tested for signature
-verification only — **run it against a real Stripe test account before
-processing real money**) · **idempotency keys** (client `Idempotency-Key`
-header on money-mutating POSTs, replayed per-principal).
+provider for dev/tests; **verified end-to-end against a real Stripe test
+account 2026-07-13**: onboarding, charge, signed webhook, and transfer all
+worked first-contact with zero adapter changes) · **idempotency keys** (client
+`Idempotency-Key` header on money-mutating POSTs, replayed per-principal).
 
 ## What's still ahead
 
@@ -78,9 +79,9 @@ Postgres behind adapters so none of these choices lock you in. When ready:
   progress) or Supabase Auth. Avoid Auth0/Clerk MAU pricing cliffs until
   enterprise SSO justifies them. Replaces the pilot HMAC tokens.
 - **Payments** — implemented (Stripe Connect, controller-properties accounts).
-  Wired against `stripe` 15.3.0's `.v1` namespace; unit-tested for signature
-  math only — no live account on this box, so verify onboarding + charges
-  against a real Stripe test account before processing real money.
+  Wired against `stripe` 15.3.0's `.v1` namespace; verified end-to-end on a
+  real Stripe test account 2026-07-13 (onboarding, charge, signed webhooks,
+  transfer). Going live is a dashboard activation + `sk_live` key swap, not code.
 - **Lock-in traps** — hosted Sharetribe (can't take the backend), Supabase
   auth+DB coupling, Auth0/Clerk cliffs, RDS proprietary features.
 
