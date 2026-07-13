@@ -30,9 +30,10 @@ class Side(StrEnum):
 
 class JobStatus(StrEnum):
     PENDING = "pending"  # created, an offer is out (or being (re)matched)
-    ACCEPTED = "accepted"  # a seller committed
+    AWAITING_PAYMENT = "awaiting_payment"  # seller committed; buyer's charge not yet secured
+    ACCEPTED = "accepted"  # a seller committed AND the money is secured
     COMPLETED = "completed"
-    EXPIRED = "expired"  # no seller took it
+    EXPIRED = "expired"  # no seller took it (or payment never arrived)
     CANCELLED = "cancelled"
 
 
@@ -41,6 +42,21 @@ class OfferStatus(StrEnum):
     ACCEPTED = "accepted"
     DECLINED = "declined"
     EXPIRED = "expired"
+
+
+class PaymentStatus(StrEnum):
+    PENDING = "pending"  # created; awaiting buyer confirmation / provider settlement
+    SUCCEEDED = "succeeded"
+    FAILED = (
+        "failed"  # includes voided/cancelled charges — ponytail: one bucket, split if ops needs it
+    )
+    REFUNDED = "refunded"
+
+
+class PayoutStatus(StrEnum):
+    PENDING = "pending"
+    PAID = "paid"
+    FAILED = "failed"  # transfer rejected/errored; admin retries via /v1/admin/payouts/{id}/retry
 
 
 # ---------- Response views ----------
@@ -72,6 +88,8 @@ class BuyerJobView(BaseModel):
     created_at: datetime
     accepted_at: datetime | None
     completed_at: datetime | None
+    payment_status: PaymentStatus | None = None
+    client_secret: str | None = None  # buyer-side confirmation secret, only while awaiting payment
 
 
 class SellerJobView(BaseModel):
@@ -114,6 +132,19 @@ class TransactionOut(BaseModel):
     completed_at: datetime
 
 
+class PayoutOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    seller_id: str
+    amount: Decimal
+    currency: str
+    status: PayoutStatus
+    provider_transfer_id: str | None
+    created_at: datetime
+
+
 class ReviewOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,6 +173,11 @@ class SellerProfileOut(BaseModel):
     rating: float | None
     rating_count: int
     completed_jobs: int
+
+
+class OnboardingOut(BaseModel):
+    onboarding_url: str
+    payments_ready: bool
 
 
 class AuditOut(BaseModel):

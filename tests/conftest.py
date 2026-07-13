@@ -22,6 +22,8 @@ from marketplace import api
 from marketplace.auth import mint_token
 from marketplace.db import SessionLocal, engine, init_db
 from marketplace.entities import Base, SellerProfile
+from marketplace.payments import fake_provider
+from marketplace.payments.fake import FakeProvider
 
 Header = dict[str, str]
 AuthFactory = Callable[[str, str], Header]
@@ -54,6 +56,20 @@ def auth() -> AuthFactory:
 @pytest.fixture
 def admin(auth: AuthFactory) -> Header:
     return auth("admin", "ops")
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_payments() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """The fake provider is a module singleton; scripted state must not leak."""
+    fake_provider.reset()
+    yield
+    fake_provider.reset()
+
+
+@pytest.fixture
+def fake_payments() -> FakeProvider:
+    """The live fake-provider singleton, for scripting statuses/outages."""
+    return fake_provider
 
 
 @pytest.fixture

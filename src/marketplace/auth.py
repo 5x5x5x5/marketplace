@@ -100,3 +100,18 @@ def current_seller(claims: Principal) -> str:
     if claims.role != "seller":
         raise HTTPException(status_code=403, detail="seller credentials required")
     return claims.sub
+
+
+def peek_principal(authorization: str | None) -> str | None:
+    """Best-effort principal ("role:sub") for middleware. None when absent or
+    invalid — the strict endpoint dependencies still produce the real 401."""
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    try:
+        claims = _verify(token)
+    except HTTPException:
+        return None
+    return f"{claims.role}:{claims.sub}"

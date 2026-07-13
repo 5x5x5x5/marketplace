@@ -9,7 +9,7 @@ objects directly — endpoints map them to the Pydantic views in `models.py`.
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 
 from sqlalchemy import (
@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Numeric,
     String,
+    Text,
     TypeDecorator,
     UniqueConstraint,
     Uuid,
@@ -28,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .models import JobStatus, OfferStatus
+from .models import JobStatus, OfferStatus, PaymentStatus, PayoutStatus
 
 
 def _now() -> datetime:
@@ -60,7 +61,7 @@ def _enum_values(enum_cls: type[Enum]) -> list[str]:
     return [str(m.value) for m in enum_cls]
 
 
-def _enum(enum_type: type[JobStatus] | type[OfferStatus]) -> SAEnum:
+def _enum(enum_type: type[StrEnum]) -> SAEnum:
     # Store the enum's string values (not names), non-native for SQLite portability.
     return SAEnum(enum_type, native_enum=False, values_callable=_enum_values, length=32)
 
@@ -111,6 +112,8 @@ class SellerProfile(Base):
     rating_count: Mapped[int] = mapped_column(default=0)
     rating_sum: Mapped[int] = mapped_column(default=0)
     completed_jobs: Mapped[int] = mapped_column(default=0)
+    provider_account_id: Mapped[str | None] = mapped_column(String(256), default=None)
+    payments_ready: Mapped[bool] = mapped_column(default=False)  # set by account webhook
 
     @property
     def rating(self) -> float | None:
@@ -212,3 +215,67 @@ class AuditLog(Base):
     target: Mapped[str] = mapped_column(String(256))
     detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now, index=True)
+
+
+class Payment(Base):
+    """Buyer charge for a job (1:1). Cash record — `Transaction` stays the margin ledger."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    buyer_id: Mapped[str] = mapped_column(String(128), index=True)
+    amount: Mapped[Decimal] = mapped_column(_MONEY)
+    currency: Mapped[str] = mapped_column(String(8), default="usd")
+    status: Mapped[PaymentStatus] = mapped_column(
+        _enum(PaymentStatus), default=PaymentStatus.PENDING, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32))
+    provider_payment_id: Mapped[str] = mapped_column(String(256), index=True)
+    client_secret: Mapped[str | None] = mapped_column(String(256), default=None)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
+
+
+class Payout(Base):
+    """Seller transfer for a completed job (1:1)."""
+
+    __tablename__ = "payouts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    seller_id: Mapped[str] = mapped_column(String(128), index=True)
+    amount: Mapped[Decimal] = mapped_column(_MONEY)
+    currency: Mapped[str] = mapped_column(String(8), default="usd")
+    status: Mapped[PayoutStatus] = mapped_column(
+        _enum(PayoutStatus), default=PayoutStatus.PENDING, index=True
+    )
+    provider_transfer_id: Mapped[str | None] = mapped_column(String(256), default=None)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
+
+
+class WebhookEvent(Base):
+    """Processed provider events — the dedup ledger (replayed events no-op)."""
+
+    __tablename__ = "webhook_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    provider_event_id: Mapped[str] = mapped_column(String(256), unique=True)
+    kind: Mapped[str] = mapped_column(String(64))
+    received_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+
+
+class IdempotencyRecord(Base):
+    """Stored response for a client Idempotency-Key (scoped per principal)."""
+
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (UniqueConstraint("principal", "key"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    principal: Mapped[str] = mapped_column(String(150))  # "role:sub"
+    key: Mapped[str] = mapped_column(String(200))
+    path: Mapped[str] = mapped_column(String(256))
+    response_status: Mapped[int] = mapped_column()
+    response_body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)

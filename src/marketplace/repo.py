@@ -96,18 +96,24 @@ def active_demand(session: Session, service_type_id: str) -> int:
         .select_from(Job)
         .where(
             Job.service_type_id == service_type_id,
-            Job.status.in_([JobStatus.PENDING, JobStatus.ACCEPTED]),
+            Job.status.in_([JobStatus.PENDING, JobStatus.AWAITING_PAYMENT, JobStatus.ACCEPTED]),
         )
     )
     return n or 0
 
 
 def active_job_count(session: Session, seller_id: str) -> int:
-    """Jobs a seller has accepted and not yet completed — their current load."""
+    """Jobs a seller has committed to and not yet completed — their current load.
+
+    AWAITING_PAYMENT counts: the seller accepted; the slot is held while the
+    buyer's charge settles."""
     n = session.scalar(
         select(func.count())
         .select_from(Job)
-        .where(Job.seller_id == seller_id, Job.status == JobStatus.ACCEPTED)
+        .where(
+            Job.seller_id == seller_id,
+            Job.status.in_([JobStatus.ACCEPTED, JobStatus.AWAITING_PAYMENT]),
+        )
     )
     return n or 0
 
@@ -124,6 +130,8 @@ def eligible_candidates(
         if a.seller_id in exclude:
             continue
         prof = get_or_create_seller(session, a.seller_id)
+        if not prof.payments_ready:
+            continue  # can't be paid → can't be offered work
         cand = Candidate(
             seller_id=a.seller_id,
             tier=prof.tier,

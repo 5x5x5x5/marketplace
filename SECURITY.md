@@ -23,6 +23,39 @@ mechanics — see the update note first.
   during error serialization rather than a clean 422. Needs a global error
   envelope — a roadmap item.
 
+## Update — payments
+
+- **The webhook endpoint (`POST /v1/payments/webhook`) is unauthenticated but
+  signature-verified.** There's no bearer token to check — the provider can't
+  present one — so authenticity comes from `parse_webhook` validating the
+  provider's signature header before anything is applied; an invalid signature
+  is a 400. Every event is recorded in `WebhookEvent` keyed on the provider's
+  event id before it's applied, so a replayed delivery (the provider retries on
+  a slow 2xx, or an attacker replays a captured payload) is a no-op, not a
+  double-apply.
+- **`client_secret` is exposed only to the owning buyer, and only while a
+  payment is awaited.** The secret is populated exclusively by `_buyer_view`
+  (`api.py`), for the owning buyer, while the job is `AWAITING_PAYMENT`; it's
+  `None` once the charge succeeds. The admin job routes reuse the `BuyerJobView`
+  schema but bypass `_buyer_view` enrichment, so `payment_status`/`client_secret`
+  are always `None` there, and no seller view carries the field at all.
+- **Refunds/voids are admin- or owner-initiated only.** Job cancellation runs
+  through the same buyer/admin-owned cancel path as before; there's no
+  standalone refund endpoint a caller could hit directly.
+- **Client idempotency responses are stored per-principal.** `IdempotencyRecord`
+  is keyed on `(principal, key)` (`idempotency.py`), so one caller can never
+  replay another's cached response even if the header value collided.
+- **Residual:** the fake payment provider accepts unsigned webhook JSON by
+  design (`payments/fake.py` — there's no real provider to sign anything in
+  dev/tests) and must never be reachable in production. Selection is
+  env-driven (`STRIPE_SECRET_KEY`) with no runtime override, so this is a
+  deployment-configuration risk, not a code path an attacker can toggle.
+- **Residual:** a DB commit failure after a successful provider mutation leaves
+  the provider briefly ahead of the database — charge and refund self-heal on
+  retry via idempotency-key replay, void self-heals via the idempotent cancel
+  (already-canceled counts as success), and a transactional outbox is the
+  eventual upgrade path.
+
 ## Threat model (pilot)
 
 Identity comes from an authenticated principal, never from a request body or

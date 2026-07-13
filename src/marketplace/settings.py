@@ -21,5 +21,13 @@ class Settings(BaseSettings):
     offer_ttl_minutes: int = 2
     token_ttl_hours: int = 24
 
+    # Payments. STRIPE_SECRET_KEY set → real Stripe adapter; unset → deterministic
+    # in-memory fake (dev/tests, no account needed).
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    currency: str = "usd"  # ponytail: single currency; multi-currency is a fork concern
+    payment_ttl_minutes: int = 30  # AWAITING_PAYMENT older than this expires on sweep
+    onboarding_return_url: str = "http://localhost:8000/onboarded"
+
 
 settings = Settings()

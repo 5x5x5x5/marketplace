@@ -13,6 +13,7 @@ def _seller(
     # Assign tier (admin), then post availability (as the seller).
     r = client.put(f"/v1/admin/sellers/{name}", json={"tier": tier}, headers=auth("admin", "ops"))
     assert r.status_code == 200
+    client.post("/v1/seller/payments/onboard", headers=auth("seller", name))
     r = client.post(
         "/v1/seller/availability", json={"service_type_id": sid}, headers=auth("seller", name)
     )

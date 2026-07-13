@@ -20,7 +20,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -32,13 +32,17 @@ from .entities import (
     Availability,
     Job,
     Offer,
+    Payment,
+    Payout,
     Pipeline,
     Quote,
     Review,
     SellerProfile,
     ServiceType,
     Transaction,
+    WebhookEvent,
 )
+from .idempotency import IdempotencyMiddleware
 from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
     AdminSellerBody,
@@ -51,6 +55,10 @@ from .models import (
     MarginSummaryOut,
     MatchingStrategyBody,
     OfferStatus,
+    OnboardingOut,
+    PaymentStatus,
+    PayoutOut,
+    PayoutStatus,
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
@@ -66,6 +74,8 @@ from .models import (
     TransactionOut,
     to_money,
 )
+from .payments import get_provider
+from .payments.port import PaymentError, PaymentEvent, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY, PricingContext, run_pipeline
 from .repo import audit
 from .settings import settings
@@ -81,6 +91,7 @@ SellerId = Annotated[str, Depends(current_seller)]
 AdminId = Annotated[str, Depends(require_admin)]
 Limit = Annotated[int, Query(ge=1, le=MAX_PAGE)]
 Offset = Annotated[int, Query(ge=0)]
+ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 
 def _now() -> datetime:
@@ -137,11 +148,60 @@ def _sweep_expired_offers(session: Session) -> None:
             _match_and_offer(session, job)
 
 
+def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
+    """Jobs stuck AWAITING_PAYMENT past the TTL expire and free the seller's slot."""
+    deadline = _now() - timedelta(minutes=settings.payment_ttl_minutes)
+    stale = session.scalars(
+        select(Job).where(Job.status == JobStatus.AWAITING_PAYMENT, Job.accepted_at < deadline)
+    ).all()
+    for job in stale:
+        # Re-lock (payment first, then job — same order as _apply_payment_event)
+        # and re-check: a concurrent payment_succeeded webhook may have accepted
+        # this job between the unlocked select above and now. Never expire a paid job.
+        payment = session.scalar(select(Payment).where(Payment.job_id == job.id).with_for_update())
+        locked_job = session.get(Job, job.id, with_for_update=True)
+        if locked_job is None or locked_job.status != JobStatus.AWAITING_PAYMENT:
+            continue
+        if payment is not None:
+            if payment.status is PaymentStatus.SUCCEEDED:
+                continue  # paid — the webhook owns this job's fate, not the sweep
+            try:
+                provider.cancel_charge(payment.provider_payment_id)
+            except PaymentError as exc:
+                logger.warning(
+                    "void failed for payment %s (job %s), will retry next sweep: %s",
+                    payment.provider_payment_id,
+                    job.id,
+                    exc,
+                )
+                continue  # provider hiccup: leave it; the next sweep retries
+            payment.status = PaymentStatus.FAILED
+        locked_job.status = JobStatus.EXPIRED
+
+
+def _sweep(session: Session, provider: PaymentProvider) -> None:
+    """Everything lazy maintenance does on reads: offer expiry + stale payments."""
+    _sweep_expired_offers(session)
+    _sweep_stale_payments(session, provider)
+
+
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
     return list(rows[offset : offset + limit])
 
 
 # ---------- Buyer router ----------
+
+
+def _buyer_view(session: Session, job: Job) -> BuyerJobView:
+    """BuyerJobView plus the buyer's payment state (never the seller's numbers)."""
+    view = BuyerJobView.model_validate(job)
+    payment = session.scalar(select(Payment).where(Payment.job_id == job.id))
+    if payment is not None:
+        view.payment_status = payment.status
+        if job.status == JobStatus.AWAITING_PAYMENT:
+            view.client_secret = payment.client_secret
+    return view
+
 
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"])
 
@@ -241,22 +301,37 @@ def list_buyer_jobs(
 
 
 @buyer_router.get("/jobs/{job_id}", response_model=BuyerJobView)
-def get_job_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> Job:
-    _sweep_expired_offers(session)
+def get_job_buyer(
+    job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: ProviderDep
+) -> BuyerJobView:
+    _sweep(session, provider)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
-    return job
+    return _buyer_view(session, job)
 
 
 @buyer_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
-def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> Job:
-    job = session.get(Job, job_id, with_for_update=True)
+def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: ProviderDep) -> Job:
+    job = session.get(Job, job_id)  # unlocked: existence + ownership only
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
-    if job.status != JobStatus.PENDING:
+    # Canonical lock order is Payment → Job everywhere (_apply_payment_event,
+    # _sweep_stale_payments). Locking Job first here would ABBA-deadlock against
+    # a racing webhook on Postgres; _release_payment re-selects this same locked
+    # Payment row inside the same transaction, which is fine.
+    session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
+    job = session.get(Job, job_id, with_for_update=True)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status not in (JobStatus.PENDING, JobStatus.AWAITING_PAYMENT):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
+    try:
+        _release_payment(session, provider, job)
+    except PaymentError as exc:
+        logger.warning("payment release failed for job %s: %s", job.id, exc)
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     job.status = JobStatus.CANCELLED
     return job
 
@@ -299,6 +374,22 @@ def _expire_open_offers(session: Session, job_id: UUID) -> None:
         offer.responded_at = _now()
 
 
+def _release_payment(session: Session, provider: PaymentProvider, job: Job) -> None:
+    """Undo whatever the job's charge collected: void a pending PI, refund a
+    succeeded one. No-op when nothing was charged. Raises PaymentError upward."""
+    payment = session.scalar(select(Payment).where(Payment.job_id == job.id).with_for_update())
+    if payment is None:
+        return
+    if payment.status is PaymentStatus.SUCCEEDED:
+        provider.refund(payment.provider_payment_id, idempotency_key=f"refund:{job.id}")
+        payment.status = PaymentStatus.REFUNDED
+    elif payment.status is PaymentStatus.PENDING:
+        provider.cancel_charge(payment.provider_payment_id)
+        payment.status = (
+            PaymentStatus.FAILED
+        )  # ponytail: voided lands in FAILED, split if ops needs it
+
+
 @seller_router.put("/profile", response_model=SellerProfileOut)
 def update_profile(
     body: SellerProfileUpdate, session: SessionDep, seller_id: SellerId
@@ -312,6 +403,34 @@ def update_profile(
 @seller_router.get("/profile", response_model=SellerProfileOut)
 def get_profile(session: SessionDep, seller_id: SellerId) -> SellerProfile:
     return repo.get_or_create_seller(session, seller_id)
+
+
+@seller_router.post("/payments/onboard", response_model=OnboardingOut)
+def onboard_payments(
+    session: SessionDep, seller_id: SellerId, provider: ProviderDep
+) -> OnboardingOut:
+    """Create the seller's payment account (once) and return the onboarding link.
+
+    `payments_ready` flips via the provider's account webhook (instantly for the
+    fake provider); matching only offers jobs to ready sellers."""
+    seller = repo.get_or_create_seller(session, seller_id)
+    if seller.provider_account_id is None:
+        try:
+            acct = provider.create_seller_account(seller_id, idempotency_key=f"acct:{seller_id}")
+        except PaymentError as exc:
+            logger.warning("account creation failed for seller %s: %s", seller_id, exc)
+            raise HTTPException(
+                status_code=502, detail="payment provider unavailable, retry"
+            ) from None
+        seller.provider_account_id = acct.provider_account_id
+        seller.payments_ready = acct.payments_ready
+        session.flush()
+    return OnboardingOut(
+        onboarding_url=provider.onboarding_link(
+            seller.provider_account_id, settings.onboarding_return_url
+        ),
+        payments_ready=seller.payments_ready,
+    )
 
 
 @seller_router.post("/availability")
@@ -352,11 +471,12 @@ def delete_availability(
 def list_offers(
     session: SessionDep,
     seller_id: SellerId,
+    provider: ProviderDep,
     status: OfferStatus | None = None,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> list[Offer]:
-    _sweep_expired_offers(session)
+    _sweep(session, provider)
     stmt = select(Offer).where(Offer.seller_id == seller_id)
     if status is not None:
         stmt = stmt.where(Offer.status == status)
@@ -382,7 +502,9 @@ def list_seller_jobs(
 
 
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)
-def accept_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> Job:
+def accept_offer(
+    offer_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
+) -> Job:
     offer = session.get(Offer, offer_id, with_for_update=True)
     if offer is None or offer.seller_id != seller_id:
         raise HTTPException(status_code=404, detail="offer not found")
@@ -404,12 +526,45 @@ def accept_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> Jo
     if job is None or job.status != JobStatus.PENDING:
         raise HTTPException(status_code=409, detail="job is no longer open")
 
+    # Charge inside the locked region so capacity + payment commit atomically.
+    # On PaymentError everything rolls back and the offer stays acceptable; the
+    # outbound key means a retry gets the SAME PaymentIntent back — no strays.
+    # ponytail: holds a row lock across a network call; fine at template scale,
+    # move to a two-phase outbox if provider latency ever hurts.
+    try:
+        charge = provider.charge_buyer(
+            buyer_id=job.buyer_id,
+            amount=job.buyer_price,
+            currency=settings.currency,
+            job_id=str(job.id),
+            idempotency_key=f"charge:{job.id}",
+        )
+    except PaymentError as exc:
+        logger.warning("charge failed for job %s: %s", job.id, exc)
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+    session.add(
+        Payment(
+            job_id=job.id,
+            buyer_id=job.buyer_id,
+            amount=job.buyer_price,
+            currency=settings.currency,
+            status=charge.status,
+            provider=provider.name,
+            provider_payment_id=charge.provider_payment_id,
+            client_secret=charge.client_secret,
+        )
+    )
+
     offer.status = OfferStatus.ACCEPTED
     offer.responded_at = _now()
-    job.status = JobStatus.ACCEPTED
     job.seller_id = seller_id
     job.seller_payout = offer.seller_payout
     job.accepted_at = _now()
+    job.status = (
+        JobStatus.ACCEPTED
+        if charge.status is PaymentStatus.SUCCEEDED
+        else JobStatus.AWAITING_PAYMENT
+    )
     session.flush()
     return job
 
@@ -430,7 +585,9 @@ def decline_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> d
 
 
 @seller_router.post("/jobs/{job_id}/complete", response_model=TransactionOut)
-def complete_job(job_id: UUID, session: SessionDep, seller_id: SellerId) -> Transaction:
+def complete_job(
+    job_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
+) -> Transaction:
     job = session.get(Job, job_id, with_for_update=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -450,8 +607,35 @@ def complete_job(job_id: UUID, session: SessionDep, seller_id: SellerId) -> Tran
         margin=to_money(job.buyer_price - job.seller_payout),
     )
     session.add(tx)
+
+    # Escrow exit: move the payout to the seller. A transfer failure does NOT
+    # fail completion — the work happened; the debt is recorded and retried via
+    # POST /v1/admin/payouts/{id}/retry.
+    seller = repo.get_or_create_seller(session, seller_id)
+    payout = Payout(
+        job_id=job.id, seller_id=seller_id, amount=job.seller_payout, currency=settings.currency
+    )
+    if seller.provider_account_id is None:
+        payout.status = PayoutStatus.FAILED  # unonboarded (shouldn't match, but never lose money)
+    else:
+        try:
+            transfer = provider.transfer_to_seller(
+                provider_account_id=seller.provider_account_id,
+                amount=job.seller_payout,
+                currency=settings.currency,
+                job_id=str(job.id),
+                idempotency_key=f"transfer:{job.id}",
+            )
+            payout.provider_transfer_id = transfer.provider_transfer_id
+            payout.status = transfer.status
+        except PaymentError as exc:
+            # payout isn't flushed yet (no id), so identify it by job + seller.
+            logger.warning("transfer failed for job %s (seller %s): %s", job.id, seller_id, exc)
+            payout.status = PayoutStatus.FAILED
+    session.add(payout)
+
     repo.get_or_create_buyer(session, job.buyer_id).completed_jobs += 1
-    repo.get_or_create_seller(session, seller_id).completed_jobs += 1
+    seller.completed_jobs += 1
     session.flush()
     return tx
 
@@ -592,6 +776,59 @@ def list_transactions(
     return _paginate(rows, limit, offset)
 
 
+@admin_router.get("/payouts", response_model=list[PayoutOut])
+def list_payouts(
+    session: SessionDep,
+    status: PayoutStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[Payout]:
+    stmt = select(Payout)
+    if status is not None:
+        stmt = stmt.where(Payout.status == status)
+    rows = session.scalars(stmt.order_by(Payout.created_at.desc())).all()
+    return _paginate(rows, limit, offset)
+
+
+@admin_router.post("/payouts/{payout_id}/retry", response_model=PayoutOut)
+def retry_payout(
+    payout_id: UUID, session: SessionDep, admin_id: AdminId, provider: ProviderDep
+) -> Payout:
+    payout = session.get(Payout, payout_id, with_for_update=True)
+    if payout is None:
+        raise HTTPException(status_code=404, detail="payout not found")
+    if payout.status is not PayoutStatus.FAILED:
+        raise HTTPException(status_code=409, detail=f"payout is {payout.status}, not failed")
+    seller = session.get(SellerProfile, payout.seller_id)
+    if seller is None or seller.provider_account_id is None:
+        raise HTTPException(status_code=409, detail="seller has no payment account yet")
+    # If no transfer was ever created (plain outage), replaying the original key
+    # is the safe retry — it can never double-pay. But if a transfer WAS created
+    # and later reversed (transfer.reversed → FAILED), replaying that key would
+    # return the same reversed transfer and record PAID with no money moved, so
+    # the retry must force a new transfer under a fresh key.
+    retry_key = (
+        f"transfer:{payout.job_id}"
+        if payout.provider_transfer_id is None
+        else f"transfer:{payout.job_id}:retry:{payout.provider_transfer_id}"
+    )
+    try:
+        transfer = provider.transfer_to_seller(
+            provider_account_id=seller.provider_account_id,
+            amount=payout.amount,
+            currency=payout.currency,
+            job_id=str(payout.job_id),
+            idempotency_key=retry_key,
+        )
+    except PaymentError as exc:
+        logger.warning("transfer retry failed for payout %s: %s", payout_id, exc)
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+    payout.provider_transfer_id = transfer.provider_transfer_id
+    payout.status = transfer.status
+    audit(session, admin_id, "retry_payout", str(payout_id), {})
+    return payout
+
+
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)
 def margins_summary(session: SessionDep) -> MarginSummaryOut:
     txs = session.scalars(select(Transaction)).all()
@@ -626,22 +863,96 @@ def list_all_jobs(
 
 
 @admin_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
-def admin_cancel_job(job_id: UUID, session: SessionDep, admin_id: AdminId) -> Job:
+def admin_cancel_job(
+    job_id: UUID, session: SessionDep, admin_id: AdminId, provider: ProviderDep
+) -> Job:
+    job = session.get(Job, job_id)  # unlocked: existence only
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    # Canonical lock order is Payment → Job (see cancel_job) — never Job first.
+    session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
     job = session.get(Job, job_id, with_for_update=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.EXPIRED):
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
+    try:
+        _release_payment(session, provider, job)
+    except PaymentError as exc:
+        logger.warning("payment release failed for job %s: %s", job.id, exc)
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
     job.status = JobStatus.CANCELLED
     audit(session, admin_id, "cancel_job", str(job_id), {})
     return job
 
 
 @admin_router.post("/jobs/sweep")
-def sweep(session: SessionDep, admin_id: AdminId) -> dict[str, str]:
-    _sweep_expired_offers(session)
+def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict[str, str]:
+    _sweep(session, provider)
     audit(session, admin_id, "sweep", "jobs", {})
+    return {"status": "ok"}
+
+
+# ---------- Payments router (webhooks) ----------
+
+payments_router = APIRouter(prefix="/v1/payments", tags=["payments"])
+
+
+def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
+    """Route a normalized provider event to the row it affects.
+
+    Unknown kinds and unknown ids are recorded (dedup) and ignored — providers
+    emit dozens of event types this app doesn't act on."""
+    if event.kind in ("payment_succeeded", "payment_failed"):
+        payment = session.scalar(
+            select(Payment).where(Payment.provider_payment_id == event.object_id).with_for_update()
+        )
+        if payment is None or payment.status is PaymentStatus.REFUNDED:
+            return  # refunded is terminal — late events never resurrect the charge
+        if event.kind == "payment_succeeded":
+            payment.status = PaymentStatus.SUCCEEDED
+            job = session.get(Job, payment.job_id, with_for_update=True)
+            if job is not None and job.status == JobStatus.AWAITING_PAYMENT:
+                job.status = JobStatus.ACCEPTED
+        elif payment.status is not PaymentStatus.SUCCEEDED:
+            payment.status = PaymentStatus.FAILED  # late failures never undo a success
+    elif event.kind == "account_updated":
+        seller = session.scalar(
+            select(SellerProfile).where(SellerProfile.provider_account_id == event.object_id)
+        )
+        if seller is not None and event.payments_ready is not None:
+            seller.payments_ready = event.payments_ready
+    elif event.kind in ("transfer_paid", "transfer_failed"):
+        payout = session.scalar(
+            select(Payout).where(Payout.provider_transfer_id == event.object_id).with_for_update()
+        )
+        if payout is not None:
+            payout.status = (
+                PayoutStatus.PAID if event.kind == "transfer_paid" else PayoutStatus.FAILED
+            )
+
+
+@payments_router.post("/webhook")
+async def payments_webhook(
+    request: Request, session: SessionDep, provider: ProviderDep
+) -> dict[str, str]:
+    """Provider event sink. Unauthenticated by design — authenticity comes from
+    the provider's signature, verified in parse_webhook. Duplicates no-op."""
+    payload = await request.body()
+    try:
+        event = provider.parse_webhook(payload, request.headers.get("stripe-signature"))
+    except WebhookSignatureError:
+        raise HTTPException(status_code=400, detail="invalid webhook signature") from None
+    except (PaymentError, ValueError, KeyError):
+        raise HTTPException(status_code=400, detail="malformed webhook payload") from None
+    duplicate = session.scalar(
+        select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
+    )
+    if duplicate is not None:
+        return {"status": "duplicate"}
+    session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
+    _apply_payment_event(session, event)
     return {"status": "ok"}
 
 
@@ -658,6 +969,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
+app.add_middleware(IdempotencyMiddleware)
 
 
 @app.get("/healthz")
@@ -668,3 +980,4 @@ def healthz() -> dict[str, str]:
 app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)
+app.include_router(payments_router)
