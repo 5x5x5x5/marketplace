@@ -9,6 +9,7 @@ from sqlalchemy import select
 from marketplace.db import SessionLocal
 from marketplace.entities import Adjustment, Job, Payment
 from marketplace.mail import RecordingEmailSender
+from marketplace.models import PayoutStatus
 from marketplace.notifications import drain_once
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
@@ -462,3 +463,210 @@ def test_repeat_chargeback_readjudicates_status_but_preserves_resolved_rule(
     with SessionLocal() as s:
         kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
     assert kinds == ["chargeback_fee", "chargeback_loss"]  # only the LOST one ledgered
+
+
+def test_chargeback_lost_with_no_amount_books_only_the_fee(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Folded minor: a zero/absent amount_minor must not book a $0.00 loss
+    row alongside the fee — only the fee is a real charge."""
+    _job_id, pid = _paid_job_pid(client, auth, basic_service)
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb2",
+            "kind": "chargeback_closed",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "outcome": "lost",
+            # amount_minor omitted -> 0
+        },
+    )
+    with SessionLocal() as s:
+        kinds = sorted((a.kind.value, str(a.amount)) for a in s.scalars(select(Adjustment)).all())
+    assert kinds == [("chargeback_fee", "15.00")]
+
+
+def test_buyer_get_dispute_happy_path(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    _open_dispute(client, auth, job_id)
+    r = client.get(f"/v1/jobs/{job_id}/dispute", headers=auth("buyer", "alice"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["job_id"] == job_id
+    assert body["status"] == "open"
+    assert body["reason"] == "work was not as described"
+    assert body["refund_amount"] is None
+    assert "clawback_amount" not in body  # buyer never sees seller money
+
+
+def test_buyer_get_dispute_missing_is_404(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    r = client.get(f"/v1/jobs/{job_id}/dispute", headers=auth("buyer", "alice"))
+    assert r.status_code == 404
+
+
+def test_seller_get_dispute_on_someone_elses_job_is_404(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    _open_dispute(client, auth, job_id)
+    onboard_and_avail(client, auth, basic_service, "s2")
+    r = client.get(f"/v1/seller/jobs/{job_id}/dispute", headers=auth("seller", "s2"))
+    assert r.status_code == 404
+
+
+def test_clawback_requires_a_paid_payout(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    """I1: a FAILED payout (fully reversed transfer, id still set) has no
+    money for the seller to have kept — clawing back against it must 409
+    instead of booking a lying CLAWBACK row (fake) or 502ing forever (real
+    Stripe)."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    accept_first_offer(client, auth("seller", "s1"))
+    fake_payments.next_transfer_status = PayoutStatus.FAILED  # created, then reversed
+    r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    assert r.status_code == 200
+    job_id = str(job["id"])
+    r = client.post(
+        f"/v1/jobs/{job_id}/dispute",
+        json={"reason": "seller never delivered"},
+        headers=auth("buyer", "alice"),
+    )
+    assert r.status_code == 201, r.text
+    dispute = r.json()
+
+    r = client.post(
+        f"/v1/admin/disputes/{dispute['id']}/resolve",
+        json={"refund_amount": "0.00", "clawback_amount": "4.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 409
+
+
+def test_resolve_pins_amounts_across_a_502_retry(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    """C2: once a provider leg may have executed, a retry must converge on
+    the SAME amounts — a mismatched retry is a 409, not a silent divergence
+    between the books and what the provider already did."""
+    job_id = _completed_job(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+    dispute_id = str(dispute["id"])
+
+    # Refund succeeds, then the reversal leg fails -> 502.
+    fake_payments.fail_keys = {f"reversal:{job_id}:dispute"}
+    r = client.post(
+        f"/v1/admin/disputes/{dispute_id}/resolve",
+        json={"refund_amount": "6.00", "clawback_amount": "4.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 502
+
+    # The pin survived the rollback: still open, but the amounts are visible.
+    view = next(d for d in client.get("/v1/admin/disputes", headers=admin).json())
+    assert view["status"] == "open"
+    assert view["refund_amount"] == "6.00"
+    assert view["clawback_amount"] == "4.00"
+
+    # A retry with DIFFERENT amounts can't silently diverge from the
+    # already-executed refund leg -> 409, not a mystery second refund.
+    r = client.post(
+        f"/v1/admin/disputes/{dispute_id}/resolve",
+        json={"refund_amount": "0.00", "clawback_amount": "4.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 409
+
+    # Retry with the ORIGINAL amounts converges.
+    resolved = _resolve(client, admin, dispute_id, "6.00", "4.00")
+    assert resolved["status"] == "resolved"
+    assert fake_payments.refund_keys == [
+        f"refund:{job_id}:dispute",
+        f"refund:{job_id}:dispute",
+    ]  # two calls, identical key => provider-side replay, not a second refund
+    with SessionLocal() as s:
+        kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
+    assert kinds == ["clawback", "refund"]  # exactly one adjustment per kind
+
+
+def test_arbitration_after_lost_chargeback_claws_back_the_seller(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    """I2: after a lost chargeback the dispute is chargeback_lost, not open —
+    one-dispute-per-job means there is otherwise no way to ever claw back the
+    at-fault seller. Arbitration must still be possible, and once it lands
+    (RESOLVED) a later replayed chargeback_closed must not overwrite it."""
+    _job_id, pid = _paid_job_pid(client, auth, basic_service)
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb2",
+            "kind": "chargeback_closed",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+            "outcome": "lost",
+        },
+    )
+    dispute = client.get("/v1/admin/disputes", headers=admin).json()[0]
+    assert dispute["status"] == "chargeback_lost"
+
+    resolved = _resolve(client, admin, str(dispute["id"]), "0.00", "4.00")
+    assert resolved["status"] == "resolved"
+    with SessionLocal() as s:
+        kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
+    assert kinds == ["chargeback_fee", "chargeback_loss", "clawback"]
+
+    # A later chargeback_closed on the same provider dispute (new event_id)
+    # must not overwrite the arbitration outcome.
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb3",
+            "kind": "chargeback_closed",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "outcome": "won",
+        },
+    )
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert queue[0]["status"] == "resolved"

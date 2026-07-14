@@ -206,9 +206,14 @@ class StripeProvider:
             related_id = str(obj.get("payment_intent") or obj.get("charge") or "") or None
             if event.type == "charge.dispute.closed":
                 outcome = str(obj.get("status", "")) or None
+        kind = _EVENT_KINDS.get(event.type, "ignored")
+        if event.type == "transfer.reversed" and not obj.get("reversed", False):
+            # Partial reversal (dispute clawback): the payout is still paid.
+            # Only a full reversal means the transfer actually failed.
+            kind = "ignored"
         return PaymentEvent(
             event_id=event.id,
-            kind=_EVENT_KINDS.get(event.type, "ignored"),
+            kind=kind,
             object_id=str(obj.get("id", "")),
             payments_ready=ready,
             amount_minor=amount_minor,

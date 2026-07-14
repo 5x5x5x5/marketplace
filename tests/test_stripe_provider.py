@@ -98,3 +98,19 @@ def test_chargeback_events_map_and_carry_fields(provider: StripeProvider) -> Non
     event = provider.parse_webhook(closed, _signed(closed))
     assert event.kind == "chargeback_closed"
     assert event.outcome == "lost"
+
+
+def test_partial_transfer_reversal_is_ignored_not_failed(provider: StripeProvider) -> None:
+    """Dispute clawbacks create PARTIAL reversals — Stripe fires
+    transfer.reversed for those too, but the object's `reversed` field stays
+    False and the payout is still paid. Only a FULLY reversed transfer means
+    the transfer itself failed."""
+    payload = _event("transfer.reversed", {"id": "tr_1", "reversed": False, "amount_reversed": 400})
+    event = provider.parse_webhook(payload, _signed(payload))
+    assert event.kind == "ignored"
+
+
+def test_full_transfer_reversal_maps_to_transfer_failed(provider: StripeProvider) -> None:
+    payload = _event("transfer.reversed", {"id": "tr_1", "reversed": True, "amount_reversed": 1400})
+    event = provider.parse_webhook(payload, _signed(payload))
+    assert event.kind == "transfer_failed"

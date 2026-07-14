@@ -1090,8 +1090,12 @@ def resolve_dispute(
     dispute = session.get(Dispute, dispute_id, with_for_update=True)
     if dispute is None:
         raise HTTPException(status_code=404, detail="dispute not found")
-    if dispute.status is not DisputeStatus.OPEN:
-        raise HTTPException(status_code=409, detail=f"dispute is {dispute.status}, not open")
+    # RESOLVED is the only terminal state. A chargeback_won/lost dispute can
+    # still be arbitrated — one dispute per job means that without this, a
+    # lost chargeback would permanently block the platform from ever clawing
+    # back the at-fault seller (no second dispute can ever exist for the job).
+    if dispute.status is DisputeStatus.RESOLVED:
+        raise HTTPException(status_code=409, detail="dispute already resolved")
     # Unlocked read: buyer_price/seller_payout are write-once at job
     # completion, so there is nothing concurrent for this read to race.
     job = session.get(Job, dispute.job_id)
@@ -1103,6 +1107,21 @@ def resolve_dispute(
         raise HTTPException(status_code=422, detail="refund exceeds the buyer price")
     if clawback_amount > job.seller_payout:
         raise HTTPException(status_code=422, detail="clawback exceeds the seller payout")
+    # A prior attempt may have already pinned amounts (see below): a provider
+    # leg from that attempt may have already executed, so a retry with
+    # DIFFERENT amounts can't be allowed to silently diverge from what the
+    # provider already did — real Stripe would enforce this per idempotency
+    # key anyway, so make it a 409 here instead of a mystery later.
+    if (dispute.refund_amount is not None and dispute.refund_amount != refund_amount) or (
+        dispute.clawback_amount is not None and dispute.clawback_amount != clawback_amount
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"a prior attempt pinned refund={dispute.refund_amount} "
+                f"clawback={dispute.clawback_amount}; retry must reuse them"
+            ),
+        )
 
     # Existence guards precede ALL provider legs (hoisted above the try below):
     # a 4xx must never fire after a provider call has already moved money, and
@@ -1115,12 +1134,29 @@ def resolve_dispute(
     payout: Payout | None = None
     if clawback_amount > 0:
         payout = session.scalar(select(Payout).where(Payout.job_id == job.id))
-        if payout is None or payout.provider_transfer_id is None:
-            raise HTTPException(status_code=409, detail="no transfer recorded for this job")
+        if (
+            payout is None
+            or payout.provider_transfer_id is None
+            or payout.status is not PayoutStatus.PAID
+        ):
+            # A FAILED payout (e.g. a fully reversed transfer) has no money
+            # the seller actually kept — clawing back against it would book a
+            # lying CLAWBACK row (fake provider) or 502 forever (real Stripe).
+            raise HTTPException(status_code=409, detail="no paid transfer to claw back")
+
+    # Pin the amounts now that every 4xx guard has passed, and commit: a
+    # provider leg below may still fail and 502, but the pin survives that
+    # rollback (get_session's except-block only rolls back work since the
+    # last commit), so a retry is forced to converge on these amounts instead
+    # of silently changing them after a leg may have already executed.
+    dispute.refund_amount = refund_amount
+    dispute.clawback_amount = clawback_amount
+    session.commit()
 
     # Provider legs, both idempotent by key: a failure raises 502 with nothing
-    # recorded, and the retry replays the succeeded leg (same key) then
-    # completes the other — no partial-resolution state exists.
+    # further recorded, and the retry replays the succeeded leg (same key)
+    # then completes the other — no partial-resolution state exists beyond
+    # the pinned amounts above.
     refund_ref: str | None = None
     reversal_ref: str | None = None
     try:
@@ -1146,6 +1182,13 @@ def resolve_dispute(
         logger.warning("dispute resolution provider call failed for %s: %s", dispute_id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
 
+    # The pin's commit above released the row lock taken at the top of this
+    # function — re-acquire it before mutating status. A concurrent
+    # chargeback_closed may have flipped status mid-flight (e.g. to
+    # chargeback_lost); arbitration wins by design here (RESOLVED overwrites
+    # it, and the RESOLVED-preservation rule in _apply_payment_event stops
+    # any later chargeback event from undoing it).
+    dispute = session.get_one(Dispute, dispute_id, with_for_update=True)
     dispute.status = DisputeStatus.RESOLVED
     dispute.refund_amount = refund_amount
     dispute.clawback_amount = clawback_amount
@@ -1360,15 +1403,16 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
             dispute.resolved_at = _now()
         amount = to_money(Decimal(event.amount_minor or 0) / 100)
         if not won:
-            session.add(
-                Adjustment(
-                    job_id=dispute.job_id,
-                    dispute_id=dispute.id,
-                    kind=AdjustmentKind.CHARGEBACK_LOSS,
-                    amount=amount,
-                    provider_ref=event.object_id,
+            if amount > 0:  # a zero/absent amount_minor books no $0.00 loss row
+                session.add(
+                    Adjustment(
+                        job_id=dispute.job_id,
+                        dispute_id=dispute.id,
+                        kind=AdjustmentKind.CHARGEBACK_LOSS,
+                        amount=amount,
+                        provider_ref=event.object_id,
+                    )
                 )
-            )
             session.add(
                 Adjustment(
                     job_id=dispute.job_id,
