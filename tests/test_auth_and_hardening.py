@@ -62,6 +62,7 @@ def test_expired_session_rejected(client: TestClient) -> None:
                 display_name="expired",
             )
         )
+        s.flush()  # persist the user before its FK-child AuthSession (Postgres enforces the FK)
         s.add(
             AuthSession(
                 user_id="expired-user",

@@ -97,6 +97,8 @@ def auth() -> AuthFactory:
                         display_name=sub,
                     )
                 )
+                s.flush()  # persist the user before its FK-child AuthSession
+                # (Postgres enforces the FK; SQLite doesn't, which hid this)
             else:
                 # Same sub under a different role would silently authenticate
                 # as the original role — fail loudly instead.
