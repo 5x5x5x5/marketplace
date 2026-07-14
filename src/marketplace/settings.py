@@ -29,5 +29,12 @@ class Settings(BaseSettings):
     payment_ttl_minutes: int = 30  # AWAITING_PAYMENT older than this expires on sweep
     onboarding_return_url: str = "http://localhost:8000/onboarded"
 
+    # Auth. Sessions are DB-backed and revocable; the admin account is seeded
+    # from these two settings at startup (empty -> no admin, logged).
+    session_ttl_hours: int = 72
+    admin_email: str = ""
+    admin_password: str = ""
+    base_url: str = "http://localhost:8000"  # used in verification/reset links
+
 
 settings = Settings()
