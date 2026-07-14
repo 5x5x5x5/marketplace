@@ -18,6 +18,7 @@ from .port import (
     PaymentError,
     PaymentEvent,
     RefundResult,
+    ReversalResult,
     TransferResult,
     WebhookSignatureError,
     to_minor_units,
@@ -32,6 +33,8 @@ _EVENT_KINDS = {
     "payment_intent.payment_failed": "payment_failed",
     "account.updated": "account_updated",
     "transfer.reversed": "transfer_failed",
+    "charge.dispute.created": "chargeback_opened",
+    "charge.dispute.closed": "chargeback_closed",
 }
 
 
@@ -121,10 +124,14 @@ class StripeProvider:
         except stripe.StripeError as exc:
             raise PaymentError(str(exc)) from exc
 
-    def refund(self, provider_payment_id: str, *, idempotency_key: str) -> RefundResult:
+    def refund(
+        self, provider_payment_id: str, *, idempotency_key: str, amount: Decimal | None = None
+    ) -> RefundResult:
         try:
             re = self._client.v1.refunds.create(
-                params={"payment_intent": provider_payment_id},
+                params={"payment_intent": provider_payment_id}
+                if amount is None
+                else {"payment_intent": provider_payment_id, "amount": to_minor_units(amount)},
                 options={"idempotency_key": idempotency_key},
             )
         except stripe.StripeError as exc:
@@ -155,6 +162,19 @@ class StripeProvider:
         # Transfers settle synchronously (platform balance → connected balance).
         return TransferResult(provider_transfer_id=tr.id, status=PayoutStatus.PAID)
 
+    def reverse_transfer(
+        self, provider_transfer_id: str, *, amount: Decimal, idempotency_key: str
+    ) -> ReversalResult:
+        try:
+            reversal = self._client.v1.transfers.reversals.create(
+                provider_transfer_id,
+                params={"amount": to_minor_units(amount)},
+                options={"idempotency_key": idempotency_key},
+            )
+        except stripe.StripeError as exc:
+            raise PaymentError(str(exc)) from exc
+        return ReversalResult(provider_reversal_id=reversal.id)
+
     def parse_webhook(self, payload: bytes, signature: str | None) -> PaymentEvent:
         if signature is None:
             raise WebhookSignatureError("missing Stripe-Signature header")
@@ -177,9 +197,21 @@ class StripeProvider:
         ready: bool | None = None
         if event.type == "account.updated":
             ready = bool(obj.get("payouts_enabled", False))
+        amount_minor: int | None = None
+        outcome: str | None = None
+        related_id: str | None = None
+        if event.type.startswith("charge.dispute."):
+            raw_amount = obj.get("amount")
+            amount_minor = None if raw_amount is None else int(raw_amount)
+            related_id = str(obj.get("payment_intent") or obj.get("charge") or "") or None
+            if event.type == "charge.dispute.closed":
+                outcome = str(obj.get("status", "")) or None
         return PaymentEvent(
             event_id=event.id,
             kind=_EVENT_KINDS.get(event.type, "ignored"),
             object_id=str(obj.get("id", "")),
             payments_ready=ready,
+            amount_minor=amount_minor,
+            outcome=outcome,
+            related_id=related_id,
         )

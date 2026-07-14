@@ -49,6 +49,11 @@ class TransferResult:
 
 
 @dataclass(frozen=True)
+class ReversalResult:
+    provider_reversal_id: str
+
+
+@dataclass(frozen=True)
 class RefundResult:
     provider_refund_id: str
 
@@ -62,6 +67,9 @@ class PaymentEvent:
     kind: str
     object_id: str  # provider payment/account/transfer id the event refers to
     payments_ready: bool | None = None  # only for account_updated
+    amount_minor: int | None = None  # chargeback amount, provider minor units
+    outcome: str | None = None  # chargeback_closed: "won" | "lost"
+    related_id: str | None = None  # the payment (PI/charge) a chargeback refers to
 
 
 class PaymentProvider(Protocol):
@@ -83,7 +91,11 @@ class PaymentProvider(Protocol):
 
     def cancel_charge(self, provider_payment_id: str) -> None: ...
 
-    def refund(self, provider_payment_id: str, *, idempotency_key: str) -> RefundResult: ...
+    def refund(
+        self, provider_payment_id: str, *, idempotency_key: str, amount: Decimal | None = None
+    ) -> RefundResult:
+        """amount=None refunds in full; otherwise refunds the given amount."""
+        ...
 
     def transfer_to_seller(
         self,
@@ -94,5 +106,9 @@ class PaymentProvider(Protocol):
         job_id: str,
         idempotency_key: str,
     ) -> TransferResult: ...
+
+    def reverse_transfer(
+        self, provider_transfer_id: str, *, amount: Decimal, idempotency_key: str
+    ) -> ReversalResult: ...
 
     def parse_webhook(self, payload: bytes, signature: str | None) -> PaymentEvent: ...
