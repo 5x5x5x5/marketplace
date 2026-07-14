@@ -154,6 +154,11 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   carries the clawback amount; `SellerDisputeOut` never carries the refund
   amount; only `AdminDisputeOut` carries both. `reason`/`status` are visible
   to all three (the seller has to know what they're accused of).
+- **Seller→buyer reviews expose only the aggregate to the buyer.**
+  `GET /v1/profile` returns `rating`/`rating_count`, never the individual
+  `SellerReview` rows or comments; those stay admin-side (`GET
+  /v1/admin/buyers` is the same aggregate, not a review list) until the
+  moderation/abuse sub-phase decides whether buyers see more.
 
 ## Threat model (pilot)
 

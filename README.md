@@ -109,17 +109,20 @@ mail adapter.
 **Auth** (`/v1/auth/…`) — see the Auth section above.
 
 **Buyer** — `POST /quotes` · `POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
-`POST /jobs/{id}/cancel` · `POST /jobs/{id}/review`
+`POST /jobs/{id}/cancel` · `GET /profile` (own rating aggregate) ·
+`POST /jobs/{id}/review`
 
 **Seller** (`/v1/seller/…`) — `PUT|GET /profile` (own capacity) ·
 `POST /payments/onboard` · `POST|DELETE /availability[/{service_type_id}]` ·
 `GET /offers` · `GET /jobs` · `POST /offers/{id}/accept` ·
-`POST /offers/{id}/decline` · `POST /jobs/{id}/complete`
+`POST /offers/{id}/decline` · `POST /jobs/{id}/complete` ·
+`POST /jobs/{id}/review` (rate the buyer)
 
 **Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·
 `PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
 `PUT /config/matching_strategy` · `PUT /config/adjuster_params/{name}` ·
-`PUT /sellers/{id}` (tier/capacity) · `GET /transactions` · `GET /payouts` ·
+`PUT /sellers/{id}` (tier/capacity) · `GET /buyers` (rating aggregates) ·
+`GET /transactions` · `GET /payouts` ·
 `POST /payouts/{id}/retry` · `GET /notifications` ·
 `POST /notifications/drain` · `GET /margins/summary` · `GET /audit` ·
 `GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep`
@@ -243,7 +246,8 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
 ## Out of scope / next
 
-Trust & safety (disputes/chargebacks and partial refunds now ship — see
-Disputes above; seller→buyer reviews, moderation/abuse still ahead),
-notification preferences/digests and push/SMS channels, fee-aware margin math,
-admin RBAC, and OAuth/social login. See `ROADMAP.md`.
+Trust & safety (disputes/chargebacks and partial refunds, and seller→buyer
+reviews, now ship — see Disputes above and the Buyer/Seller/Admin endpoints;
+moderation/abuse still ahead), notification preferences/digests and push/SMS
+channels, fee-aware margin math, admin RBAC, and OAuth/social login. See
+`ROADMAP.md`.
