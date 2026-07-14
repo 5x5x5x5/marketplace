@@ -114,8 +114,9 @@ dispute per job makes these unique per operation.
    + note + `resolved_at`; `adjustments` rows appended (refund and/or
    clawback kinds, provider refs); notifications enqueued (below). The
    re-lock must be a `populate_existing` SELECT ... FOR UPDATE (or an
-   explicit refresh) — with `expire_on_commit=False` a plain `get` returns
-   the unexpired identity-map object without emitting FOR UPDATE at all. If
+   explicit refresh) — a plain `get` with `with_for_update` takes the lock
+   but, with `expire_on_commit=False`, hands back the unexpired identity-map
+   object with stale attributes (verified empirically on Postgres). If
    the fresh state is already `resolved`, a concurrent duplicate resolve won
    the race during the lock-free legs window: the loser 409s — its provider
    legs were idempotent replays (money moved once), but booking again would

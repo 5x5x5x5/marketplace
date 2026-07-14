@@ -1183,14 +1183,15 @@ def resolve_dispute(
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
 
     # The pin's commit above released the row lock taken at the top of this
-    # function — re-acquire it before mutating status. NOT get_one: with
-    # expire_on_commit=False the identity map still holds the unexpired
-    # object, and get_one would return it without emitting SELECT FOR UPDATE
-    # — no lock, no fresh state. populate_existing forces both. A concurrent
-    # chargeback_closed that flipped status mid-flight loses to arbitration
-    # by design (RESOLVED overwrites it, and the RESOLVED-preservation rule
-    # in _apply_payment_event stops any later chargeback event from undoing
-    # it).
+    # function — re-acquire it before mutating status. NOT get_one: it does
+    # emit SELECT FOR UPDATE (the lock is taken), but with
+    # expire_on_commit=False it hands back the unexpired identity-map object
+    # with STALE attributes — a status check against it would miss a
+    # concurrent winner. populate_existing refreshes the object from the
+    # locked row. A concurrent chargeback_closed that flipped status
+    # mid-flight loses to arbitration by design (RESOLVED overwrites it, and
+    # the RESOLVED-preservation rule in _apply_payment_event stops any later
+    # chargeback event from undoing it).
     dispute = session.scalars(
         select(Dispute)
         .where(Dispute.id == dispute_id)
