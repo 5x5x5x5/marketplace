@@ -68,8 +68,14 @@ codes:
    return the row.
 
 Request schema `SellerReviewRequest` ≡ `ReviewRequest` (rating `ge=1 le=5`,
-comment `max_length=2000`). Response `SellerReviewOut` ≡ `ReviewOut` with
-`buyer_id` in place of `seller_id`.
+comment `max_length=2000`). Response `SellerReviewOut` ≡ `ReviewOut` minus
+both party ids. *(Amended at final review: the original "`buyer_id` in place
+of `seller_id`" would have been the system's first disclosure of buyer
+identity to sellers — every other seller-facing view withholds it, and the
+seller already knows which job they reviewed. The mirror argument fails in
+the identity dimension because buyers already see `seller_id` elsewhere;
+sellers never see buyer identity. The DB row keeps `buyer_id` for the
+aggregate.)*
 
 No review window (the buyer→seller review has none — stay symmetric). No
 notification (parked for the notification-preferences sub-phase). Concurrency:
