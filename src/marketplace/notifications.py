@@ -146,6 +146,26 @@ def _render_dispute_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _render_dispute_resolved_buyer(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        "Your dispute was resolved",
+        (
+            f"Your dispute on job {p['job_id']} was resolved.\n"
+            f"Refund issued to you: {p['refund_amount']}."
+        ),
+    )
+
+
+def _render_dispute_resolved_seller(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        "A dispute on your job was resolved",
+        (
+            f"The dispute on job {p['job_id']} was resolved.\n"
+            f"Amount reclaimed from your payout: {p['clawback_amount']}."
+        ),
+    )
+
+
 RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.OFFER_RECEIVED: _render_offer_received,
     EventKind.JOB_ACCEPTED_BUYER: _render_job_accepted_buyer,
@@ -156,6 +176,8 @@ RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.PAYOUT_FAILED_ADMIN: _render_payout_failed_admin,
     EventKind.DISPUTE_OPENED_SELLER: _render_dispute_opened_seller,
     EventKind.DISPUTE_OPENED_ADMIN: _render_dispute_opened_admin,
+    EventKind.DISPUTE_RESOLVED_BUYER: _render_dispute_resolved_buyer,
+    EventKind.DISPUTE_RESOLVED_SELLER: _render_dispute_resolved_seller,
 }
 
 

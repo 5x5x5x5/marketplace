@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Job
+from marketplace.entities import Adjustment, Job
 from marketplace.mail import RecordingEmailSender
 from marketplace.notifications import drain_once
+from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
 from tests.test_payments import accept_first_offer, new_job, onboard_and_avail
 
@@ -105,3 +107,112 @@ def test_dispute_window_and_duplicate_guards(
         f"/v1/jobs/{job2_id}/dispute", json={"reason": "late"}, headers=auth("buyer", "alice")
     )
     assert r.status_code == 409  # window elapsed
+
+
+def _resolve(
+    client: TestClient, admin: Header, dispute_id: str, refund: str, clawback: str
+) -> dict[str, object]:
+    r = client.post(
+        f"/v1/admin/disputes/{dispute_id}/resolve",
+        json={"refund_amount": refund, "clawback_amount": clawback, "note": "arbitrated"},
+        headers=admin,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_partial_resolution_moves_money_and_ledgers(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+    _drain()
+
+    resolved = _resolve(client, admin, str(dispute["id"]), "6.00", "4.00")
+    assert resolved["status"] == "resolved"
+    assert resolved["refund_amount"] == "6.00" and resolved["clawback_amount"] == "4.00"
+
+    # Provider legs used the dispute-specific keys and partial amounts.
+    assert fake_payments.refund_keys[-1] == f"refund:{job_id}:dispute"
+    assert fake_payments.refund_amounts[-1] == "6.00"
+    assert fake_payments.reversals[-1][1] == "4.00"
+    assert fake_payments.reversals[-1][2] == f"reversal:{job_id}:dispute"
+
+    with SessionLocal() as s:
+        kinds = {a.kind.value: str(a.amount) for a in s.scalars(select(Adjustment)).all()}
+    assert kinds == {"refund": "6.00", "clawback": "4.00"}
+
+    # Margin: gross unchanged (14->20 job = 6.00 margin); net = 6 - 6 + 4 = 4.00.
+    summary = client.get("/v1/admin/margins/summary", headers=admin).json()
+    assert summary["platform_margin"] == "6.00"
+    assert summary["adjustments_net"] == "-2.00"
+    assert summary["platform_margin_net"] == "4.00"
+
+    # Both parties notified, asymmetrically.
+    recorder = _drain()
+    buyer_body = next(m[2] for m in recorder.sent if "alice@" in m[0])
+    seller_body = next(m[2] for m in recorder.sent if "s1@" in m[0])
+    assert "6.00" in buyer_body and "4.00" not in buyer_body
+    assert "4.00" in seller_body and "6.00" not in seller_body
+
+
+def test_reject_resolution_moves_nothing(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+    before_refunds = len(fake_payments.refunded)
+    resolved = _resolve(client, admin, str(dispute["id"]), "0.00", "0.00")
+    assert resolved["status"] == "resolved"
+    assert len(fake_payments.refunded) == before_refunds  # no provider calls
+    assert fake_payments.reversals == []
+    with SessionLocal() as s:
+        assert s.scalar(select(Adjustment)) is None  # no ledger noise
+    # Second resolve -> 409.
+    r = client.post(
+        f"/v1/admin/disputes/{dispute['id']}/resolve",
+        json={"refund_amount": "1.00", "clawback_amount": "0.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 409
+
+
+def test_resolution_bounds_and_convergence(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+
+    # Out of bounds -> 422, nothing recorded.
+    r = client.post(
+        f"/v1/admin/disputes/{dispute['id']}/resolve",
+        json={"refund_amount": "999.00", "clawback_amount": "0.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 422
+
+    # Provider outage at the first leg -> 502, dispute stays open, no adjustments.
+    fake_payments.fail_next_call = True
+    r = client.post(
+        f"/v1/admin/disputes/{dispute['id']}/resolve",
+        json={"refund_amount": "6.00", "clawback_amount": "4.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 502
+    with SessionLocal() as s:
+        assert s.scalar(select(Adjustment)) is None
+    # Retry converges: same keys replay the succeeded leg.
+    resolved = _resolve(client, admin, str(dispute["id"]), "6.00", "4.00")
+    assert resolved["status"] == "resolved"

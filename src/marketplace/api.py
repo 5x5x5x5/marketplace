@@ -30,6 +30,7 @@ from . import notifications, repo
 from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
 from .db import SessionLocal, get_session, init_db
 from .entities import (
+    Adjustment,
     AuditLog,
     AuthSession,
     Availability,
@@ -52,6 +53,7 @@ from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
 from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
+    AdjustmentKind,
     AdminDisputeOut,
     AdminSellerBody,
     AuditOut,
@@ -77,6 +79,7 @@ from .models import (
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
+    ResolveDisputeRequest,
     ReviewOut,
     ReviewRequest,
     SellerDisputeOut,
@@ -1075,6 +1078,107 @@ def list_disputes(
     return _paginate(rows, limit, offset)
 
 
+@admin_router.post("/disputes/{dispute_id}/resolve", response_model=AdminDisputeOut)
+def resolve_dispute(
+    dispute_id: UUID,
+    body: ResolveDisputeRequest,
+    session: SessionDep,
+    admin_id: AdminId,
+    provider: ProviderDep,
+) -> Dispute:
+    dispute = session.get(Dispute, dispute_id, with_for_update=True)
+    if dispute is None:
+        raise HTTPException(status_code=404, detail="dispute not found")
+    if dispute.status is not DisputeStatus.OPEN:
+        raise HTTPException(status_code=409, detail=f"dispute is {dispute.status}, not open")
+    job = session.get(Job, dispute.job_id)
+    if job is None or job.seller_payout is None:
+        raise HTTPException(status_code=500, detail="disputed job missing payout")
+    refund_amount = to_money(body.refund_amount)
+    clawback_amount = to_money(body.clawback_amount)
+    if refund_amount > job.buyer_price:
+        raise HTTPException(status_code=422, detail="refund exceeds the buyer price")
+    if clawback_amount > job.seller_payout:
+        raise HTTPException(status_code=422, detail="clawback exceeds the seller payout")
+
+    # Provider legs first, both idempotent by key: a failure raises 502 with
+    # nothing recorded, and the retry replays the succeeded leg (same key)
+    # then completes the other — no partial-resolution state exists.
+    refund_ref: str | None = None
+    reversal_ref: str | None = None
+    try:
+        if refund_amount > 0:
+            payment = session.scalar(select(Payment).where(Payment.job_id == job.id))
+            if payment is None:
+                raise HTTPException(status_code=409, detail="no payment recorded for this job")
+            refund_ref = provider.refund(
+                payment.provider_payment_id,
+                idempotency_key=f"refund:{job.id}:dispute",
+                amount=refund_amount,
+            ).provider_refund_id
+            # Payment.status deliberately untouched: a partial refund leaves
+            # the charge partly intact; REFUNDED stays the cancel path's state.
+        if clawback_amount > 0:
+            payout = session.scalar(select(Payout).where(Payout.job_id == job.id))
+            if payout is None or payout.provider_transfer_id is None:
+                raise HTTPException(status_code=409, detail="no transfer recorded for this job")
+            reversal_ref = provider.reverse_transfer(
+                payout.provider_transfer_id,
+                amount=clawback_amount,
+                idempotency_key=f"reversal:{job.id}:dispute",
+            ).provider_reversal_id
+    except PaymentError as exc:
+        logger.warning("dispute resolution provider call failed for %s: %s", dispute_id, exc)
+        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+
+    dispute.status = DisputeStatus.RESOLVED
+    dispute.refund_amount = refund_amount
+    dispute.clawback_amount = clawback_amount
+    dispute.resolution_note = body.note
+    dispute.resolved_at = _now()
+    if refund_amount > 0:
+        session.add(
+            Adjustment(
+                job_id=job.id,
+                dispute_id=dispute.id,
+                kind=AdjustmentKind.REFUND,
+                amount=refund_amount,
+                provider_ref=refund_ref,
+            )
+        )
+    if clawback_amount > 0:
+        session.add(
+            Adjustment(
+                job_id=job.id,
+                dispute_id=dispute.id,
+                kind=AdjustmentKind.CLAWBACK,
+                amount=clawback_amount,
+                provider_ref=reversal_ref,
+            )
+        )
+    notifications.enqueue(
+        session,
+        EventKind.DISPUTE_RESOLVED_BUYER,
+        dispute.buyer_id,
+        {"job_id": str(job.id), "refund_amount": str(refund_amount)},
+    )
+    if job.seller_id is not None:
+        notifications.enqueue(
+            session,
+            EventKind.DISPUTE_RESOLVED_SELLER,
+            job.seller_id,
+            {"job_id": str(job.id), "clawback_amount": str(clawback_amount)},
+        )
+    audit(
+        session,
+        admin_id,
+        "resolve_dispute",
+        str(dispute_id),
+        {"refund": str(refund_amount), "clawback": str(clawback_amount)},
+    )
+    return dispute
+
+
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)
 def margins_summary(session: SessionDep) -> MarginSummaryOut:
     txs = session.scalars(select(Transaction)).all()
@@ -1082,12 +1186,22 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
     payouts = sum((t.seller_payout for t in txs), to_money(0))
     margin = sum((t.margin for t in txs), to_money(0))
     take_rate = float(margin / revenue) if revenue > 0 else 0.0
+    adjustments = session.scalars(select(Adjustment)).all()
+    signs = {
+        AdjustmentKind.REFUND: -1,
+        AdjustmentKind.CLAWBACK: 1,
+        AdjustmentKind.CHARGEBACK_LOSS: -1,
+        AdjustmentKind.CHARGEBACK_FEE: -1,
+    }
+    adjustments_net = sum((a.amount * signs[a.kind] for a in adjustments), to_money(0))
     return MarginSummaryOut(
         transactions=len(txs),
         gross_revenue=revenue,
         seller_payouts=payouts,
         platform_margin=margin,
         take_rate=round(take_rate, 4),
+        adjustments_net=to_money(adjustments_net),
+        platform_margin_net=to_money(margin + adjustments_net),
     )
 
 

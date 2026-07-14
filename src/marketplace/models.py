@@ -81,6 +81,8 @@ class EventKind(StrEnum):
     PAYOUT_FAILED_ADMIN = "payout_failed_admin"
     DISPUTE_OPENED_SELLER = "dispute_opened_seller"
     DISPUTE_OPENED_ADMIN = "dispute_opened_admin"
+    DISPUTE_RESOLVED_BUYER = "dispute_resolved_buyer"
+    DISPUTE_RESOLVED_SELLER = "dispute_resolved_seller"
 
 
 class NotificationStatus(StrEnum):
@@ -304,6 +306,8 @@ class MarginSummaryOut(BaseModel):
     seller_payouts: Decimal
     platform_margin: Decimal
     take_rate: float
+    adjustments_net: Decimal
+    platform_margin_net: Decimal
 
 
 class UserOut(BaseModel):
@@ -374,6 +378,12 @@ class ReviewRequest(BaseModel):
 
 class DisputeRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class ResolveDisputeRequest(BaseModel):
+    refund_amount: Decimal = Field(ge=0, allow_inf_nan=False, max_digits=12, decimal_places=2)
+    clawback_amount: Decimal = Field(ge=0, allow_inf_nan=False, max_digits=12, decimal_places=2)
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class SellerProfileUpdate(BaseModel):
