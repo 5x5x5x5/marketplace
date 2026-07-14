@@ -76,7 +76,9 @@ Rough priority. Each is fork-agnostic — build generic here, specialize after f
    follow-ups: the webhook handler is async-over-sync-`Session` (move DB work
    off the event loop under load); a TTL sweep for the `idempotency_keys` /
    `webhook_events` tables; a PG-gated cancel-vs-webhook race test; indexes on
-   `provider_account_id`/`provider_transfer_id`.
+   `provider_account_id`/`provider_transfer_id`. Standing rule: no endpoint
+   should echo a secret into a stored idempotency response (auth paths are
+   now excluded; audit future secret-returning POSTs).
 6. **Admin RBAC** — beyond the single shared admin role; every admin account
    currently has identical, full authority.
 7. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.

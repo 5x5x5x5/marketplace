@@ -95,7 +95,9 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   sending. Mail-send failure is a guarded boundary: `_issue_email_token`
   catches and logs, so a broken/slow mail provider never fails or
   fingerprints the enclosing request (signup still 201s; reset-request still
-  200s) — the token row is already committed, so the user can re-request.
+  200s) — the token row is flushed-pending on the request's session and
+  commits at request end; swallowing the send failure is what lets that
+  commit proceed, so the user can re-request.
 
 **Residuals, named rather than hidden:**
 - **No login rate-limiting.** Brute-forcing a password is not throttled at

@@ -18,6 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pwdlib import PasswordHash
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import repo
@@ -169,7 +170,9 @@ def _issue_email_token(
     except Exception:
         # Delivery failure must never fail (or fingerprint) the enclosing
         # request: signup still succeeds, reset-request stays a uniform 200.
-        # The token row stays; the user can re-request and the sweep expires it.
+        # The token row is flushed-pending on the request session and commits
+        # at request end — swallowing the send failure is what lets that
+        # commit proceed; the user can re-request and the sweep expires it.
         logger.warning("email send failed to=%s purpose=%s", user.email, purpose)
 
 
@@ -185,7 +188,14 @@ def signup(body: SignupRequest, db: _SessionDep, mail: MailDep) -> SessionOut:
         display_name=body.display_name,
     )
     db.add(user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # Race-safe backstop: a concurrent duplicate that beat the pre-check
+        # select hits the unique(email, role) constraint here, not a 500.
+        raise HTTPException(
+            status_code=409, detail="an account with this email and role exists"
+        ) from None
     # The domain record exists from the first moment the identity does.
     if user.role is UserRole.BUYER:
         repo.get_or_create_buyer(db, user.id)
@@ -209,6 +219,8 @@ def login(body: LoginRequest, db: _SessionDep) -> SessionOut:
 @auth_router.post("/logout")
 def logout(db: _SessionDep, authorization: Annotated[str, Header()] = "") -> dict[str, str]:
     _, _, token = authorization.partition(" ")
+    # Deliberately hash-only (no expiry/scheme check): you can only delete the
+    # session whose raw token you already hold, and deleting an expired row is harmless.
     row = db.scalar(select(AuthSession).where(AuthSession.token_hash == _hash_token(token)))
     if row is None:
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
@@ -275,6 +287,13 @@ def confirm_password_reset(body: ResetConfirmRequest, db: _SessionDep) -> dict[s
     user.password_hash = hash_password(body.new_password)
     row.used_at = _now()
     db.execute(delete(AuthSession).where(AuthSession.user_id == user.id))  # revoke everything
+    # Consume every other outstanding reset token too — a successful reset
+    # must leave no live reset token behind.
+    db.execute(
+        delete(EmailToken).where(
+            EmailToken.user_id == user.id, EmailToken.purpose == EmailTokenPurpose.RESET
+        )
+    )
     return {"status": "password reset"}
 
 
@@ -298,3 +317,10 @@ def bootstrap_admin() -> None:
             )
             db.commit()
             logger.info("admin account seeded for %s", email)
+        elif not verify_password(settings.admin_password, exists.password_hash):
+            # A changed ADMIN_PASSWORD rotates the credential on restart; old
+            # sessions are revoked so the previous password grants nothing.
+            exists.password_hash = hash_password(settings.admin_password)
+            db.execute(delete(AuthSession).where(AuthSession.user_id == exists.id))
+            db.commit()
+            logger.info("admin password rotated for %s", email)

@@ -52,6 +52,7 @@ def signup(c: TestClient, email: str, role: str) -> dict[str, object]:
             "display_name": email.split("@")[0],
         },
     )
+    assert resp.status_code == 201, f"signup {email} failed: {resp.status_code} {resp.text}"
     return resp.json()
 
 
@@ -62,11 +63,14 @@ def main() -> None:
 
 
 def _run(c: TestClient) -> None:
-    admin_login = c.post(
+    admin_resp = c.post(
         "/v1/auth/login",
         json={"email": "admin@demo.test", "password": "demo-admin-password", "role": "admin"},
-    ).json()
-    admin = bearer(admin_login["token"])
+    )
+    assert admin_resp.status_code == 200, (
+        f"admin login failed: {admin_resp.status_code} {admin_resp.text}"
+    )
+    admin = bearer(admin_resp.json()["token"])
 
     alice_signup = signup(c, "buyer@demo.test", "buyer")
     alice = bearer(alice_signup["token"])

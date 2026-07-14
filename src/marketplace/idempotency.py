@@ -43,6 +43,13 @@ class IdempotencyMiddleware:
             await response(scope, receive, send)
             return
         path = str(scope["path"])
+        if path.startswith("/v1/auth/"):
+            # Auth responses carry raw bearer tokens; they must never be
+            # captured into idempotency_keys (sha256-at-rest guarantee).
+            # Login is naturally repeatable and signup-replay correctly 409s,
+            # so idempotency semantics aren't wanted here anyway.
+            await self.app(scope, receive, send)
+            return
         with SessionLocal() as session:
             principal = peek_principal(session, headers.get("authorization"))
             row = (

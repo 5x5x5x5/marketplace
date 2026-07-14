@@ -73,7 +73,9 @@ An **account is one email + one role**: the same email can hold a separate buyer
 account and a separate seller account (each with its own password), but never
 two accounts in the same role. There is no self-serve admin signup — the admin
 account is seeded at startup from `ADMIN_EMAIL`/`ADMIN_PASSWORD` (see
-`.env.example`); leave them unset and no admin account exists.
+`.env.example`); leave them unset and no admin account exists. Changing
+`ADMIN_PASSWORD` and restarting **rotates** the admin credential: the stored
+hash is replaced and existing admin sessions are revoked.
 
 ```python
 import httpx
@@ -92,7 +94,12 @@ session on that account).
 Outbound mail (verification/reset links) goes through an `EmailSender` port
 (`src/marketplace/mail.py`); the shipped adapter just logs the message, so
 links land in the server log until a fork plugs in a real sender (SES, Resend,
-Postmark, …). Email verification doesn't gate anything yet — signup and login
+Postmark, …). The links themselves (`BASE_URL/verify?token=…`,
+`BASE_URL/password-reset/confirm?token=…`) must be fronted by the fork's own
+app — the API has **no GET handlers** for those paths; the token rides the
+query string into whatever serves `BASE_URL`, which then relays it to
+`POST /v1/auth/verify` or `POST /v1/auth/password-reset/confirm`. Email
+verification doesn't gate anything yet — signup and login
 both work on an unverified account — because there's no real sender to make a
 verification requirement meaningful. A fork wires that gate in alongside its
 mail adapter.
