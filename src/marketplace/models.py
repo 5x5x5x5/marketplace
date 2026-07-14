@@ -83,6 +83,8 @@ class EventKind(StrEnum):
     DISPUTE_OPENED_ADMIN = "dispute_opened_admin"
     DISPUTE_RESOLVED_BUYER = "dispute_resolved_buyer"
     DISPUTE_RESOLVED_SELLER = "dispute_resolved_seller"
+    CHARGEBACK_OPENED_ADMIN = "chargeback_opened_admin"
+    CHARGEBACK_CLOSED_ADMIN = "chargeback_closed_admin"
 
 
 class NotificationStatus(StrEnum):

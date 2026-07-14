@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Adjustment, Job
+from marketplace.entities import Adjustment, Job, Payment
 from marketplace.mail import RecordingEmailSender
 from marketplace.notifications import drain_once
 from marketplace.payments.fake import FakeProvider
@@ -252,3 +252,157 @@ def test_partial_failure_retry_replays_succeeded_leg_by_key(
     with SessionLocal() as s:
         kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
     assert kinds == ["clawback", "refund"]
+
+
+def _paid_job_pid(client: TestClient, auth: AuthFactory, sid: str) -> tuple[str, str]:
+    job_id = _completed_job(client, auth, sid)
+    with SessionLocal() as s:
+        pid = s.scalar(select(Payment.provider_payment_id).where(Payment.job_id == UUID(job_id)))
+    assert pid is not None
+    return job_id, pid
+
+
+def test_chargeback_opened_creates_provider_dispute(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _job_id, pid = _paid_job_pid(client, auth, basic_service)
+    _drain()
+    r = client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    assert r.json() == {"status": "ok"}
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert len(queue) == 1
+    assert queue[0]["source"] == "provider"
+    assert queue[0]["provider_dispute_id"] == "dp_1"
+    recorder = _drain()
+    assert [m for m in recorder.sent if "ops@" in m[0]]
+
+
+def test_chargeback_lost_appends_loss_and_fee(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _job_id, pid = _paid_job_pid(client, auth, basic_service)
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb2",
+            "kind": "chargeback_closed",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+            "outcome": "lost",
+        },
+    )
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert queue[0]["status"] == "chargeback_lost"
+    with SessionLocal() as s:
+        kinds = sorted((a.kind.value, str(a.amount)) for a in s.scalars(select(Adjustment)).all())
+    assert kinds == [("chargeback_fee", "15.00"), ("chargeback_loss", "20.00")]
+    summary = client.get("/v1/admin/margins/summary", headers=admin).json()
+    assert summary["adjustments_net"] == "-35.00"
+
+
+def test_chargeback_won_and_annotation_and_dedup(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    job_id, pid = _paid_job_pid(client, auth, basic_service)
+    _open_dispute(client, auth, job_id)  # buyer dispute already exists
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_9",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert len(queue) == 1  # annotated, not duplicated
+    assert queue[0]["source"] == "buyer"
+    assert queue[0]["provider_dispute_id"] == "dp_9"
+
+    # Replay of the same event no-ops (webhook dedup).
+    r = client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_9",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    assert r.json() == {"status": "duplicate"}
+
+    # Won: status flips (dispute still open), no adjustments.
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb3",
+            "kind": "chargeback_closed",
+            "object_id": "dp_9",
+            "related_id": pid,
+            "outcome": "won",
+        },
+    )
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert queue[0]["status"] == "chargeback_won"
+    with SessionLocal() as s:
+        assert s.scalar(select(Adjustment)) is None
+
+
+def test_chargeback_lost_after_resolution_keeps_status_appends_loss(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    job_id, pid = _paid_job_pid(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+    _resolve(client, admin, str(dispute["id"]), "6.00", "0.00")
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb2",
+            "kind": "chargeback_closed",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+            "outcome": "lost",
+        },
+    )
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert queue[0]["status"] == "resolved"  # arbitration outcome preserved
+    with SessionLocal() as s:
+        kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
+    assert kinds == ["chargeback_fee", "chargeback_loss", "refund"]  # double loss ledgered

@@ -19,6 +19,7 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -1317,6 +1318,73 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
                 )
             else:
                 payout.status = PayoutStatus.PAID
+    elif event.kind == "chargeback_opened":
+        payment = session.scalar(
+            select(Payment).where(Payment.provider_payment_id == event.related_id)
+        )
+        if payment is None:
+            return  # unknown charge: recorded by dedup, nothing to apply
+        dispute = session.scalar(
+            select(Dispute).where(Dispute.job_id == payment.job_id).with_for_update()
+        )
+        if dispute is None:
+            dispute = Dispute(
+                job_id=payment.job_id,
+                source=DisputeSource.PROVIDER,
+                buyer_id=payment.buyer_id,
+                reason="provider chargeback",
+                provider_dispute_id=event.object_id,
+            )
+            session.add(dispute)
+            session.flush()
+        else:
+            dispute.provider_dispute_id = event.object_id  # annotate, don't duplicate
+        amount = to_money(Decimal(event.amount_minor or 0) / 100)
+        notifications.enqueue_admins(
+            session,
+            EventKind.CHARGEBACK_OPENED_ADMIN,
+            {"job_id": str(payment.job_id), "dispute_id": str(dispute.id), "amount": str(amount)},
+        )
+    elif event.kind == "chargeback_closed":
+        dispute = session.scalar(
+            select(Dispute).where(Dispute.provider_dispute_id == event.object_id).with_for_update()
+        )
+        if dispute is None:
+            return
+        won = event.outcome == "won"
+        if dispute.status is DisputeStatus.OPEN:
+            # The status field records arbitration; a dispute an admin already
+            # resolved keeps `resolved` — the ledger below still records the loss.
+            dispute.status = DisputeStatus.CHARGEBACK_WON if won else DisputeStatus.CHARGEBACK_LOST
+            dispute.resolved_at = _now()
+        amount = to_money(Decimal(event.amount_minor or 0) / 100)
+        if not won:
+            session.add(
+                Adjustment(
+                    job_id=dispute.job_id,
+                    dispute_id=dispute.id,
+                    kind=AdjustmentKind.CHARGEBACK_LOSS,
+                    amount=amount,
+                    provider_ref=event.object_id,
+                )
+            )
+            session.add(
+                Adjustment(
+                    job_id=dispute.job_id,
+                    dispute_id=dispute.id,
+                    kind=AdjustmentKind.CHARGEBACK_FEE,
+                    amount=to_money(settings.chargeback_fee_usd),
+                )
+            )
+        notifications.enqueue_admins(
+            session,
+            EventKind.CHARGEBACK_CLOSED_ADMIN,
+            {
+                "job_id": str(dispute.job_id),
+                "outcome": event.outcome or "unknown",
+                "amount": str(amount),
+            },
+        )
 
 
 @payments_router.post("/webhook")

@@ -170,6 +170,24 @@ def _render_dispute_resolved_seller(p: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _render_chargeback_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Chargeback opened on job {p['job_id']}",
+        (
+            f"The provider opened a chargeback for {p['amount']}.\n"
+            f"Evidence submission happens in the provider dashboard.\n"
+            f"Dispute: {p['dispute_id']}  Job: {p['job_id']}"
+        ),
+    )
+
+
+def _render_chargeback_closed_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Chargeback {p['outcome']} on job {p['job_id']}",
+        f"Outcome: {p['outcome']}. Amount: {p['amount']}.\nJob: {p['job_id']}",
+    )
+
+
 RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.OFFER_RECEIVED: _render_offer_received,
     EventKind.JOB_ACCEPTED_BUYER: _render_job_accepted_buyer,
@@ -182,6 +200,8 @@ RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.DISPUTE_OPENED_ADMIN: _render_dispute_opened_admin,
     EventKind.DISPUTE_RESOLVED_BUYER: _render_dispute_resolved_buyer,
     EventKind.DISPUTE_RESOLVED_SELLER: _render_dispute_resolved_seller,
+    EventKind.CHARGEBACK_OPENED_ADMIN: _render_chargeback_opened_admin,
+    EventKind.CHARGEBACK_CLOSED_ADMIN: _render_chargeback_closed_admin,
 }
 
 
