@@ -32,5 +32,10 @@ class Settings(BaseSettings):
     admin_password: str = ""
     base_url: str = "http://localhost:8000"  # used in verification/reset links
 
+    # Notifications: transactional outbox drained by the in-process loop.
+    notify_drain_seconds: int = 5
+    notify_max_attempts: int = 5
+    sweep_interval_seconds: int = 60
+
 
 settings = Settings()
