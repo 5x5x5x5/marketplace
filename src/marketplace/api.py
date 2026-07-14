@@ -1183,12 +1183,26 @@ def resolve_dispute(
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
 
     # The pin's commit above released the row lock taken at the top of this
-    # function — re-acquire it before mutating status. A concurrent
-    # chargeback_closed may have flipped status mid-flight (e.g. to
-    # chargeback_lost); arbitration wins by design here (RESOLVED overwrites
-    # it, and the RESOLVED-preservation rule in _apply_payment_event stops
-    # any later chargeback event from undoing it).
-    dispute = session.get_one(Dispute, dispute_id, with_for_update=True)
+    # function — re-acquire it before mutating status. NOT get_one: with
+    # expire_on_commit=False the identity map still holds the unexpired
+    # object, and get_one would return it without emitting SELECT FOR UPDATE
+    # — no lock, no fresh state. populate_existing forces both. A concurrent
+    # chargeback_closed that flipped status mid-flight loses to arbitration
+    # by design (RESOLVED overwrites it, and the RESOLVED-preservation rule
+    # in _apply_payment_event stops any later chargeback event from undoing
+    # it).
+    dispute = session.scalars(
+        select(Dispute)
+        .where(Dispute.id == dispute_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one()
+    if dispute.status is DisputeStatus.RESOLVED:
+        # A concurrent duplicate resolve won the race during the lock-free
+        # legs window. Both requests replayed the same idempotency keys —
+        # money moved once — but booking again here would double the ledger,
+        # so the loser stops.
+        raise HTTPException(status_code=409, detail="dispute already resolved")
     dispute.status = DisputeStatus.RESOLVED
     dispute.refund_amount = refund_amount
     dispute.clawback_amount = clawback_amount

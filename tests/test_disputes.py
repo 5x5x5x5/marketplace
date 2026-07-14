@@ -1,17 +1,20 @@
 """Disputes, arbitration, adjustments ledger, chargebacks."""
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Adjustment, Job, Payment
+from marketplace.entities import Adjustment, Dispute, Job, Payment
 from marketplace.mail import RecordingEmailSender
-from marketplace.models import PayoutStatus
+from marketplace.models import AdjustmentKind, DisputeStatus, PayoutStatus
 from marketplace.notifications import drain_once
 from marketplace.payments.fake import FakeProvider
+from marketplace.payments.port import ReversalResult
 from tests.conftest import AuthFactory, Header
 from tests.test_payments import accept_first_offer, new_job, onboard_and_avail
 
@@ -670,3 +673,59 @@ def test_arbitration_after_lost_chargeback_claws_back_the_seller(
     )
     queue = client.get("/v1/admin/disputes", headers=admin).json()
     assert queue[0]["status"] == "resolved"
+
+
+def test_concurrent_duplicate_resolve_cannot_double_book(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pin's commit releases the dispute row lock for the provider-legs
+    window; a duplicate resolve that wins the race during that window must
+    make the loser 409 at its re-lock — not book a second set of adjustments
+    for money the (idempotent-keyed) provider only moved once."""
+    job_id = _completed_job(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+    dispute_id = str(dispute["id"])
+    real_reverse = fake_payments.reverse_transfer
+
+    def winner_lands_mid_legs(
+        provider_transfer_id: str, *, amount: Decimal, idempotency_key: str
+    ) -> ReversalResult:
+        result = real_reverse(provider_transfer_id, amount=amount, idempotency_key=idempotency_key)
+        # The concurrent duplicate acquired the freed lock, replayed the same
+        # provider legs, and fully resolved while this request was still in
+        # its own legs.
+        with SessionLocal() as s:
+            d = s.get_one(Dispute, UUID(dispute_id))
+            d.status = DisputeStatus.RESOLVED
+            d.resolved_at = datetime.now(UTC)
+            for kind, booked in (
+                (AdjustmentKind.REFUND, "6.00"),
+                (AdjustmentKind.CLAWBACK, "4.00"),
+            ):
+                s.add(
+                    Adjustment(
+                        job_id=UUID(job_id),
+                        dispute_id=d.id,
+                        kind=kind,
+                        amount=Decimal(booked),
+                        provider_ref="winner",
+                    )
+                )
+            s.commit()
+        return result
+
+    monkeypatch.setattr(fake_payments, "reverse_transfer", winner_lands_mid_legs)
+    r = client.post(
+        f"/v1/admin/disputes/{dispute_id}/resolve",
+        json={"refund_amount": "6.00", "clawback_amount": "4.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 409
+    with SessionLocal() as s:
+        kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
+    assert kinds == ["clawback", "refund"]  # the winner's pair only, never four

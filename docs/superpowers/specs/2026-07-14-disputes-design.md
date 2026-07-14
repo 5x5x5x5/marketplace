@@ -112,9 +112,15 @@ dispute per job makes these unique per operation.
 4. One transaction: the dispute row is re-locked (the pin's commit in step 2
    released the row lock taken in step 1) and set to `resolved` with amounts
    + note + `resolved_at`; `adjustments` rows appended (refund and/or
-   clawback kinds, provider refs); notifications enqueued (below). A
-   concurrent `chargeback_closed` may have changed status between the pin
-   and this re-lock (e.g. to `chargeback_lost`) — arbitration wins by
+   clawback kinds, provider refs); notifications enqueued (below). The
+   re-lock must be a `populate_existing` SELECT ... FOR UPDATE (or an
+   explicit refresh) — with `expire_on_commit=False` a plain `get` returns
+   the unexpired identity-map object without emitting FOR UPDATE at all. If
+   the fresh state is already `resolved`, a concurrent duplicate resolve won
+   the race during the lock-free legs window: the loser 409s — its provider
+   legs were idempotent replays (money moved once), but booking again would
+   double the ledger. A concurrent `chargeback_closed` that changed status
+   mid-flight instead (e.g. to `chargeback_lost`) loses to arbitration by
    design: `resolved` overwrites it here, and the status-collision rule
    below stops any LATER chargeback event from undoing it.
 5. **`Payment.status` is NOT touched.** A partial refund leaves the charge
