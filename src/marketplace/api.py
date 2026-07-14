@@ -1352,9 +1352,10 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         if dispute is None:
             return
         won = event.outcome == "won"
-        if dispute.status is DisputeStatus.OPEN:
-            # The status field records arbitration; a dispute an admin already
-            # resolved keeps `resolved` — the ledger below still records the loss.
+        if dispute.status is not DisputeStatus.RESOLVED:
+            # The status field records arbitration when an admin has ruled
+            # (RESOLVED is preserved); otherwise the latest provider outcome
+            # wins — repeat chargebacks on one job re-adjudicate the same row.
             dispute.status = DisputeStatus.CHARGEBACK_WON if won else DisputeStatus.CHARGEBACK_LOST
             dispute.resolved_at = _now()
         amount = to_money(Decimal(event.amount_minor or 0) / 100)

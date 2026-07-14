@@ -406,3 +406,59 @@ def test_chargeback_lost_after_resolution_keeps_status_appends_loss(
     with SessionLocal() as s:
         kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
     assert kinds == ["chargeback_fee", "chargeback_loss", "refund"]  # double loss ledgered
+
+
+def test_repeat_chargeback_readjudicates_status_but_preserves_resolved_rule(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _job_id, pid = _paid_job_pid(client, auth, basic_service)
+    # First chargeback: lost.
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb1",
+            "kind": "chargeback_opened",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb2",
+            "kind": "chargeback_closed",
+            "object_id": "dp_1",
+            "related_id": pid,
+            "amount_minor": 2000,
+            "outcome": "lost",
+        },
+    )
+    # Second chargeback on the same job: won. Status must re-adjudicate.
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb3",
+            "kind": "chargeback_opened",
+            "object_id": "dp_2",
+            "related_id": pid,
+            "amount_minor": 2000,
+        },
+    )
+    client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb4",
+            "kind": "chargeback_closed",
+            "object_id": "dp_2",
+            "related_id": pid,
+            "outcome": "won",
+        },
+    )
+    queue = client.get("/v1/admin/disputes", headers=admin).json()
+    assert len(queue) == 1  # one-dispute-per-job: same row, re-annotated
+    assert queue[0]["provider_dispute_id"] == "dp_2"
+    assert queue[0]["status"] == "chargeback_won"  # latest provider outcome wins
+    with SessionLocal() as s:
+        kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
+    assert kinds == ["chargeback_fee", "chargeback_loss"]  # only the LOST one ledgered

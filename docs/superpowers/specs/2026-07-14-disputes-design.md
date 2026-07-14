@@ -99,12 +99,17 @@ dispute per job makes these unique per operation.
   (`CHARGEBACK_FEE_USD` setting, default 15.00 — Stripe's fee isn't reliably
   present in the event payload; forks reconcile exact fees from balance
   transactions). Notify admins with the outcome.
-- **Status collision rule:** `chargeback_closed` changes `status` only when
-  the dispute is still `open`. If an admin already resolved it, the status
-  stays `resolved` — but the loss/fee adjustments are STILL appended and the
-  admins still notified (a resolved dispute followed by a lost chargeback is
-  a real double-loss; the ledger records both, the status field records the
-  arbitration outcome).
+- **Status collision rule:** `chargeback_closed` changes `status` unless the
+  dispute is `resolved`. If an admin already resolved it, the status stays
+  `resolved` — but the loss/fee adjustments are STILL appended and the admins
+  still notified (a resolved dispute followed by a lost chargeback is a real
+  double-loss; the ledger records both, the status field records the
+  arbitration outcome). Otherwise the latest provider outcome wins: since the
+  schema is one-dispute-per-job, a second chargeback on the same job
+  re-annotates the existing row (`chargeback_opened`) and its
+  `chargeback_closed` re-adjudicates the status (e.g. a prior
+  `chargeback_lost` can flip to `chargeback_won`) — the ledger still records
+  every outcome independently, only the status field reflects the latest.
 - Rides the existing signature-verified, deduped `/v1/payments/webhook` —
   replayed events no-op.
 
