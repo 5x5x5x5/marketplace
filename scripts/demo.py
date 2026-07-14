@@ -126,6 +126,14 @@ def _run(c: TestClient) -> None:
     print("7. Alice reviews Carol")
     c.post(f"/v1/jobs/{job_id}/review", json={"rating": 5, "comment": "great"}, headers=alice)
 
+    print("7b. Carol reviews Alice back — buyer aggregate is display-only")
+    c.post(
+        f"/v1/seller/jobs/{job_id}/review", json={"rating": 5, "comment": "prompt"}, headers=carol
+    )
+    profile = c.get("/v1/profile", headers=alice).json()
+    print(f"   alice rating = {profile['rating']} ({profile['rating_count']} review)")
+    assert profile["rating"] == 5.0
+
     print("8. Admin margin summary")
     summary = c.get("/v1/admin/margins/summary", headers=admin).json()
     print(f"   {summary}")

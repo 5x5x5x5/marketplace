@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Numeric,
@@ -137,6 +138,12 @@ class BuyerProfile(Base):
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     completed_jobs: Mapped[int] = mapped_column(default=0)
+    rating_count: Mapped[int] = mapped_column(default=0)
+    rating_sum: Mapped[int] = mapped_column(default=0)
+
+    @property
+    def rating(self) -> float | None:
+        return (self.rating_sum / self.rating_count) if self.rating_count else None
 
 
 class Availability(Base):
@@ -213,6 +220,21 @@ class Review(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
     buyer_id: Mapped[str] = mapped_column(String(128))
     seller_id: Mapped[str] = mapped_column(String(128), index=True)
+    rating: Mapped[int] = mapped_column()
+    comment: Mapped[str | None] = mapped_column(String(2000), default=None)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+
+
+class SellerReview(Base):
+    """Seller→buyer review. Mirror of `Review`; the buyer aggregate it feeds
+    is display-only — it gates nothing (see the 2026-07-14 design)."""
+
+    __tablename__ = "seller_reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    seller_id: Mapped[str] = mapped_column(String(128))
+    buyer_id: Mapped[str] = mapped_column(String(128), index=True)
     rating: Mapped[int] = mapped_column()
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
@@ -390,6 +412,7 @@ class Adjustment(Base):
     resolution touches the books."""
 
     __tablename__ = "adjustments"
+    __table_args__ = (CheckConstraint("amount >= 0", name="ck_adjustments_amount_nonneg"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), index=True)

@@ -1,5 +1,7 @@
 """Disputes, arbitration, adjustments ledger, chargebacks."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
@@ -8,14 +10,15 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from marketplace import api
 from marketplace.db import SessionLocal
-from marketplace.entities import Adjustment, Dispute, Job, Payment
+from marketplace.entities import Adjustment, Dispute, Job, Payment, WebhookEvent
 from marketplace.mail import RecordingEmailSender
 from marketplace.models import AdjustmentKind, DisputeStatus, PayoutStatus
 from marketplace.notifications import drain_once
 from marketplace.payments.fake import FakeProvider
 from marketplace.payments.port import ReversalResult
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.test_payments import accept_first_offer, new_job, onboard_and_avail
 
 
@@ -288,6 +291,33 @@ def test_chargeback_opened_creates_provider_dispute(
     assert queue[0]["provider_dispute_id"] == "dp_1"
     recorder = _drain()
     assert [m for m in recorder.sent if "ops@" in m[0]]
+
+
+def test_chargeback_opened_without_payment_intent_is_noop(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """A chargeback whose object carries only a charge id (no payment_intent)
+    cannot be mapped to a job. It must not create a Dispute — it is recorded
+    by dedup only and the webhook still returns its normal 2xx."""
+    _job_id, _pid = _paid_job_pid(client, auth, basic_service)
+    _drain()
+    r = client.post(
+        "/v1/payments/webhook",
+        json={
+            "event_id": "evt_cb_no_pi",
+            "kind": "chargeback_opened",
+            "object_id": "dp_no_pi",
+            "amount_minor": 2000,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+    with SessionLocal() as s:
+        assert s.scalar(select(Dispute)) is None
+        assert s.scalar(select(WebhookEvent)) is not None  # dedup row still recorded
+    assert client.get("/v1/admin/disputes", headers=admin).json() == []
+    recorder = _drain()
+    assert recorder.sent == []  # unmappable event: no admin notification
 
 
 def test_chargeback_lost_appends_loss_and_fee(
@@ -729,3 +759,28 @@ def test_concurrent_duplicate_resolve_cannot_double_book(
     with SessionLocal() as s:
         kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
     assert kinds == ["clawback", "refund"]  # the winner's pair only, never four
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel writes are only real on Postgres")
+def test_concurrent_duplicate_dispute_races_to_409(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """UNIQUE(disputes.job_id) backstops the duplicate check; the loser must
+    get the sequential path's 409, not a 500."""
+    job_id = _completed_job(client, auth, basic_service)
+    buyer = auth("buyer", "alice")
+    barrier = threading.Barrier(2)
+
+    def submit(_: int) -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return c.post(
+            f"/v1/jobs/{job_id}/dispute", json={"reason": "raced"}, headers=buyer
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        codes = sorted(pool.map(submit, range(2)))
+    assert codes == [201, 409], codes
+
+    with SessionLocal() as s:
+        assert len(s.scalars(select(Dispute).where(Dispute.job_id == UUID(job_id))).all()) == 1

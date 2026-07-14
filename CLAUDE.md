@@ -130,13 +130,15 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Explicit non-goals (roadmap, not now)
 
-Seller→buyer reviews, moderation/abuse, notification preferences/digests,
-gateway rate-limiting, admin RBAC (single shared admin role for now), and
-OAuth/social login. Seller bidding is out (this is not an auction). Payments
-ship (Stripe Connect via `payments/port.py`, verified against a real Stripe
-test account). Auth ships (DB-backed sessions, real signup/login).
-Notifications + the background scheduler ship (transactional outbox +
-in-process maintenance loop; external-worker extraction needs no schema
-change). Disputes + partial refunds ship (buyer-initiated arbitration, admin
-resolution, Stripe chargebacks recorded through the same webhook) — see
+Moderation/abuse, notification preferences/digests, gateway rate-limiting,
+admin RBAC (single shared admin role for now), and OAuth/social login. Seller
+bidding is out (this is not an auction). Payments ship (Stripe Connect via
+`payments/port.py`, verified against a real Stripe test account). Auth ships
+(DB-backed sessions, real signup/login). Notifications + the background
+scheduler ship (transactional outbox + in-process maintenance loop;
+external-worker extraction needs no schema change). Disputes + partial
+refunds ship (buyer-initiated arbitration, admin resolution, Stripe
+chargebacks recorded through the same webhook). Seller→buyer reviews ship
+(display-only buyer rating aggregate — `POST /v1/seller/jobs/{id}/review`,
+`GET /v1/profile`, `GET /v1/admin/buyers`; gates nothing by design) — see
 `ROADMAP.md`.

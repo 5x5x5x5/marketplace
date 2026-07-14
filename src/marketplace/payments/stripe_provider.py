@@ -203,7 +203,9 @@ class StripeProvider:
         if event.type.startswith("charge.dispute."):
             raw_amount = obj.get("amount")
             amount_minor = None if raw_amount is None else int(raw_amount)
-            related_id = str(obj.get("payment_intent") or obj.get("charge") or "") or None
+            # PaymentIntent-only: the consumer matches Payment.provider_payment_id,
+            # which is always a PI id — a charge id could never match.
+            related_id = str(obj.get("payment_intent") or "") or None
             if event.type == "charge.dispute.closed":
                 outcome = str(obj.get("status", "")) or None
         kind = _EVENT_KINDS.get(event.type, "ignored")

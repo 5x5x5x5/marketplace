@@ -25,6 +25,16 @@ from .port import (
 
 
 class FakeProvider:
+    """Recording seams — two deliberate semantics:
+    * ATTEMPT-recorded: `transfer_keys` appends before the failure checks, so
+      tests can prove WHICH idempotency key a failed attempt used (the
+      payout-retry tests rely on this to show original-key replay).
+    * SUCCESS-recorded: `refunded`, `refund_keys`, `refund_amounts`,
+      `reversals`, `cancelled` append only after the failure checks, so
+      counts equal executed provider legs (the dispute-orphan tests rely on
+      this). Do not "align" one to the other; both directions are load-bearing.
+    """
+
     name = "fake"
 
     def __init__(self) -> None:
@@ -112,7 +122,7 @@ class FakeProvider:
         job_id: str,
         idempotency_key: str,
     ) -> TransferResult:
-        self.transfer_keys.append(idempotency_key)  # every attempt, so tests see retry keys
+        self.transfer_keys.append(idempotency_key)  # ATTEMPT-recorded — see class docstring
         self._maybe_fail()
         self._maybe_fail_key(idempotency_key)
         status = self.next_transfer_status

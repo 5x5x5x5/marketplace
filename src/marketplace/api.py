@@ -25,6 +25,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import notifications, repo
@@ -35,6 +36,7 @@ from .entities import (
     AuditLog,
     AuthSession,
     Availability,
+    BuyerProfile,
     Dispute,
     EmailToken,
     Job,
@@ -46,6 +48,7 @@ from .entities import (
     Quote,
     Review,
     SellerProfile,
+    SellerReview,
     ServiceType,
     Transaction,
     WebhookEvent,
@@ -61,6 +64,7 @@ from .models import (
     AvailabilityRequest,
     BuyerDisputeOut,
     BuyerJobView,
+    BuyerProfileOut,
     DisputeRequest,
     DisputeSource,
     DisputeStatus,
@@ -88,6 +92,7 @@ from .models import (
     SellerOfferView,
     SellerProfileOut,
     SellerProfileUpdate,
+    SellerReviewOut,
     ServiceTypeBody,
     ServiceTypeOut,
     Side,
@@ -454,6 +459,11 @@ def _notify_cancelled(session: Session, job: Job, refunded: bool) -> None:
         )
 
 
+@buyer_router.get("/profile", response_model=BuyerProfileOut)
+def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
+    return repo.get_or_create_buyer(session, buyer_id)
+
+
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut)
 def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id: BuyerId) -> Review:
     job = session.get(Job, job_id)
@@ -464,6 +474,13 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
     if session.scalar(select(Review).where(Review.job_id == job_id)) is not None:
         raise HTTPException(status_code=409, detail="job already reviewed")
 
+    seller = repo.get_or_create_seller(session, job.seller_id)
+    seller.rating_count += 1
+    seller.rating_sum += body.rating
+    # get_or_create_seller's session.get() autoflushes any pending INSERT, so
+    # the review is added only after it — otherwise the UNIQUE(job_id)
+    # violation would surface uncaught by that autoflush, not by the guarded
+    # flush() below.
     review = Review(
         job_id=job.id,
         buyer_id=buyer_id,
@@ -472,10 +489,12 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
         comment=body.comment,
     )
     session.add(review)
-    seller = repo.get_or_create_seller(session, job.seller_id)
-    seller.rating_count += 1
-    seller.rating_sum += body.rating
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
+        # the sequential duplicate, not a 500.
+        raise HTTPException(status_code=409, detail="job already reviewed") from None
     return review
 
 
@@ -497,7 +516,12 @@ def open_dispute(
         job_id=job.id, source=DisputeSource.BUYER, buyer_id=buyer_id, reason=body.reason
     )
     session.add(dispute)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
+        # the sequential duplicate, not a 500.
+        raise HTTPException(status_code=409, detail="job already disputed") from None
     if job.seller_id is not None:
         notifications.enqueue(
             session,
@@ -680,6 +704,42 @@ def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -
     if dispute is None:
         raise HTTPException(status_code=404, detail="no dispute for this job")
     return dispute
+
+
+@seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut)
+def review_buyer(
+    job_id: UUID, body: ReviewRequest, session: SessionDep, seller_id: SellerId
+) -> SellerReview:
+    job = session.get(Job, job_id)
+    if job is None or job.seller_id != seller_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="can only review a completed job")
+    if session.scalar(select(SellerReview).where(SellerReview.job_id == job_id)) is not None:
+        raise HTTPException(status_code=409, detail="job already reviewed")
+
+    buyer = repo.get_or_create_buyer(session, job.buyer_id)
+    buyer.rating_count += 1
+    buyer.rating_sum += body.rating
+    # get_or_create_buyer's session.get() autoflushes any pending INSERT, so
+    # the review is added only after it — otherwise the UNIQUE(job_id)
+    # violation would surface uncaught by that autoflush, not by the guarded
+    # flush() below.
+    review = SellerReview(
+        job_id=job.id,
+        seller_id=seller_id,
+        buyer_id=job.buyer_id,
+        rating=body.rating,
+        comment=body.comment,
+    )
+    session.add(review)
+    try:
+        session.flush()
+    except IntegrityError:
+        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
+        # the sequential duplicate, not a 500.
+        raise HTTPException(status_code=409, detail="job already reviewed") from None
+    return review
 
 
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)
@@ -980,6 +1040,11 @@ def admin_update_seller(
     )
     session.flush()
     return seller
+
+
+@admin_router.get("/buyers", response_model=list[BuyerProfileOut])
+def admin_list_buyers(session: SessionDep, admin_id: AdminId) -> list[BuyerProfile]:
+    return list(session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all())
 
 
 @admin_router.get("/transactions", response_model=list[TransactionOut])
@@ -1377,6 +1442,11 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
             else:
                 payout.status = PayoutStatus.PAID
     elif event.kind == "chargeback_opened":
+        if event.related_id is None:
+            logger.warning(
+                "chargeback event %s has no payment_intent; cannot map to a job", event.event_id
+            )
+            return
         payment = session.scalar(
             select(Payment).where(Payment.provider_payment_id == event.related_id)
         )

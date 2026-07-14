@@ -100,6 +100,18 @@ def test_chargeback_events_map_and_carry_fields(provider: StripeProvider) -> Non
     assert event.outcome == "lost"
 
 
+def test_dispute_event_without_payment_intent_has_no_related_id(provider: StripeProvider) -> None:
+    """related_id is PaymentIntent-only: the consumer matches it against
+    Payment.provider_payment_id (always a PI id), so a bare charge id could
+    never match — carrying it just manufactured a misleading 'unknown charge'
+    lookup."""
+    payload = _event("charge.dispute.created", {"id": "dp_2", "charge": "ch_1", "amount": 500})
+    event = provider.parse_webhook(payload, _signed(payload))
+    assert event.kind == "chargeback_opened"
+    assert event.related_id is None
+    assert event.amount_minor == 500
+
+
 def test_partial_transfer_reversal_is_ignored_not_failed(provider: StripeProvider) -> None:
     """Dispute clawbacks create PARTIAL reversals — Stripe fires
     transfer.reversed for those too, but the object's `reversed` field stays

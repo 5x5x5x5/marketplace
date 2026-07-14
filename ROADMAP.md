@@ -43,6 +43,15 @@ users, then gets forked and specialized per market vertical. The differentiator
   (`charge.dispute.created`/`closed`) ride the same webhook into the same
   `disputes` table, recorded and notified rather than fought — evidence
   submission stays in the Stripe dashboard (fork work). See `SECURITY.md`.
+- **Seller→buyer reviews (done):** second T&S sub-phase, a mirror table
+  (`seller_reviews`, one review per job) feeding a display-only buyer
+  rating aggregate — `GET /v1/profile` for the buyer, `GET /v1/admin/buyers`
+  for admin. The two review directions are independent (no double-blind);
+  the aggregate gates nothing, by design (revisit if ratings ever gate
+  anything). The four disputes-carried minors are closed: race-safe dispute
+  creation, the fake-provider seam documented, the dead charge-only dispute
+  `related_id` fallback deleted, and a DB `CHECK` on `adjustments.amount`.
+  See `SECURITY.md`.
 
 ## Done ✓
 
@@ -73,15 +82,18 @@ list/drain endpoints; an external-worker extraction needs no schema change) ·
 refund/clawback amounts onto an append-only `adjustments` ledger; gross AND
 net-of-adjustments margin reporting; Stripe chargebacks recorded into the
 same table via the existing webhook, not fought — evidence submission is
-fork work; see `SECURITY.md`).
+fork work; see `SECURITY.md`) · **seller→buyer reviews** (mirror
+`seller_reviews` table, one per job; display-only buyer rating aggregate via
+`GET /v1/profile` and `GET /v1/admin/buyers`; independent of the
+buyer→seller direction, no double-blind; see `SECURITY.md`).
 
 ## What's still ahead
 
 Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
 
-1. **Trust & safety** — disputes/chargebacks and partial refunds are done
-   (see "Done" above). Remaining sub-phases, in order: seller→buyer reviews →
-   moderation/abuse → notification preferences (everything sent today is
+1. **Trust & safety** — disputes/chargebacks, partial refunds, and
+   seller→buyer reviews are done (see "Done" above). Remaining sub-phases, in
+   order: moderation/abuse → notification preferences (everything sent today is
    transactional).
 2. **Processing fees in the margin math** — the `Transaction` ledger records
    margin gross of provider fees (Stripe: ~2.9% + 30¢ per charge, and the fee

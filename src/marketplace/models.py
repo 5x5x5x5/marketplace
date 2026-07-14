@@ -209,6 +209,21 @@ class ReviewOut(BaseModel):
     created_at: datetime
 
 
+class SellerReviewOut(BaseModel):
+    """Seller's view of their own review of a buyer. `buyer_id` withheld —
+    every other seller-facing view withholds buyer identity too (asymmetry
+    doctrine); the seller already knows the job, and echoing it back would be
+    the first surface that lets a seller correlate buyers across jobs."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    rating: int
+    comment: str | None
+    created_at: datetime
+
+
 class BuyerDisputeOut(BaseModel):
     """Buyer's view — no seller money (clawback) ever appears here."""
 
@@ -268,6 +283,15 @@ class SellerProfileOut(BaseModel):
     id: str
     tier: str
     capacity: int
+    rating: float | None
+    rating_count: int
+    completed_jobs: int
+
+
+class BuyerProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
     rating: float | None
     rating_count: int
     completed_jobs: int
