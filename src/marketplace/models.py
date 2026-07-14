@@ -11,9 +11,10 @@ Money is `Decimal`, quantized to 2 dp, and serialized as JSON strings.
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 CENTS = Decimal("0.01")
 
@@ -42,6 +43,17 @@ class OfferStatus(StrEnum):
     ACCEPTED = "accepted"
     DECLINED = "declined"
     EXPIRED = "expired"
+
+
+class UserRole(StrEnum):
+    BUYER = "buyer"
+    SELLER = "seller"
+    ADMIN = "admin"  # seeded from settings, never self-signup
+
+
+class EmailTokenPurpose(StrEnum):
+    VERIFY = "verify"
+    RESET = "reset"
 
 
 class PaymentStatus(StrEnum):
@@ -198,10 +210,53 @@ class MarginSummaryOut(BaseModel):
     take_rate: float
 
 
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    email: str
+    role: UserRole
+    display_name: str
+    email_verified: bool
+
+
+class SessionOut(BaseModel):
+    token: str
+    expires_at: datetime
+    user: UserOut
+
+
 # ---------- Request bodies ----------
 #
 # Buyer/seller identity is NOT a body field: it comes from the authenticated
 # principal (see `auth.py`). Accepting it here would let anyone act as anyone.
+
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    role: Literal[UserRole.BUYER, UserRole.SELLER]  # admin is seeded, never signup
+    display_name: str = Field(min_length=1, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+    role: UserRole  # the same email may own one account per role
+
+
+class VerifyRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+class ResetRequest(BaseModel):
+    email: EmailStr
+    role: Literal[UserRole.BUYER, UserRole.SELLER]
+
+
+class ResetConfirmRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class QuoteRequest(BaseModel):

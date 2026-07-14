@@ -25,11 +25,13 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import repo
-from .auth import current_buyer, current_seller, require_admin
+from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
 from .db import get_session, init_db
 from .entities import (
     AuditLog,
+    AuthSession,
     Availability,
+    EmailToken,
     Job,
     Offer,
     Payment,
@@ -179,10 +181,17 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
         locked_job.status = JobStatus.EXPIRED
 
 
+def _sweep_expired_auth(session: Session) -> None:
+    """Expired sessions and email tokens are dead weight — drop them on reads."""
+    session.execute(delete(AuthSession).where(AuthSession.expires_at < _now()))
+    session.execute(delete(EmailToken).where(EmailToken.expires_at < _now()))
+
+
 def _sweep(session: Session, provider: PaymentProvider) -> None:
-    """Everything lazy maintenance does on reads: offer expiry + stale payments."""
+    """Everything lazy maintenance does on reads: offers, payments, auth."""
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
+    _sweep_expired_auth(session)
 
 
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
@@ -964,6 +973,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Create tables for SQLite/dev. Production applies Alembic migrations instead.
     if settings.database_url.startswith("sqlite"):
         init_db()
+    bootstrap_admin()
     logger.info("marketplace starting (db=%s)", settings.database_url.split("://", 1)[0])
     yield
 
@@ -977,6 +987,7 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(auth_router)
 app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)

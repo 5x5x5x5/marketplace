@@ -21,8 +21,14 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   Buyer routes derive `buyer_id` from a buyer token, seller routes derive
   `seller_id` from a seller token, `/v1/admin/*` requires an admin token
   (`auth.py`). Never add a `buyer_id`/`seller_id` body field — that reintroduces
-  impersonation. Auth is pilot-grade HMAC with an `exp` claim (`MARKETPLACE_SECRET`);
-  upgrade path is a real user store + provider. See `SECURITY.md`.
+  impersonation. Identity resolves through `auth_sessions` rows only — a
+  session's sha256-hashed token maps to `(role, user_id)` via one indexed
+  lookup. Never reintroduce token minting or a second identity verifier;
+  `mint_token`/`MARKETPLACE_SECRET` are gone for good. Passwords are stored
+  only as argon2 hashes via `auth.hash_password` (never plaintext, never a
+  weaker hash). Email-verification and password-reset tokens are stored
+  sha256-only (never the raw value) and are single-use (`used_at` set on
+  consumption). See `SECURITY.md`.
 - **Information asymmetry is enforced by the model layer.** `BuyerJobView`/
   `SellerJobView`/`SellerOfferView` are separate Pydantic views; buyer endpoints
   return buyer views, seller endpoints return seller views. Never hand-build a
@@ -82,12 +88,24 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   (`charge:{job_id}`, `transfer:{job_id}`, `refund:{job_id}`, `acct:{seller_id}`),
   not a random value — a retry of the same operation reuses the same key on
   purpose, so it replays the original result instead of double-charging.
+- The `auth` fixture (`tests/conftest.py`) white-box-inserts a `User` row with
+  `id == sub` so pre-existing tests that hand a bare id (`"alice"`, `"carol"`)
+  as the principal keep working without every test signing up a real account.
+  That's why `User.id` is `String(128)` rather than a UUID column — it has to
+  hold both real `uuid4().hex` ids (signup) and short test subs.
+- `mail.use_sender` (`src/marketplace/mail.py`) is the test seam: swap in
+  `RecordingEmailSender` to capture verification/reset tokens instead of
+  scraping the console adapter's log output. Restore the previous sender
+  (`use_sender` returns it) when done — the fixture in `conftest.py` does this
+  around each test.
 
 ## Explicit non-goals (roadmap, not now)
 
 Notifications, seller→buyer reviews, a background scheduler (lazy sweep +
-admin trigger instead), gateway rate-limiting, and replacing pilot HMAC auth with
-a real provider. Seller bidding is out (this is not an auction). Payments now
-ship (Stripe Connect via `payments/port.py`, fake provider for dev/tests); a
-Stripe test account run and disputes/chargebacks + partial refunds are still
-ahead — see `ROADMAP.md`.
+admin trigger instead), gateway rate-limiting, admin RBAC (single shared admin
+role for now), and OAuth/social login. Seller bidding is out (this is not an
+auction). Payments now ship (Stripe Connect via `payments/port.py`, fake
+provider for dev/tests) and are verified against a real Stripe test account;
+disputes/chargebacks + partial refunds are still ahead. Auth now ships
+(DB-backed sessions, real signup/login — see the Non-negotiables above and
+`SECURITY.md`) — see `ROADMAP.md`.

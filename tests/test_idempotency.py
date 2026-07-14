@@ -4,8 +4,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Payment
-from tests.conftest import AuthFactory, Header
+from marketplace.entities import IdempotencyRecord, Payment
+from tests.conftest import TEST_PASSWORD, AuthFactory, Header
 from tests.test_payments import new_job, onboard_and_avail
 
 
@@ -87,3 +87,38 @@ def test_no_auth_passes_through_to_401(client: TestClient) -> None:
         "/v1/quotes", json={"service_type_id": "x"}, headers={"Idempotency-Key": "anon"}
     )
     assert r.status_code == 401
+
+
+def test_auth_paths_never_stored_even_with_key_and_bearer(client: TestClient) -> None:
+    """Auth responses carry raw bearer tokens: a client that attaches
+    Authorization globally AND stamps every POST with an Idempotency-Key must
+    not get its login/signup response captured into idempotency_keys."""
+    signup = client.post(
+        "/v1/auth/signup",
+        json={
+            "email": "idem@example.test",
+            "password": TEST_PASSWORD,
+            "role": "buyer",
+            "display_name": "Idem",
+        },
+        headers={"Idempotency-Key": "blanket-key"},
+    )
+    assert signup.status_code == 201
+    session_token = signup.json()["token"]
+
+    creds = {"email": "idem@example.test", "password": TEST_PASSWORD, "role": "buyer"}
+    stamped = {"Authorization": f"Bearer {session_token}", "Idempotency-Key": "login-key"}
+    login = client.post("/v1/auth/login", json=creds, headers=stamped)
+    assert login.status_code == 200
+    login_token = login.json()["token"]
+
+    with SessionLocal() as s:
+        rows = s.scalars(select(IdempotencyRecord)).all()
+    assert all(login_token not in row.response_body for row in rows)
+    assert all(session_token not in row.response_body for row in rows)
+    assert all(not row.path.startswith("/v1/auth/") for row in rows)
+
+    # A second identical login executes for real — a fresh session, not a replay.
+    again = client.post("/v1/auth/login", json=creds, headers=stamped)
+    assert again.status_code == 200
+    assert again.json()["token"] != login_token

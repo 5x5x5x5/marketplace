@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .models import JobStatus, OfferStatus, PaymentStatus, PayoutStatus
+from .models import EmailTokenPurpose, JobStatus, OfferStatus, PaymentStatus, PayoutStatus, UserRole
 
 
 def _now() -> datetime:
@@ -279,3 +279,50 @@ class IdempotencyRecord(Base):
     response_status: Mapped[int] = mapped_column()
     response_body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+
+
+class User(Base):
+    """Identity + credential. One account carries exactly ONE role; the same
+    email may register once per role. Domain records (Buyer/SellerProfile)
+    stay separate and are keyed by this id.
+
+    String pk (uuid4 hex for real signups) so the test fixture can use the
+    test's plain sub string as the id — existing identity assertions hold."""
+
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", "role"),)
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True, default=lambda: uuid.uuid4().hex)
+    email: Mapped[str] = mapped_column(String(320), index=True)
+    role: Mapped[UserRole] = mapped_column(_enum(UserRole))
+    password_hash: Mapped[str] = mapped_column(String(256))
+    display_name: Mapped[str] = mapped_column(String(128))
+    email_verified: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
+
+
+class AuthSession(Base):
+    """A revocable login. Stores only the sha256 of the opaque bearer —
+    a DB leak never yields usable tokens. Logout/ban/reset delete rows."""
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    expires_at: Mapped[datetime] = mapped_column(_TS)
+
+
+class EmailToken(Base):
+    """Single-use verification/reset token (sha256-stored, like sessions)."""
+
+    __tablename__ = "email_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    purpose: Mapped[EmailTokenPurpose] = mapped_column(_enum(EmailTokenPurpose))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(_TS)
+    used_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
