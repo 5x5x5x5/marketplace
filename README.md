@@ -127,6 +127,10 @@ mail adapter.
 **Payments** — `POST /payments/webhook` (provider event sink, unauthenticated,
 signature-verified)
 
+**Disputes** — Buyer: `POST /jobs/{id}/dispute` · `GET /jobs/{id}/dispute`.
+Seller: `GET /jobs/{id}/dispute`. Admin: `GET /disputes` ·
+`POST /disputes/{id}/resolve`
+
 ## Job & offer state machine
 
 - **Job**: `pending → awaiting_payment? → accepted → completed`; plus `expired`
@@ -186,6 +190,38 @@ Set `SMTP_HOST` (plus port/credentials/`MAIL_FROM`) and mail is real — any
 provider's SMTP endpoint works, and Mailpit works locally. Unset, the console
 adapter logs instead of sending.
 
+## Disputes
+
+A buyer can dispute a **completed** job within `DISPUTE_WINDOW_DAYS` (default
+7) of `completed_at` — one dispute per job; pre-completion problems still use
+the cancel path. An admin arbitrates by setting a `refund_amount`
+(0..buyer_price, a partial Stripe refund to the buyer) and a
+`clawback_amount` (0..seller_payout, a partial transfer reversal from the
+seller) **independently**; `0/0` rejects the dispute. Every resolution
+appends to an append-only `adjustments` ledger — `Transaction` rows are never
+edited, and `Payment.status` is never touched by a partial refund (the charge
+stays `SUCCEEDED`; `REFUNDED` remains reserved for the cancel path's full
+refund). `GET /v1/admin/margins/summary` reports both the gross margin and
+`platform_margin_net` (gross plus clawbacks, minus refunds/chargeback
+losses/fees).
+
+Stripe chargebacks (`charge.dispute.created`/`closed`) ride the same
+`POST /v1/payments/webhook` into the same `disputes` table
+(`source=provider`) — the platform records the outcome and notifies admins
+rather than fighting it; evidence submission stays in the Stripe dashboard (a
+fork's job). A lost chargeback books a `chargeback_loss` adjustment for the
+disputed amount plus a `chargeback_fee` (`CHARGEBACK_FEE_USD`, default
+15.00). An admin's `resolved` status is preserved even if a chargeback closes
+on the same job afterward — the loss/fee still lands in the ledger, but the
+status field keeps recording the arbitration outcome; on a still-`open`
+dispute, the latest provider outcome wins the status instead (one dispute
+row per job, so repeat chargebacks re-annotate and re-adjudicate the same
+row rather than duplicating it).
+
+Dispute views stay asymmetric like everything else: `BuyerDisputeOut` never
+carries the clawback amount, `SellerDisputeOut` never carries the refund
+amount; only the admin view carries both.
+
 ## Built-in adjusters (`pricing.py`)
 
 New adjusters register with `@register("name")`; composing/tuning is config-only.
@@ -207,6 +243,7 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
 ## Out of scope / next
 
-Trust & safety (disputes/chargebacks, partial refunds, fraud review),
+Trust & safety (disputes/chargebacks and partial refunds now ship — see
+Disputes above; seller→buyer reviews, moderation/abuse still ahead),
 notification preferences/digests and push/SMS channels, fee-aware margin math,
 admin RBAC, and OAuth/social login. See `ROADMAP.md`.

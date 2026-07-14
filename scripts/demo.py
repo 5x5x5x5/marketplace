@@ -186,11 +186,29 @@ def _run(c: TestClient) -> None:
     assert offer_mails, "maintenance loop did not deliver the offer email within 15s"
     print(f"   loop delivered: to={offer_mails[0][0]} subject={offer_mails[0][1]!r}")
 
+    # --- Act 4: disputes (arbitration over the escrowed money) ---
+    print("14. Alice disputes job 1; the admin resolves it partially")
+    dispute = c.post(
+        f"/v1/jobs/{job_id}/dispute",
+        json={"reason": "arrived late, partial service"},
+        headers=alice,
+    ).json()
+    resolved = c.post(
+        f"/v1/admin/disputes/{dispute['id']}/resolve",
+        json={"refund_amount": "6.00", "clawback_amount": "4.00", "note": "split the difference"},
+        headers=admin,
+    ).json()
+    summary2 = c.get("/v1/admin/margins/summary", headers=admin).json()
+    print("   resolved: refund=6.00 clawback=4.00")
+    print(f"   margin gross={summary2['platform_margin']} net={summary2['platform_margin_net']}")
+
     assert onboard["payments_ready"] is True
     assert view2["status"] == "accepted"
     assert payout2["status"] == "paid"
     assert me["id"] == alice_id
     assert me["email"] == "buyer@demo.test"
+    assert resolved["status"] == "resolved"
+    assert summary2["platform_margin_net"] != summary2["platform_margin"]
     print(
         "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
         "payout paid, offer email loop-delivered."
