@@ -191,6 +191,30 @@ def test_reset_request_never_confirms_account_existence(
     assert mail_outbox.sent == []  # but nothing was sent
 
 
+class _ExplodingSender:
+    def send(self, to: str, subject: str, body: str) -> None:
+        raise RuntimeError("provider down")
+
+
+def test_mail_outage_never_fails_or_fingerprints_requests(client: TestClient) -> None:
+    from marketplace.mail import use_sender
+
+    previous = use_sender(_ExplodingSender())
+    try:
+        # Signup survives a mail outage (account + session still created).
+        body = _signup(client, "buyer")
+        header = {"Authorization": f"Bearer {body['token']}"}  # pyright: ignore[reportIndexIssue]
+        assert client.get("/v1/auth/me", headers=header).status_code == 200
+        # Reset-request stays a uniform 200 for an EXISTING account even when send explodes.
+        r = client.post(
+            "/v1/auth/password-reset/request",
+            json={"email": "kim@example.test", "role": "buyer"},
+        )
+        assert r.status_code == 200 and r.json() == {"status": "ok"}
+    finally:
+        use_sender(previous)
+
+
 def test_sweep_deletes_expired_sessions(client: TestClient, auth: AuthFactory) -> None:
     from datetime import UTC, datetime, timedelta
 

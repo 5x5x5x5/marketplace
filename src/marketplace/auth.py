@@ -160,11 +160,17 @@ def _issue_email_token(
         )
     )
     action = "verify" if purpose is EmailTokenPurpose.VERIFY else "password-reset/confirm"
-    mail.send(
-        user.email,
-        "Verify your email" if purpose is EmailTokenPurpose.VERIFY else "Reset your password",
-        f"Visit {settings.base_url}/{action}?token={raw}",
-    )
+    try:
+        mail.send(
+            user.email,
+            "Verify your email" if purpose is EmailTokenPurpose.VERIFY else "Reset your password",
+            f"Visit {settings.base_url}/{action}?token={raw}",
+        )
+    except Exception:
+        # Delivery failure must never fail (or fingerprint) the enclosing
+        # request: signup still succeeds, reset-request stays a uniform 200.
+        # The token row stays; the user can re-request and the sweep expires it.
+        logger.warning("email send failed to=%s purpose=%s", user.email, purpose)
 
 
 @auth_router.post("/signup", response_model=SessionOut, status_code=201)
@@ -243,7 +249,12 @@ def request_password_reset(body: ResetRequest, db: _SessionDep, mail: MailDep) -
     user = db.scalar(select(User).where(User.email == body.email.lower(), User.role == body.role))
     if user is not None:
         _issue_email_token(db, mail, user, EmailTokenPurpose.RESET)
-    return {"status": "ok"}  # identical either way: no account enumeration
+    # Identical response either way: no account enumeration via status code or
+    # body. A residual timing delta remains — the exists-branch does strictly
+    # more work (an insert plus a send attempt) than the ghost branch — and is
+    # accepted at pilot grade alongside the documented no-rate-limiting
+    # posture; closing it needs constant-time work we're not doing yet.
+    return {"status": "ok"}
 
 
 @auth_router.post("/password-reset/confirm")

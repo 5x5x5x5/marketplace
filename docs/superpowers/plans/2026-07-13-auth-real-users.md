@@ -1010,11 +1010,17 @@ def _issue_email_token(
         )
     )
     action = "verify" if purpose is EmailTokenPurpose.VERIFY else "password-reset/confirm"
-    mail.send(
-        user.email,
-        "Verify your email" if purpose is EmailTokenPurpose.VERIFY else "Reset your password",
-        f"Visit {settings.base_url}/{action}?token={raw}",
-    )
+    try:
+        mail.send(
+            user.email,
+            "Verify your email" if purpose is EmailTokenPurpose.VERIFY else "Reset your password",
+            f"Visit {settings.base_url}/{action}?token={raw}",
+        )
+    except Exception:
+        # Delivery failure must never fail (or fingerprint) the enclosing
+        # request: signup still succeeds, reset-request stays a uniform 200.
+        # The token row stays; the user can re-request and the sweep expires it.
+        logger.warning("email send failed to=%s purpose=%s", user.email, purpose)
 ```
 
 In `signup`, after the profile-row creation and before `return _session_out(...)`, add the parameter `mail: MailDep` to the signature and the call:
