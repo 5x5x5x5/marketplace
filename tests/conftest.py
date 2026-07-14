@@ -11,6 +11,11 @@ import tempfile
 
 os.environ.setdefault("DATABASE_URL", f"sqlite+pysqlite:///{tempfile.mkdtemp()}/test.db")
 os.environ.setdefault("MARKETPLACE_SECRET", "test-secret")
+# Real env vars outrank .env in pydantic-settings: pin these empty so a
+# developer's .env (with a real Stripe key) can never flip the suite from the
+# fake provider onto the live API.
+os.environ.setdefault("STRIPE_SECRET_KEY", "")
+os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
 
 from collections.abc import Callable, Iterator
 
