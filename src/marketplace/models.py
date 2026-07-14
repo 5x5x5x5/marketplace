@@ -44,6 +44,17 @@ class OfferStatus(StrEnum):
     EXPIRED = "expired"
 
 
+class UserRole(StrEnum):
+    BUYER = "buyer"
+    SELLER = "seller"
+    ADMIN = "admin"  # seeded from settings, never self-signup
+
+
+class EmailTokenPurpose(StrEnum):
+    VERIFY = "verify"
+    RESET = "reset"
+
+
 class PaymentStatus(StrEnum):
     PENDING = "pending"  # created; awaiting buyer confirmation / provider settlement
     SUCCEEDED = "succeeded"
