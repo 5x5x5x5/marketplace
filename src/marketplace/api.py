@@ -25,6 +25,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import notifications, repo
@@ -46,6 +47,7 @@ from .entities import (
     Quote,
     Review,
     SellerProfile,
+    SellerReview,
     ServiceType,
     Transaction,
     WebhookEvent,
@@ -88,6 +90,7 @@ from .models import (
     SellerOfferView,
     SellerProfileOut,
     SellerProfileUpdate,
+    SellerReviewOut,
     ServiceTypeBody,
     ServiceTypeOut,
     Side,
@@ -680,6 +683,38 @@ def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -
     if dispute is None:
         raise HTTPException(status_code=404, detail="no dispute for this job")
     return dispute
+
+
+@seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut)
+def review_buyer(
+    job_id: UUID, body: ReviewRequest, session: SessionDep, seller_id: SellerId
+) -> SellerReview:
+    job = session.get(Job, job_id)
+    if job is None or job.seller_id != seller_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(status_code=409, detail="can only review a completed job")
+    if session.scalar(select(SellerReview).where(SellerReview.job_id == job_id)) is not None:
+        raise HTTPException(status_code=409, detail="job already reviewed")
+
+    review = SellerReview(
+        job_id=job.id,
+        seller_id=seller_id,
+        buyer_id=job.buyer_id,
+        rating=body.rating,
+        comment=body.comment,
+    )
+    session.add(review)
+    buyer = repo.get_or_create_buyer(session, job.buyer_id)
+    buyer.rating_count += 1
+    buyer.rating_sum += body.rating
+    try:
+        session.flush()
+    except IntegrityError:
+        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
+        # the sequential duplicate, not a 500.
+        raise HTTPException(status_code=409, detail="job already reviewed") from None
+    return review
 
 
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)

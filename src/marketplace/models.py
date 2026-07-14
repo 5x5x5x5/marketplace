@@ -209,6 +209,17 @@ class ReviewOut(BaseModel):
     created_at: datetime
 
 
+class SellerReviewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    buyer_id: str
+    rating: int
+    comment: str | None
+    created_at: datetime
+
+
 class BuyerDisputeOut(BaseModel):
     """Buyer's view — no seller money (clawback) ever appears here."""
 
