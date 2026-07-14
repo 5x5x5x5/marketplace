@@ -14,7 +14,7 @@ from marketplace import api
 from marketplace.db import SessionLocal
 from marketplace.entities import Adjustment, BuyerProfile, Dispute, Job
 from marketplace.models import AdjustmentKind, DisputeSource
-from tests.conftest import IS_POSTGRES, AuthFactory
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.test_payments import accept_first_offer, new_job, onboard_and_avail
 
 
@@ -177,3 +177,34 @@ def test_concurrent_duplicate_review_races_to_409(
 
     with SessionLocal() as s:
         assert len(s.scalars(select(SellerReview)).all()) == 1
+
+
+def test_buyer_profile_surface(client: TestClient, basic_service: str, auth: AuthFactory) -> None:
+    buyer = auth("buyer", "alice")
+    r = client.get("/v1/profile", headers=buyer)
+    assert r.status_code == 200
+    assert r.json() == {"id": "alice", "rating": None, "rating_count": 0, "completed_jobs": 0}
+
+    job_id = _completed_job(client, auth, basic_service)
+    client.post(
+        f"/v1/seller/jobs/{job_id}/review", json={"rating": 4}, headers=auth("seller", "s1")
+    )
+    body = client.get("/v1/profile", headers=buyer).json()
+    assert body["rating"] == 4.0
+    assert body["rating_count"] == 1
+    assert body["completed_jobs"] == 1
+
+
+def test_admin_buyers_list(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    client.post(
+        f"/v1/seller/jobs/{job_id}/review", json={"rating": 5}, headers=auth("seller", "s1")
+    )
+    r = client.get("/v1/admin/buyers", headers=admin)
+    assert r.status_code == 200
+    rows = {b["id"]: b for b in r.json()}
+    assert rows["alice"]["rating"] == 5.0
+    # Role guard: a buyer token cannot read the admin list.
+    assert client.get("/v1/admin/buyers", headers=auth("buyer", "alice")).status_code == 403

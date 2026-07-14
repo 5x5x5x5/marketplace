@@ -284,6 +284,15 @@ class SellerProfileOut(BaseModel):
     completed_jobs: int
 
 
+class BuyerProfileOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    rating: float | None
+    rating_count: int
+    completed_jobs: int
+
+
 class OnboardingOut(BaseModel):
     onboarding_url: str
     payments_ready: bool

@@ -36,6 +36,7 @@ from .entities import (
     AuditLog,
     AuthSession,
     Availability,
+    BuyerProfile,
     Dispute,
     EmailToken,
     Job,
@@ -63,6 +64,7 @@ from .models import (
     AvailabilityRequest,
     BuyerDisputeOut,
     BuyerJobView,
+    BuyerProfileOut,
     DisputeRequest,
     DisputeSource,
     DisputeStatus,
@@ -455,6 +457,11 @@ def _notify_cancelled(session: Session, job: Job, refunded: bool) -> None:
             job.buyer_id,
             {"job_id": str(job.id), "buyer_price": str(job.buyer_price)},
         )
+
+
+@buyer_router.get("/profile", response_model=BuyerProfileOut)
+def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
+    return repo.get_or_create_buyer(session, buyer_id)
 
 
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut)
@@ -1015,6 +1022,11 @@ def admin_update_seller(
     )
     session.flush()
     return seller
+
+
+@admin_router.get("/buyers", response_model=list[BuyerProfileOut])
+def admin_list_buyers(session: SessionDep, admin_id: AdminId) -> list[BuyerProfile]:
+    return list(session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all())
 
 
 @admin_router.get("/transactions", response_model=list[TransactionOut])
