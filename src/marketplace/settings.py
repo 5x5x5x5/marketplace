@@ -37,5 +37,14 @@ class Settings(BaseSettings):
     notify_max_attempts: int = 5
     sweep_interval_seconds: int = 60
 
+    # Mail delivery: SMTP_HOST set -> stdlib SMTP adapter (any provider's SMTP
+    # endpoint, or Mailpit locally); empty -> console adapter (logs only).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+    mail_from: str = "marketplace@localhost"
+
 
 settings = Settings()

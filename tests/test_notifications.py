@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -280,3 +281,85 @@ def test_payout_failure_reaches_admin(
     assert len(admin_mail) == 1
     assert "FAILED" in admin_mail[0][1]
     assert "retry" in admin_mail[0][2].lower()
+
+
+# ---------- SMTP adapter ----------
+
+
+def test_smtp_sender_speaks_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    import smtplib
+
+    from marketplace.mail import SmtpEmailSender
+
+    calls: list[tuple[str, object]] = []
+
+    class _FakeSMTP:
+        def __init__(self, host: str, port: int, timeout: float = 0) -> None:
+            calls.append(("connect", (host, port)))
+
+        def __enter__(self) -> "_FakeSMTP":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            calls.append(("quit", ()))
+
+        def starttls(self) -> None:
+            calls.append(("starttls", ()))
+
+        def login(self, user: str, password: str) -> None:
+            calls.append(("login", (user, password)))
+
+        def send_message(self, message: object) -> None:
+            calls.append(("send", message))
+
+    monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
+    sender = SmtpEmailSender(
+        host="mail.example.test",
+        port=587,
+        username="u",
+        password="p",
+        starttls=True,
+        from_addr="noreply@example.test",
+    )
+    sender.send("to@example.test", "Subject!", "Body text")
+
+    kinds = [c[0] for c in calls]
+    assert kinds == ["connect", "starttls", "login", "send", "quit"]
+    message = calls[3][1]
+    assert message["From"] == "noreply@example.test"  # pyright: ignore[reportIndexIssue]
+    assert message["To"] == "to@example.test"  # pyright: ignore[reportIndexIssue]
+    assert message["Subject"] == "Subject!"  # pyright: ignore[reportIndexIssue]
+
+
+def test_smtp_sender_skips_login_and_tls_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smtplib
+
+    from marketplace.mail import SmtpEmailSender
+
+    kinds: list[str] = []
+
+    class _FakeSMTP:
+        def __init__(self, host: str, port: int, timeout: float = 0) -> None:
+            kinds.append("connect")
+
+        def __enter__(self) -> "_FakeSMTP":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            kinds.append("quit")
+
+        def send_message(self, message: object) -> None:
+            kinds.append("send")
+
+    monkeypatch.setattr(smtplib, "SMTP", _FakeSMTP)
+    SmtpEmailSender(
+        host="mailpit.local",
+        port=1025,
+        username="",
+        password="",
+        starttls=False,
+        from_addr="noreply@example.test",
+    ).send("to@example.test", "s", "b")
+    assert kinds == ["connect", "send", "quit"]
