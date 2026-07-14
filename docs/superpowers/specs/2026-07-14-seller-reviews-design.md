@@ -79,10 +79,13 @@ IntegrityError-catch pattern, applied here from day one).
 
 ### Display surfaces (both new — no buyer-profile read endpoint exists today)
 
-- `GET /v1/buyer/me` → `BuyerProfileOut` (`id`, `rating`, `rating_count`,
-  `completed_jobs`). The buyer sees their own aggregate; individual seller
-  reviews/comments are **not** exposed to the buyer (display-only aggregate;
-  comment visibility is a moderation-phase question).
+- `GET /v1/profile` → `BuyerProfileOut` (`id`, `rating`, `rating_count`,
+  `completed_jobs`) — mirrors the existing `GET /v1/seller/profile`; the buyer
+  router's prefix is `/v1`. *(Amended from `/v1/buyer/me` during planning —
+  route shape follows the codebase convention.)* The buyer sees their own
+  aggregate; individual seller reviews/comments are **not** exposed to the
+  buyer (display-only aggregate; comment visibility is a moderation-phase
+  question).
 - `GET /v1/admin/buyers` → `list[AdminBuyerOut]` (profile fields + aggregate),
   ordered by `id`. Admins additionally get per-review detail later if
   moderation needs it — YAGNI now.
@@ -94,12 +97,17 @@ IntegrityError-catch pattern, applied here from day one).
 500s. Catch `IntegrityError`, roll back, return the sequential path's 409
 ("job already disputed"). PG-gated race test (SQLite serializes).
 
-(b) **`transfer_to_seller` key-seam inconsistency.** `FakeProvider.
-transfer_to_seller` appends to `transfer_keys` *before* its fail checks
-(`fake.py:115`), so failed attempts record keys; the other seams record only
-on success. Align: record after the fail checks, like `charge_buyer`/`refund`.
-Fix any tests that (accidentally) relied on failed-attempt keys by asserting
-attempt behavior explicitly via the existing seams.
+(b) **`transfer_to_seller` key-seam inconsistency.** *(Amended during
+planning.)* Original direction — align to record-on-success — is wrong:
+`test_admin_retries_failed_payout` **relies** on the failed attempt's key
+being recorded (it is how the test proves the retry replays the ORIGINAL
+idempotency key), and `test_payments_port.py:153` explicitly asserts the
+opposite (success-only) semantics for `reverse_transfer`. Both directions
+are deliberate and test-guarded; flipping either breaks a discriminating
+test for zero consumers. Resolution: **declare the asymmetry** — a
+`FakeProvider` docstring section naming which seams record attempts
+(`transfer_keys`) vs. successes (`refund_keys`, `refund_amounts`,
+`refunded`, `reversals`, `cancelled`) and why. No behavior change.
 
 (c) **Dead charge-only `related_id` fallback.**
 `stripe_provider.parse_webhook` builds dispute `related_id` from
@@ -127,9 +135,8 @@ New `tests/test_seller_reviews.py`:
   review: correct aggregate); `GET /v1/admin/buyers` lists profiles, admin-only.
 - PG-gated: concurrent duplicate review → exactly one row, loser gets 409.
 
-Riders: (a) PG-gated concurrent duplicate dispute → 409 not 500; (b) seam
-change covered by adjusting any affected fake-provider tests + one assertion
-that a failed transfer records no key; (c) webhook unit test: dispute event
+Riders: (a) PG-gated concurrent duplicate dispute → 409 not 500; (b) docs
+only — no behavior change, no test; (c) webhook unit test: dispute event
 with only a `charge` id → ignored/no-dispute (delete or repoint any test
 asserting the fallback); (d) migration test — existing "migrations from
 scratch" gate now counts 6, plus one test that a negative adjustment amount
