@@ -9,12 +9,14 @@ by swapping the client for httpx pointed at your host.
 
 import os
 import tempfile
+import time
 from uuid import UUID
 
 # Point at a throwaway DB before importing the app.
 os.environ.setdefault("DATABASE_URL", f"sqlite+pysqlite:///{tempfile.mkdtemp()}/demo.db")
 os.environ.setdefault("ADMIN_EMAIL", "admin@demo.test")
 os.environ.setdefault("ADMIN_PASSWORD", "demo-admin-password")
+os.environ.setdefault("NOTIFY_DRAIN_SECONDS", "1")  # fast maintenance-loop ticks for act 13
 # Real env vars outrank .env in pydantic-settings: pin these empty so a
 # developer's .env (with a real Stripe key) can never flip this demo from the
 # fake provider onto the live API.
@@ -28,6 +30,7 @@ from sqlalchemy import select
 from marketplace import api
 from marketplace.db import SessionLocal, init_db
 from marketplace.entities import Payment
+from marketplace.mail import RecordingEmailSender, use_sender
 from marketplace.models import PaymentStatus
 from marketplace.payments import fake_provider
 
@@ -167,12 +170,31 @@ def _run(c: TestClient) -> None:
     me = c.get("/v1/auth/me", headers=alice).json()
     print(f"   me: id={me['id']} email={me['email']} role={me['role']}")
 
+    # --- Act 3: notifications, delivered by the maintenance loop itself ---
+    print("13. Alice orders once more; the offer email arrives via the loop (no manual drain)")
+    outbox = RecordingEmailSender()
+    previous_sender = use_sender(outbox)
+    quote3 = c.post("/v1/quotes", json={"service_type_id": sid}, headers=alice).json()
+    job3 = c.post("/v1/jobs", json={"quote_id": quote3["id"]}, headers=alice).json()
+    assert job3["status"] == "pending", job3
+    deadline = time.time() + 15
+    offer_mails: list[tuple[str, str, str]] = []
+    while time.time() < deadline and not offer_mails:
+        time.sleep(0.5)
+        offer_mails = [m for m in outbox.sent if "New offer" in m[1]]
+    use_sender(previous_sender)
+    assert offer_mails, "maintenance loop did not deliver the offer email within 15s"
+    print(f"   loop delivered: to={offer_mails[0][0]} subject={offer_mails[0][1]!r}")
+
     assert onboard["payments_ready"] is True
     assert view2["status"] == "accepted"
     assert payout2["status"] == "paid"
     assert me["id"] == alice_id
     assert me["email"] == "buyer@demo.test"
-    print("\nAll asserts passed: onboarding ready, async accept resolved via webhook, payout paid.")
+    print(
+        "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
+        "payout paid, offer email loop-delivered."
+    )
 
 
 if __name__ == "__main__":

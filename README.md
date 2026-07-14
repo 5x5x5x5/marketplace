@@ -120,7 +120,8 @@ mail adapter.
 `PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
 `PUT /config/matching_strategy` · `PUT /config/adjuster_params/{name}` ·
 `PUT /sellers/{id}` (tier/capacity) · `GET /transactions` · `GET /payouts` ·
-`POST /payouts/{id}/retry` · `GET /margins/summary` · `GET /audit` ·
+`POST /payouts/{id}/retry` · `GET /notifications` ·
+`POST /notifications/drain` · `GET /margins/summary` · `GET /audit` ·
 `GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep`
 
 **Payments** — `POST /payments/webhook` (provider event sink, unauthenticated,
@@ -162,6 +163,29 @@ authenticated principal.
 Configuring a real Stripe account: point its webhook at
 `POST /v1/payments/webhook` and set `STRIPE_WEBHOOK_SECRET` to verify signatures.
 
+## Notifications
+
+Seven lifecycle events email the right party: the seller's new-offer alert
+(the one that makes 2-minute offer TTLs livable), the buyer's
+accepted/payment-due, completed, expired, and refund notices, a cancel notice
+to a committed seller, and a payout-failure alert to every admin.
+
+Delivery is a **transactional outbox**: the state transition and its
+`notifications` row commit in the same transaction (a rolled-back accept never
+emails anyone), and an in-process maintenance loop drains pending rows every
+`NOTIFY_DRAIN_SECONDS` with retry/backoff (`NOTIFY_MAX_ATTEMPTS`, then
+terminal `failed` — inspect via `GET /v1/admin/notifications`, force a pass
+with `POST /v1/admin/notifications/drain`). The same loop runs the sweeps
+every `SWEEP_INTERVAL_SECONDS`, so offers, stale payments, and expired
+sessions die on a clock even with zero traffic.
+
+Mail bodies respect information asymmetry: seller emails carry the payout and
+never the buyer price; buyer emails the reverse.
+
+Set `SMTP_HOST` (plus port/credentials/`MAIL_FROM`) and mail is real — any
+provider's SMTP endpoint works, and Mailpit works locally. Unset, the console
+adapter logs instead of sending.
+
 ## Built-in adjusters (`pricing.py`)
 
 New adjusters register with `@register("name")`; composing/tuning is config-only.
@@ -183,6 +207,6 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
 ## Out of scope / next
 
-Notifications (the mail port is in place; nothing sends push/SMS yet), trust &
-safety (disputes/chargebacks, partial refunds, fraud review), a background
-scheduler, and OAuth/social login. See `ROADMAP.md`.
+Trust & safety (disputes/chargebacks, partial refunds, fraud review),
+notification preferences/digests and push/SMS channels, fee-aware margin math,
+admin RBAC, and OAuth/social login. See `ROADMAP.md`.
