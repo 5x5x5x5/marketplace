@@ -216,3 +216,39 @@ def test_resolution_bounds_and_convergence(
     # Retry converges: same keys replay the succeeded leg.
     resolved = _resolve(client, admin, str(dispute["id"]), "6.00", "4.00")
     assert resolved["status"] == "resolved"
+
+
+def test_partial_failure_retry_replays_succeeded_leg_by_key(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+) -> None:
+    job_id = _completed_job(client, auth, basic_service)
+    dispute = _open_dispute(client, auth, job_id)
+
+    # Refund succeeds, then the reversal leg fails.
+    fake_payments.fail_keys = {f"reversal:{job_id}:dispute"}
+    r = client.post(
+        f"/v1/admin/disputes/{dispute['id']}/resolve",
+        json={"refund_amount": "6.00", "clawback_amount": "4.00", "note": ""},
+        headers=admin,
+    )
+    assert r.status_code == 502
+    with SessionLocal() as s:
+        assert s.scalar(select(Adjustment)) is None  # nothing ledgered mid-flight
+    assert len(fake_payments.refund_keys) == 1  # the refund DID execute at the provider
+
+    # Retry converges: the refund leg replays the SAME key (a no-op on real
+    # Stripe), the reversal completes, and the ledger lands exactly once.
+    resolved = _resolve(client, admin, str(dispute["id"]), "6.00", "4.00")
+    assert resolved["status"] == "resolved"
+    assert fake_payments.refund_keys == [
+        f"refund:{job_id}:dispute",
+        f"refund:{job_id}:dispute",
+    ]  # two calls, identical key => provider-side replay, not a second refund
+    assert len(fake_payments.reversals) == 1
+    with SessionLocal() as s:
+        kinds = sorted(a.kind.value for a in s.scalars(select(Adjustment)).all())
+    assert kinds == ["clawback", "refund"]

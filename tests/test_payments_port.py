@@ -140,3 +140,16 @@ def test_fake_webhook_passes_chargeback_fields_through() -> None:
     assert event.related_id == "pay_fake_9"
     assert event.amount_minor == 8000
     assert event.outcome is None
+
+
+def test_fake_fail_keys_targets_one_keyed_call() -> None:
+    fake = FakeProvider()
+    fake.fail_keys = {"reversal:j:dispute"}
+    fake.refund(
+        "pay_fake_1", idempotency_key="refund:j:dispute", amount=Decimal("1.00")
+    )  # unaffected
+    with pytest.raises(PaymentError):
+        fake.reverse_transfer("tr_1", amount=Decimal("1.00"), idempotency_key="reversal:j:dispute")
+    assert fake.reversals == []  # failed call not recorded
+    fake.reverse_transfer("tr_1", amount=Decimal("1.00"), idempotency_key="reversal:j:dispute")
+    assert len(fake.reversals) == 1  # one-shot: cleared after firing

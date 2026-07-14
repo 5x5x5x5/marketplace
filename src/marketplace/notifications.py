@@ -147,22 +147,26 @@ def _render_dispute_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
 
 
 def _render_dispute_resolved_buyer(p: dict[str, Any]) -> tuple[str, str]:
+    refund_line = (
+        "No refund was issued."
+        if p["refund_amount"] == "0.00"
+        else f"Refund issued to you: {p['refund_amount']}."
+    )
     return (
         "Your dispute was resolved",
-        (
-            f"Your dispute on job {p['job_id']} was resolved.\n"
-            f"Refund issued to you: {p['refund_amount']}."
-        ),
+        f"Your dispute on job {p['job_id']} was resolved.\n{refund_line}",
     )
 
 
 def _render_dispute_resolved_seller(p: dict[str, Any]) -> tuple[str, str]:
+    clawback_line = (
+        "No amount was reclaimed from your payout."
+        if p["clawback_amount"] == "0.00"
+        else f"Amount reclaimed from your payout: {p['clawback_amount']}."
+    )
     return (
         "A dispute on your job was resolved",
-        (
-            f"The dispute on job {p['job_id']} was resolved.\n"
-            f"Amount reclaimed from your payout: {p['clawback_amount']}."
-        ),
+        f"The dispute on job {p['job_id']} was resolved.\n{clawback_line}",
     )
 
 
