@@ -1442,6 +1442,11 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
             else:
                 payout.status = PayoutStatus.PAID
     elif event.kind == "chargeback_opened":
+        if event.related_id is None:
+            logger.warning(
+                "chargeback event %s has no payment_intent; cannot map to a job", event.event_id
+            )
+            return
         payment = session.scalar(
             select(Payment).where(Payment.provider_payment_id == event.related_id)
         )

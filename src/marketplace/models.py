@@ -210,11 +210,15 @@ class ReviewOut(BaseModel):
 
 
 class SellerReviewOut(BaseModel):
+    """Seller's view of their own review of a buyer. `buyer_id` withheld —
+    every other seller-facing view withholds buyer identity too (asymmetry
+    doctrine); the seller already knows the job, and echoing it back would be
+    the first surface that lets a seller correlate buyers across jobs."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     job_id: UUID
-    buyer_id: str
     rating: int
     comment: str | None
     created_at: datetime

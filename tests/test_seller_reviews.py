@@ -81,7 +81,7 @@ def test_seller_reviews_buyer_happy_path_and_aggregate(
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["buyer_id"] == "alice"
+    assert "buyer_id" not in body  # asymmetry doctrine: sellers never see buyer identity
     assert body["rating"] == 4
     assert "seller_id" not in body  # mirror of ReviewOut: author id not echoed
 
@@ -177,6 +177,10 @@ def test_concurrent_duplicate_review_races_to_409(
 
     with SessionLocal() as s:
         assert len(s.scalars(select(SellerReview)).all()) == 1
+        prof = s.get(BuyerProfile, "alice")
+        assert prof is not None
+        assert prof.rating_count == 1
+        assert prof.rating_sum == 5
 
 
 def test_buyer_profile_surface(client: TestClient, basic_service: str, auth: AuthFactory) -> None:
