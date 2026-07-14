@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from . import repo
+from . import notifications, repo
 from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
 from .db import get_session, init_db
 from .entities import (
@@ -51,6 +51,7 @@ from .models import (
     AuditOut,
     AvailabilityRequest,
     BuyerJobView,
+    EventKind,
     JobCreateRequest,
     JobStatus,
     MarginFloorBody,
@@ -104,14 +105,40 @@ def _now() -> datetime:
 
 
 def _create_offer(session: Session, job: Job, seller_id: str, payout: Any) -> None:
+    expires_at = _now() + timedelta(minutes=settings.offer_ttl_minutes)
     session.add(
         Offer(
             job_id=job.id,
             service_type_id=job.service_type_id,
             seller_id=seller_id,
             seller_payout=payout,
-            expires_at=_now() + timedelta(minutes=settings.offer_ttl_minutes),
+            expires_at=expires_at,
         )
+    )
+    notifications.enqueue(
+        session,
+        EventKind.OFFER_RECEIVED,
+        seller_id,
+        {
+            "job_id": str(job.id),
+            "service_type_id": job.service_type_id,
+            "seller_payout": str(payout),
+            "expires_at": expires_at.isoformat(),
+        },
+    )
+
+
+def _expire_unmatched(session: Session, job: Job) -> None:
+    job.status = JobStatus.EXPIRED
+    notifications.enqueue(
+        session,
+        EventKind.JOB_EXPIRED_BUYER,
+        job.buyer_id,
+        {
+            "job_id": str(job.id),
+            "service_type_id": job.service_type_id,
+            "reason": "no seller available",
+        },
     )
 
 
@@ -123,7 +150,7 @@ def _match_and_offer(session: Session, job: Job) -> None:
     """
     cfg = repo.load_pricing_config(session, job.service_type_id)
     if cfg is None:
-        job.status = JobStatus.EXPIRED
+        _expire_unmatched(session, job)
         return
     seen = repo.sellers_seen_for_job(session, job.id)
     candidates = repo.eligible_candidates(session, job.service_type_id, seen)
@@ -132,7 +159,7 @@ def _match_and_offer(session: Session, job: Job) -> None:
     strategy = STRATEGIES.get(cfg.matching_strategy)
     result = strategy(job.buyer_price, candidates, cfg, supply, demand) if strategy else None
     if result is None:
-        job.status = JobStatus.EXPIRED
+        _expire_unmatched(session, job)
     else:
         _create_offer(session, job, result.seller_id, result.seller_payout)
 
@@ -179,6 +206,16 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
                 continue  # provider hiccup: leave it; the next sweep retries
             payment.status = PaymentStatus.FAILED
         locked_job.status = JobStatus.EXPIRED
+        notifications.enqueue(
+            session,
+            EventKind.JOB_EXPIRED_BUYER,
+            locked_job.buyer_id,
+            {
+                "job_id": str(locked_job.id),
+                "service_type_id": locked_job.service_type_id,
+                "reason": "payment window elapsed",
+            },
+        )
 
 
 def _sweep_expired_auth(session: Session) -> None:
@@ -337,12 +374,36 @@ def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: P
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
     try:
-        _release_payment(session, provider, job)
+        refunded = _release_payment(session, provider, job)
     except PaymentError as exc:
         logger.warning("payment release failed for job %s: %s", job.id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+    _notify_cancelled(session, job, refunded)
     job.status = JobStatus.CANCELLED
     return job
+
+
+def _notify_cancelled(session: Session, job: Job, refunded: bool) -> None:
+    """Cancel notices: the committed seller always hears; the buyer only gets a
+    receipt when money actually moved back (never a notice of their own action)."""
+    if job.seller_id is not None:
+        notifications.enqueue(
+            session,
+            EventKind.JOB_CANCELLED_SELLER,
+            job.seller_id,
+            {
+                "job_id": str(job.id),
+                "service_type_id": job.service_type_id,
+                "seller_payout": str(job.seller_payout),
+            },
+        )
+    if refunded:
+        notifications.enqueue(
+            session,
+            EventKind.REFUND_ISSUED_BUYER,
+            job.buyer_id,
+            {"job_id": str(job.id), "buyer_price": str(job.buyer_price)},
+        )
 
 
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut)
@@ -383,20 +444,23 @@ def _expire_open_offers(session: Session, job_id: UUID) -> None:
         offer.responded_at = _now()
 
 
-def _release_payment(session: Session, provider: PaymentProvider, job: Job) -> None:
+def _release_payment(session: Session, provider: PaymentProvider, job: Job) -> bool:
     """Undo whatever the job's charge collected: void a pending PI, refund a
-    succeeded one. No-op when nothing was charged. Raises PaymentError upward."""
+    succeeded one. No-op when nothing was charged. Raises PaymentError upward.
+    Returns True when a refund was issued, so callers can notify the buyer."""
     payment = session.scalar(select(Payment).where(Payment.job_id == job.id).with_for_update())
     if payment is None:
-        return
+        return False
     if payment.status is PaymentStatus.SUCCEEDED:
         provider.refund(payment.provider_payment_id, idempotency_key=f"refund:{job.id}")
         payment.status = PaymentStatus.REFUNDED
-    elif payment.status is PaymentStatus.PENDING:
+        return True
+    if payment.status is PaymentStatus.PENDING:
         provider.cancel_charge(payment.provider_payment_id)
         payment.status = (
             PaymentStatus.FAILED
         )  # ponytail: voided lands in FAILED, split if ops needs it
+    return False
 
 
 @seller_router.put("/profile", response_model=SellerProfileOut)
@@ -574,6 +638,17 @@ def accept_offer(
         if charge.status is PaymentStatus.SUCCEEDED
         else JobStatus.AWAITING_PAYMENT
     )
+    notifications.enqueue(
+        session,
+        EventKind.JOB_ACCEPTED_BUYER,
+        job.buyer_id,
+        {
+            "job_id": str(job.id),
+            "service_type_id": job.service_type_id,
+            "buyer_price": str(job.buyer_price),
+            "awaiting_payment": job.status is JobStatus.AWAITING_PAYMENT,
+        },
+    )
     session.flush()
     return job
 
@@ -642,6 +717,28 @@ def complete_job(
             logger.warning("transfer failed for job %s (seller %s): %s", job.id, seller_id, exc)
             payout.status = PayoutStatus.FAILED
     session.add(payout)
+    session.flush()  # payout.id exists for the admin notification payload
+    notifications.enqueue(
+        session,
+        EventKind.JOB_COMPLETED_BUYER,
+        job.buyer_id,
+        {
+            "job_id": str(job.id),
+            "service_type_id": job.service_type_id,
+            "buyer_price": str(job.buyer_price),
+        },
+    )
+    if payout.status is PayoutStatus.FAILED:
+        notifications.enqueue_admins(
+            session,
+            EventKind.PAYOUT_FAILED_ADMIN,
+            {
+                "job_id": str(job.id),
+                "payout_id": str(payout.id),
+                "seller_id": seller_id,
+                "amount": str(job.seller_payout),
+            },
+        )
 
     repo.get_or_create_buyer(session, job.buyer_id).completed_jobs += 1
     seller.completed_jobs += 1
@@ -887,10 +984,11 @@ def admin_cancel_job(
         raise HTTPException(status_code=409, detail=f"cannot cancel a {job.status} job")
     _expire_open_offers(session, job.id)
     try:
-        _release_payment(session, provider, job)
+        refunded = _release_payment(session, provider, job)
     except PaymentError as exc:
         logger.warning("payment release failed for job %s: %s", job.id, exc)
         raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
+    _notify_cancelled(session, job, refunded)
     job.status = JobStatus.CANCELLED
     audit(session, admin_id, "cancel_job", str(job_id), {})
     return job
@@ -937,9 +1035,20 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
             select(Payout).where(Payout.provider_transfer_id == event.object_id).with_for_update()
         )
         if payout is not None:
-            payout.status = (
-                PayoutStatus.PAID if event.kind == "transfer_paid" else PayoutStatus.FAILED
-            )
+            if event.kind == "transfer_failed":
+                payout.status = PayoutStatus.FAILED
+                notifications.enqueue_admins(
+                    session,
+                    EventKind.PAYOUT_FAILED_ADMIN,
+                    {
+                        "job_id": str(payout.job_id),
+                        "payout_id": str(payout.id),
+                        "seller_id": payout.seller_id,
+                        "amount": str(payout.amount),
+                    },
+                )
+            else:
+                payout.status = PayoutStatus.PAID
 
 
 @payments_router.post("/webhook")
