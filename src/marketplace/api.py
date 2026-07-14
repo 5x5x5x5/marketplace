@@ -33,6 +33,7 @@ from .entities import (
     AuditLog,
     AuthSession,
     Availability,
+    Dispute,
     EmailToken,
     Job,
     Notification,
@@ -51,10 +52,15 @@ from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
 from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
+    AdminDisputeOut,
     AdminSellerBody,
     AuditOut,
     AvailabilityRequest,
+    BuyerDisputeOut,
     BuyerJobView,
+    DisputeRequest,
+    DisputeSource,
+    DisputeStatus,
     EventKind,
     JobCreateRequest,
     JobStatus,
@@ -73,6 +79,7 @@ from .models import (
     QuoteRequest,
     ReviewOut,
     ReviewRequest,
+    SellerDisputeOut,
     SellerJobView,
     SellerOfferView,
     SellerProfileOut,
@@ -468,6 +475,55 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
     return review
 
 
+@buyer_router.post("/jobs/{job_id}/dispute", response_model=BuyerDisputeOut, status_code=201)
+def open_dispute(
+    job_id: UUID, body: DisputeRequest, session: SessionDep, buyer_id: BuyerId
+) -> Dispute:
+    job = session.get(Job, job_id)
+    if job is None or job.buyer_id != buyer_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status != JobStatus.COMPLETED or job.completed_at is None:
+        raise HTTPException(status_code=409, detail="only completed jobs can be disputed")
+    if _now() > job.completed_at + timedelta(days=settings.dispute_window_days):
+        raise HTTPException(status_code=409, detail="dispute window has elapsed")
+    if session.scalar(select(Dispute).where(Dispute.job_id == job_id)) is not None:
+        raise HTTPException(status_code=409, detail="job already disputed")
+
+    dispute = Dispute(
+        job_id=job.id, source=DisputeSource.BUYER, buyer_id=buyer_id, reason=body.reason
+    )
+    session.add(dispute)
+    session.flush()
+    if job.seller_id is not None:
+        notifications.enqueue(
+            session,
+            EventKind.DISPUTE_OPENED_SELLER,
+            job.seller_id,
+            {
+                "job_id": str(job.id),
+                "service_type_id": job.service_type_id,
+                "reason": body.reason,
+            },
+        )
+    notifications.enqueue_admins(
+        session,
+        EventKind.DISPUTE_OPENED_ADMIN,
+        {"job_id": str(job.id), "dispute_id": str(dispute.id), "reason": body.reason},
+    )
+    return dispute
+
+
+@buyer_router.get("/jobs/{job_id}/dispute", response_model=BuyerDisputeOut)
+def get_dispute_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> Dispute:
+    job = session.get(Job, job_id)
+    if job is None or job.buyer_id != buyer_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    dispute = session.scalar(select(Dispute).where(Dispute.job_id == job_id))
+    if dispute is None:
+        raise HTTPException(status_code=404, detail="no dispute for this job")
+    return dispute
+
+
 # ---------- Seller router ----------
 
 seller_router = APIRouter(prefix="/v1/seller", tags=["seller"])
@@ -609,6 +665,17 @@ def list_seller_jobs(
         stmt = stmt.where(Job.status == status)
     rows = session.scalars(stmt.order_by(Job.created_at.desc())).all()
     return _paginate(rows, limit, offset)
+
+
+@seller_router.get("/jobs/{job_id}/dispute", response_model=SellerDisputeOut)
+def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -> Dispute:
+    job = session.get(Job, job_id)
+    if job is None or job.seller_id != seller_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    dispute = session.scalar(select(Dispute).where(Dispute.job_id == job_id))
+    if dispute is None:
+        raise HTTPException(status_code=404, detail="no dispute for this job")
+    return dispute
 
 
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)
@@ -992,6 +1059,20 @@ def drain_notifications(session: SessionDep, admin_id: AdminId) -> dict[str, int
     sent = notifications.drain_once(get_mail_sender())
     audit(session, admin_id, "drain_notifications", "notifications", {"sent": sent})
     return {"sent": sent}
+
+
+@admin_router.get("/disputes", response_model=list[AdminDisputeOut])
+def list_disputes(
+    session: SessionDep,
+    status: DisputeStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[Dispute]:
+    stmt = select(Dispute)
+    if status is not None:
+        stmt = stmt.where(Dispute.status == status)
+    rows = session.scalars(stmt.order_by(Dispute.created_at.desc())).all()
+    return _paginate(rows, limit, offset)
 
 
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)

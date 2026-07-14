@@ -79,6 +79,8 @@ class EventKind(StrEnum):
     JOB_CANCELLED_SELLER = "job_cancelled_seller"
     REFUND_ISSUED_BUYER = "refund_issued_buyer"
     PAYOUT_FAILED_ADMIN = "payout_failed_admin"
+    DISPUTE_OPENED_SELLER = "dispute_opened_seller"
+    DISPUTE_OPENED_ADMIN = "dispute_opened_admin"
 
 
 class NotificationStatus(StrEnum):
@@ -203,6 +205,51 @@ class ReviewOut(BaseModel):
     created_at: datetime
 
 
+class BuyerDisputeOut(BaseModel):
+    """Buyer's view — no seller money (clawback) ever appears here."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    status: DisputeStatus
+    reason: str
+    refund_amount: Decimal | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class SellerDisputeOut(BaseModel):
+    """Seller's view — no buyer money (refund) ever appears here."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    status: DisputeStatus
+    reason: str
+    clawback_amount: Decimal | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class AdminDisputeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    source: DisputeSource
+    buyer_id: str
+    status: DisputeStatus
+    reason: str
+    refund_amount: Decimal | None
+    clawback_amount: Decimal | None
+    resolution_note: str | None
+    provider_dispute_id: str | None
+    created_at: datetime
+    resolved_at: datetime | None
+
+
 class ServiceTypeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -323,6 +370,10 @@ class AvailabilityRequest(BaseModel):
 class ReviewRequest(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=2000)
+
+
+class DisputeRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 class SellerProfileUpdate(BaseModel):
