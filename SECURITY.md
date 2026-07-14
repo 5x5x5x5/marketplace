@@ -1,10 +1,12 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Three
+hardening** closed the exploitable findings (status table below). Four
 updates followed, in order: the **template build** (moved state to Postgres),
-**payments** (added an escrow provider), and **real-user auth** (replaced the
-pilot HMAC tokens with DB-backed sessions) — see the update notes below.
+**payments** (added an escrow provider), **real-user auth** (replaced the
+pilot HMAC tokens with DB-backed sessions), and **disputes** (added
+arbitration over the escrow — partial refunds/clawbacks and chargeback
+recording) — see the update notes below.
 
 ## Update — template build
 
@@ -114,6 +116,44 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   work on an unverified account, because the console adapter can't prove
   mail was actually deliverable. A fork wiring in a real sender is expected
   to add the gate at the same time.
+
+## Update — disputes
+
+- **Opening a dispute is buyer-only, with ownership, window, and one-per-job
+  guards.** `POST /v1/jobs/{id}/dispute` requires the caller's session to
+  resolve to the job's own buyer (404 otherwise, same not-yours pattern as
+  job views); the job must be `COMPLETED` and within `DISPUTE_WINDOW_DAYS` of
+  `completed_at` (409 once the window elapses); a job can carry at most one
+  dispute row, ever (409 on a second attempt). A Stripe chargeback on the
+  same job annotates that existing row instead of creating a duplicate.
+- **Resolving a dispute is admin-only, with bounds validated at the trust
+  boundary.** `POST /v1/admin/disputes/{id}/resolve` requires an admin
+  session; `refund_amount`/`clawback_amount` are quantized and range-checked
+  (0..`buyer_price`, 0..`seller_payout`) before either provider call, so a
+  hand-crafted body can never authorize refunding or clawing back more than
+  the job itself moved. The two provider legs (partial refund, partial
+  transfer reversal) are each idempotent by a dispute-scoped key
+  (`refund:{job_id}:dispute`, `reversal:{job_id}:dispute` — deliberately
+  distinct from the cancel path's keys); a failure on either leg records
+  nothing, and a retry replays the succeeded leg instead of double-moving
+  money. `Payment.status` is never touched by a partial refund — the charge
+  stays `SUCCEEDED`, so a partial refund can never be mistaken for (or
+  collide with) the cancel path's full `REFUNDED` state.
+- **The chargeback webhook branch never 500s on an unknown or replayed
+  event.** `charge.dispute.created`/`closed` locate the `Payment` by
+  `related_id`; an id that doesn't map to a known payment is recorded (dedup
+  ledger) and ignored, not a crash. The branch rides the existing
+  signature-verified, `WebhookEvent`-deduped `/v1/payments/webhook`, so a
+  replayed chargeback event no-ops like every other event kind. An admin's
+  arbitration outcome (`resolved`) is preserved even if a chargeback closes
+  on the same job afterward — the loss/fee still lands in the `adjustments`
+  ledger, but the `status` field keeps recording the arbitration outcome
+  rather than being overwritten; a still-`open` dispute lets the latest
+  provider outcome set the status instead.
+- **Dispute views stay role-scoped like job views.** `BuyerDisputeOut` never
+  carries the clawback amount; `SellerDisputeOut` never carries the refund
+  amount; only `AdminDisputeOut` carries both. `reason`/`status` are visible
+  to all three (the seller has to know what they're accused of).
 
 ## Threat model (pilot)
 

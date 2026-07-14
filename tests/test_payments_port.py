@@ -107,3 +107,49 @@ def test_payment_tables_registered() -> None:
     assert {"payments", "payouts", "webhook_events", "idempotency_keys"} <= set(
         Base.metadata.tables
     )
+
+
+def test_fake_partial_refund_records_amount_and_key() -> None:
+    fake = FakeProvider()
+    fake.refund("pay_fake_1", idempotency_key="refund:j:dispute", amount=Decimal("30.00"))
+    fake.refund("pay_fake_2", idempotency_key="refund:j2")  # full refund, no amount
+    assert fake.refunded == ["pay_fake_1", "pay_fake_2"]
+    assert fake.refund_keys == ["refund:j:dispute", "refund:j2"]
+    assert fake.refund_amounts == ["30.00", None]
+
+
+def test_fake_reverse_transfer_records_and_fails_scriptably() -> None:
+    fake = FakeProvider()
+    result = fake.reverse_transfer(
+        "tr_fake_1", amount=Decimal("20.00"), idempotency_key="reversal:j:dispute"
+    )
+    assert result.provider_reversal_id.startswith("trr_fake_")
+    assert fake.reversals == [("tr_fake_1", "20.00", "reversal:j:dispute")]
+    fake.fail_next_call = True
+    with pytest.raises(PaymentError):
+        fake.reverse_transfer("tr_fake_1", amount=Decimal("1.00"), idempotency_key="k")
+
+
+def test_fake_webhook_passes_chargeback_fields_through() -> None:
+    fake = FakeProvider()
+    event = fake.parse_webhook(
+        b'{"event_id": "evt_cb", "kind": "chargeback_opened", "object_id": "dp_1",'
+        b' "related_id": "pay_fake_9", "amount_minor": 8000, "outcome": null}',
+        None,
+    )
+    assert event.related_id == "pay_fake_9"
+    assert event.amount_minor == 8000
+    assert event.outcome is None
+
+
+def test_fake_fail_keys_targets_one_keyed_call() -> None:
+    fake = FakeProvider()
+    fake.fail_keys = {"reversal:j:dispute"}
+    fake.refund(
+        "pay_fake_1", idempotency_key="refund:j:dispute", amount=Decimal("1.00")
+    )  # unaffected
+    with pytest.raises(PaymentError):
+        fake.reverse_transfer("tr_1", amount=Decimal("1.00"), idempotency_key="reversal:j:dispute")
+    assert fake.reversals == []  # failed call not recorded
+    fake.reverse_transfer("tr_1", amount=Decimal("1.00"), idempotency_key="reversal:j:dispute")
+    assert len(fake.reversals) == 1  # one-shot: cleared after firing

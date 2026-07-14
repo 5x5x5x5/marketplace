@@ -15,7 +15,7 @@ from marketplace.models import EventKind, NotificationStatus, PaymentStatus, Use
 from marketplace.notifications import RENDERERS, drain_once, enqueue, enqueue_admins
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import IS_POSTGRES, AuthFactory, Header
-from tests.test_payments import _accept_first_offer, _pending_accept, new_job, onboard_and_avail
+from tests.test_payments import accept_first_offer, new_job, onboard_and_avail, pending_accept
 
 
 def test_notifications_table_registered() -> None:
@@ -176,7 +176,7 @@ def test_accepted_email_with_payment_due_line(
     fake_payments.next_charge_status = PaymentStatus.PENDING
     onboard_and_avail(client, auth, basic_service, "s1")
     new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     recorder = _drain()
     buyer_mail = _mail_to(recorder, "alice@")
     assert len(buyer_mail) == 1
@@ -191,7 +191,7 @@ def test_accepted_email_without_payment_due_when_instant(
 ) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     recorder = _drain()
     body = _mail_to(recorder, "alice@")[0][2]
     assert "Complete your payment" not in body
@@ -200,7 +200,7 @@ def test_accepted_email_without_payment_due_when_instant(
 def test_completed_email(client: TestClient, basic_service: str, auth: AuthFactory) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     _drain()  # clear offer+accepted mail
     r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
     assert r.status_code == 200
@@ -219,7 +219,7 @@ def test_expired_no_seller_email(client: TestClient, basic_service: str, auth: A
 def test_expired_payment_timeout_email(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, _pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, _pid = pending_accept(client, auth, basic_service, fake_payments)
     with SessionLocal() as s:
         job = s.get(Job, UUID(job_id))
         assert job is not None
@@ -237,7 +237,7 @@ def test_cancel_after_accept_informs_seller_and_refund_informs_buyer(
 ) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))  # instant success -> paid
+    accept_first_offer(client, auth("seller", "s1"))  # instant success -> paid
     _drain()  # clear offer+accepted mail
     r = client.post(f"/v1/admin/jobs/{job['id']}/cancel", headers=admin)
     assert r.status_code == 200
@@ -252,7 +252,7 @@ def test_cancel_after_accept_informs_seller_and_refund_informs_buyer(
 def test_buyer_self_cancel_no_buyer_email_but_seller_informed(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, _pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, _pid = pending_accept(client, auth, basic_service, fake_payments)
     _drain()  # clear offer+accepted mail
     r = client.post(f"/v1/jobs/{job_id}/cancel", headers=auth("buyer", "alice"))
     assert r.status_code == 200
@@ -271,7 +271,7 @@ def test_payout_failure_reaches_admin(
     # The admin fixture creates the ops admin user; payout failure fans out to it.
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     _drain()
     fake_payments.fail_next_call = True
     r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
@@ -410,8 +410,12 @@ def test_concurrent_drain_never_double_sends(
     for buyer in ("a1", "a2", "a3", "a4", "a5"):
         new_job(client, auth, basic_service, buyer)
     recorder = RecordingEmailSender()  # list.append is GIL-atomic
+
+    def _one_drain(_index: int) -> int:
+        return drain_once(recorder)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
-        totals = list(pool.map(lambda _: drain_once(recorder), range(2)))
+        totals = list(pool.map(_one_drain, range(2)))
     # Every offer email exists exactly once across both drains - no row sent twice.
     offer_mails = [m for m in recorder.sent if "New offer" in m[1]]
     assert sum(totals) == len(recorder.sent)

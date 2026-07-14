@@ -68,3 +68,49 @@ def test_bad_signature_rejected(provider: StripeProvider) -> None:
 def test_missing_signature_rejected(provider: StripeProvider) -> None:
     with pytest.raises(WebhookSignatureError):
         provider.parse_webhook(b"{}", None)
+
+
+def test_chargeback_events_map_and_carry_fields(provider: StripeProvider) -> None:
+    opened = json.dumps(
+        {
+            "id": "evt_cb1",
+            "object": "event",
+            "type": "charge.dispute.created",
+            "data": {"object": {"id": "dp_1", "payment_intent": "pi_9", "amount": 8000}},
+        }
+    ).encode()
+    event = provider.parse_webhook(opened, _signed(opened))
+    assert event.kind == "chargeback_opened"
+    assert event.object_id == "dp_1"
+    assert event.related_id == "pi_9"
+    assert event.amount_minor == 8000
+
+    closed = json.dumps(
+        {
+            "id": "evt_cb2",
+            "object": "event",
+            "type": "charge.dispute.closed",
+            "data": {
+                "object": {"id": "dp_1", "payment_intent": "pi_9", "amount": 8000, "status": "lost"}
+            },
+        }
+    ).encode()
+    event = provider.parse_webhook(closed, _signed(closed))
+    assert event.kind == "chargeback_closed"
+    assert event.outcome == "lost"
+
+
+def test_partial_transfer_reversal_is_ignored_not_failed(provider: StripeProvider) -> None:
+    """Dispute clawbacks create PARTIAL reversals — Stripe fires
+    transfer.reversed for those too, but the object's `reversed` field stays
+    False and the payout is still paid. Only a FULLY reversed transfer means
+    the transfer itself failed."""
+    payload = _event("transfer.reversed", {"id": "tr_1", "reversed": False, "amount_reversed": 400})
+    event = provider.parse_webhook(payload, _signed(payload))
+    assert event.kind == "ignored"
+
+
+def test_full_transfer_reversal_maps_to_transfer_failed(provider: StripeProvider) -> None:
+    payload = _event("transfer.reversed", {"id": "tr_1", "reversed": True, "amount_reversed": 1400})
+    event = provider.parse_webhook(payload, _signed(payload))
+    assert event.kind == "transfer_failed"

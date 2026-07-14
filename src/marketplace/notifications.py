@@ -124,6 +124,70 @@ def _render_payout_failed_admin(p: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _render_dispute_opened_seller(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Dispute opened on your {p['service_type_id']} job",
+        (
+            f"The buyer disputed your {p['service_type_id']} job.\n"
+            f'Reason: "{p["reason"]}"\n'
+            f"An operator will review it; you may be contacted.\nJob: {p['job_id']}"
+        ),
+    )
+
+
+def _render_dispute_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Arbitration needed: dispute on job {p['job_id']}",
+        (
+            f'Reason: "{p["reason"]}"\n'
+            f"Resolve via POST /v1/admin/disputes/{p['dispute_id']}/resolve.\n"
+            f"Job: {p['job_id']}"
+        ),
+    )
+
+
+def _render_dispute_resolved_buyer(p: dict[str, Any]) -> tuple[str, str]:
+    refund_line = (
+        "No refund was issued."
+        if p["refund_amount"] == "0.00"
+        else f"Refund issued to you: {p['refund_amount']}."
+    )
+    return (
+        "Your dispute was resolved",
+        f"Your dispute on job {p['job_id']} was resolved.\n{refund_line}",
+    )
+
+
+def _render_dispute_resolved_seller(p: dict[str, Any]) -> tuple[str, str]:
+    clawback_line = (
+        "No amount was reclaimed from your payout."
+        if p["clawback_amount"] == "0.00"
+        else f"Amount reclaimed from your payout: {p['clawback_amount']}."
+    )
+    return (
+        "A dispute on your job was resolved",
+        f"The dispute on job {p['job_id']} was resolved.\n{clawback_line}",
+    )
+
+
+def _render_chargeback_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Chargeback opened on job {p['job_id']}",
+        (
+            f"The provider opened a chargeback for {p['amount']}.\n"
+            f"Evidence submission happens in the provider dashboard.\n"
+            f"Dispute: {p['dispute_id']}  Job: {p['job_id']}"
+        ),
+    )
+
+
+def _render_chargeback_closed_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Chargeback {p['outcome']} on job {p['job_id']}",
+        f"Outcome: {p['outcome']}. Amount: {p['amount']}.\nJob: {p['job_id']}",
+    )
+
+
 RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.OFFER_RECEIVED: _render_offer_received,
     EventKind.JOB_ACCEPTED_BUYER: _render_job_accepted_buyer,
@@ -132,6 +196,12 @@ RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.JOB_CANCELLED_SELLER: _render_job_cancelled_seller,
     EventKind.REFUND_ISSUED_BUYER: _render_refund_issued_buyer,
     EventKind.PAYOUT_FAILED_ADMIN: _render_payout_failed_admin,
+    EventKind.DISPUTE_OPENED_SELLER: _render_dispute_opened_seller,
+    EventKind.DISPUTE_OPENED_ADMIN: _render_dispute_opened_admin,
+    EventKind.DISPUTE_RESOLVED_BUYER: _render_dispute_resolved_buyer,
+    EventKind.DISPUTE_RESOLVED_SELLER: _render_dispute_resolved_seller,
+    EventKind.CHARGEBACK_OPENED_ADMIN: _render_chargeback_opened_admin,
+    EventKind.CHARGEBACK_CLOSED_ADMIN: _render_chargeback_closed_admin,
 }
 
 

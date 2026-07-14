@@ -32,6 +32,17 @@ users, then gets forked and specialized per market vertical. The differentiator
   rate-limiting, a timing delta on `password-reset/request`, and email
   verification doesn't gate anything yet (no real mail sender to make the
   gate meaningful).
+- **Disputes + partial refunds (done):** first sub-phase of the trust &
+  safety bucket. Buyers dispute a completed job within `DISPUTE_WINDOW_DAYS`
+  (default 7) of `completed_at`, one dispute per job; an admin arbitrates
+  with independent `refund_amount`/`clawback_amount` amounts (partial Stripe
+  refund + partial transfer reversal, bounds-checked, idempotent legs),
+  booked onto an append-only `adjustments` ledger — `Transaction` rows and
+  `Payment.status` stay untouched. `GET /v1/admin/margins/summary` reports
+  gross AND net-of-adjustments margin. Stripe chargebacks
+  (`charge.dispute.created`/`closed`) ride the same webhook into the same
+  `disputes` table, recorded and notified rather than fought — evidence
+  submission stays in the Stripe dashboard (fork work). See `SECURITY.md`.
 
 ## Done ✓
 
@@ -56,15 +67,22 @@ domain transaction with role-safe payload snapshots; drained with
 retry/backoff by an in-process maintenance loop that also runs the sweeps on
 a clock — offers, stale payments, and sessions now expire without traffic;
 stdlib SMTP adapter behind `SMTP_HOST`, console adapter otherwise; admin
-list/drain endpoints; an external-worker extraction needs no schema change).
+list/drain endpoints; an external-worker extraction needs no schema change) ·
+**disputes + partial refunds** (buyer-initiated arbitration within
+`DISPUTE_WINDOW_DAYS`, one dispute per job; admin resolves independent
+refund/clawback amounts onto an append-only `adjustments` ledger; gross AND
+net-of-adjustments margin reporting; Stripe chargebacks recorded into the
+same table via the existing webhook, not fought — evidence submission is
+fork work; see `SECURITY.md`).
 
 ## What's still ahead
 
 Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
 
-1. **Trust & safety** — disputes/chargebacks, partial refunds, seller→buyer
-   reviews, fraud/abuse, moderation. Notification preferences/digests land
-   here too (everything sent today is transactional).
+1. **Trust & safety** — disputes/chargebacks and partial refunds are done
+   (see "Done" above). Remaining sub-phases, in order: seller→buyer reviews →
+   moderation/abuse → notification preferences (everything sent today is
+   transactional).
 2. **Processing fees in the margin math** — the `Transaction` ledger records
    margin gross of provider fees (Stripe: ~2.9% + 30¢ per charge, and the fee
    is kept on refunds — a refunded job costs the platform the fee with no

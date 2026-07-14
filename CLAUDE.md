@@ -55,6 +55,14 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   ledger.** Don't merge them — `Transaction.margin` is booked at completion
   regardless of payout provider status; `Payment`/`Payout` track the charge/
   transfer lifecycle against the provider.
+- **`adjustments` is append-only and `Transaction` rows are immutable.** A
+  dispute resolution never edits a booked row — it appends `refund`/
+  `clawback`/`chargeback_loss`/`chargeback_fee` rows and reports both gross
+  and net-of-adjustments margin. `Payment.status` is never touched by a
+  partial refund (the charge stays `SUCCEEDED`; `REFUNDED` stays reserved for
+  the cancel path's full refund). Dispute views are role-scoped exactly like
+  job views — `BuyerDisputeOut`/`SellerDisputeOut`/`AdminDisputeOut` split the
+  same way `BuyerJobView`/`SellerJobView` do.
 - **`AWAITING_PAYMENT` holds a capacity slot.** A job parked there while a charge
   settles still counts against the seller's capacity — it is not free
   availability. Don't change `repo.active_job_count` to exclude it.
@@ -94,6 +102,11 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   (`charge:{job_id}`, `transfer:{job_id}`, `refund:{job_id}`, `acct:{seller_id}`),
   not a random value — a retry of the same operation reuses the same key on
   purpose, so it replays the original result instead of double-charging.
+- Dispute resolution's provider keys — `refund:{job_id}:dispute` and
+  `reversal:{job_id}:dispute` — are deliberately distinct from the cancel
+  path's `refund:{job_id}` key, so a post-completion partial refund can never
+  replay (or be replayed by) a full cancel refund. One dispute per job keeps
+  each key unique per operation.
 - The `auth` fixture (`tests/conftest.py`) white-box-inserts a `User` row with
   `id == sub` so pre-existing tests that hand a bare id (`"alice"`, `"carol"`)
   as the principal keep working without every test signing up a real account.
@@ -117,11 +130,13 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Explicit non-goals (roadmap, not now)
 
-Seller→buyer reviews, notification preferences/digests, gateway rate-limiting,
-admin RBAC (single shared admin role for now), and OAuth/social login. Seller
-bidding is out (this is not an auction). Payments ship (Stripe Connect via
-`payments/port.py`, verified against a real Stripe test account);
-disputes/chargebacks + partial refunds are still ahead. Auth ships (DB-backed
-sessions, real signup/login). Notifications + the background scheduler ship
-(transactional outbox + in-process maintenance loop; external-worker
-extraction needs no schema change) — see `ROADMAP.md`.
+Seller→buyer reviews, moderation/abuse, notification preferences/digests,
+gateway rate-limiting, admin RBAC (single shared admin role for now), and
+OAuth/social login. Seller bidding is out (this is not an auction). Payments
+ship (Stripe Connect via `payments/port.py`, verified against a real Stripe
+test account). Auth ships (DB-backed sessions, real signup/login).
+Notifications + the background scheduler ship (transactional outbox +
+in-process maintenance loop; external-worker extraction needs no schema
+change). Disputes + partial refunds ship (buyer-initiated arbitration, admin
+resolution, Stripe chargebacks recorded through the same webhook) — see
+`ROADMAP.md`.
