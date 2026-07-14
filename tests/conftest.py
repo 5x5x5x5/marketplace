@@ -70,7 +70,8 @@ def auth() -> AuthFactory:
             return issued[key]
         raw = f"test-token-{role}-{sub}"
         with SessionLocal() as s:
-            if s.get(User, sub) is None:
+            existing = s.get(User, sub)
+            if existing is None:
                 s.add(
                     User(
                         id=sub,
@@ -79,6 +80,13 @@ def auth() -> AuthFactory:
                         password_hash=_TEST_PASSWORD_HASH,
                         display_name=sub,
                     )
+                )
+            else:
+                # Same sub under a different role would silently authenticate
+                # as the original role — fail loudly instead.
+                assert existing.role == UserRole(role), (
+                    f"fixture sub {sub!r} already exists with role "
+                    f"{existing.role}, requested {role}"
                 )
             s.add(
                 AuthSession(
