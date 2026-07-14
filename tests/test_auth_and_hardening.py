@@ -2,6 +2,7 @@
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -9,8 +10,10 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from marketplace import api
-from marketplace.auth import mint_token
-from marketplace.models import MarginFloorBody, ServiceTypeBody
+from marketplace.auth import _hash_token  # pyright: ignore[reportPrivateUsage]
+from marketplace.db import SessionLocal
+from marketplace.entities import AuthSession, User
+from marketplace.models import MarginFloorBody, ServiceTypeBody, UserRole
 from tests.conftest import IS_POSTGRES, AuthFactory, Header
 
 
@@ -47,8 +50,27 @@ def test_admin_rejects_non_admin(client: TestClient, auth: AuthFactory) -> None:
     assert client.get("/v1/admin/transactions", headers=auth("buyer", "alice")).status_code == 403
 
 
-def test_expired_token_rejected(client: TestClient) -> None:
-    header = {"Authorization": f"Bearer {mint_token('buyer', 'alice', ttl_hours=-1)}"}
+def test_expired_session_rejected(client: TestClient) -> None:
+    raw = "expired-session-token"
+    with SessionLocal() as s:
+        s.add(
+            User(
+                id="expired-user",
+                email="expired@buyer.test.local",
+                role=UserRole.BUYER,
+                password_hash="irrelevant",
+                display_name="expired",
+            )
+        )
+        s.add(
+            AuthSession(
+                user_id="expired-user",
+                token_hash=_hash_token(raw),
+                expires_at=datetime.now(UTC) - timedelta(hours=1),
+            )
+        )
+        s.commit()
+    header = {"Authorization": f"Bearer {raw}"}
     assert (
         client.post("/v1/quotes", json={"service_type_id": "x"}, headers=header).status_code == 401
     )

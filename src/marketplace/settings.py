@@ -14,12 +14,8 @@ class Settings(BaseSettings):
     # Point DATABASE_URL at Postgres (see docker-compose.yml) for real deployments.
     database_url: str = "sqlite+pysqlite:///./marketplace.db"
 
-    # Shared HMAC secret for pilot auth. MUST be overridden outside local dev.
-    marketplace_secret: str = "dev-insecure-secret"
-
     quote_ttl_minutes: int = 5
     offer_ttl_minutes: int = 2
-    token_ttl_hours: int = 24
 
     # Payments. STRIPE_SECRET_KEY set → real Stripe adapter; unset → deterministic
     # in-memory fake (dev/tests, no account needed).

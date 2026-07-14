@@ -42,32 +42,35 @@ class IdempotencyMiddleware:
             )
             await response(scope, receive, send)
             return
-        principal = peek_principal(headers.get("authorization"))
+        path = str(scope["path"])
+        with SessionLocal() as session:
+            principal = peek_principal(session, headers.get("authorization"))
+            row = (
+                None
+                if principal is None
+                else session.scalar(
+                    select(IdempotencyRecord).where(
+                        IdempotencyRecord.principal == principal, IdempotencyRecord.key == key
+                    )
+                )
+            )
         if principal is None:
             await self.app(scope, receive, send)  # auth 401s downstream with the real error
             return
-
-        path = str(scope["path"])
-        with SessionLocal() as session:
-            row = session.scalar(
-                select(IdempotencyRecord).where(
-                    IdempotencyRecord.principal == principal, IdempotencyRecord.key == key
+        if row is not None:
+            if row.path != path:
+                replay: Response = JSONResponse(
+                    {"detail": "Idempotency-Key was already used for a different request"},
+                    status_code=409,
                 )
-            )
-            if row is not None:
-                if row.path != path:
-                    replay: Response = JSONResponse(
-                        {"detail": "Idempotency-Key was already used for a different request"},
-                        status_code=409,
-                    )
-                else:
-                    replay = Response(
-                        content=row.response_body,
-                        status_code=row.response_status,
-                        media_type="application/json",
-                    )
-                await replay(scope, receive, send)
-                return
+            else:
+                replay = Response(
+                    content=row.response_body,
+                    status_code=row.response_status,
+                    media_type="application/json",
+                )
+            await replay(scope, receive, send)
+            return
 
         captured_status = 500
         captured_body = b""

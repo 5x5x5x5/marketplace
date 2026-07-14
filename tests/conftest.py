@@ -10,7 +10,6 @@ import os
 import tempfile
 
 os.environ.setdefault("DATABASE_URL", f"sqlite+pysqlite:///{tempfile.mkdtemp()}/test.db")
-os.environ.setdefault("MARKETPLACE_SECRET", "test-secret")
 # Real env vars outrank .env in pydantic-settings: pin these empty so a
 # developer's .env (with a real Stripe key) can never flip the suite from the
 # fake provider onto the live API.
@@ -18,15 +17,17 @@ os.environ.setdefault("STRIPE_SECRET_KEY", "")
 os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
 
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from marketplace import api
-from marketplace.auth import mint_token
+from marketplace.auth import _hash_token, hash_password  # pyright: ignore[reportPrivateUsage]
 from marketplace.db import SessionLocal, engine, init_db
-from marketplace.entities import Base, SellerProfile
+from marketplace.entities import AuthSession, Base, SellerProfile, User
+from marketplace.models import UserRole
 from marketplace.payments import fake_provider
 from marketplace.payments.fake import FakeProvider
 
@@ -50,10 +51,45 @@ def client() -> TestClient:
     return TestClient(api.app)
 
 
+TEST_PASSWORD = "test-password-123"
+_TEST_PASSWORD_HASH = hash_password(TEST_PASSWORD)  # hash once; argon2 is deliberately slow
+
+
 @pytest.fixture
 def auth() -> AuthFactory:
+    """Bearer-header factory with the historical interface: auth(role, sub).
+
+    White-box: inserts a User (id == sub, so identity assertions in older
+    tests keep working) plus an AuthSession row. Idempotent per (role, sub)
+    within a test — repeated calls return the same header."""
+    issued: dict[tuple[str, str], Header] = {}
+
     def _make(role: str, sub: str) -> Header:
-        return {"Authorization": f"Bearer {mint_token(role, sub)}"}
+        key = (role, sub)
+        if key in issued:
+            return issued[key]
+        raw = f"test-token-{role}-{sub}"
+        with SessionLocal() as s:
+            if s.get(User, sub) is None:
+                s.add(
+                    User(
+                        id=sub,
+                        email=f"{sub}@{role}.test.local",
+                        role=UserRole(role),
+                        password_hash=_TEST_PASSWORD_HASH,
+                        display_name=sub,
+                    )
+                )
+            s.add(
+                AuthSession(
+                    user_id=sub,
+                    token_hash=_hash_token(raw),
+                    expires_at=datetime.now(UTC) + timedelta(hours=12),
+                )
+            )
+            s.commit()
+        issued[key] = {"Authorization": f"Bearer {raw}"}
+        return issued[key]
 
     return _make
 

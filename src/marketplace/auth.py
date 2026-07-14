@@ -1,117 +1,117 @@
-"""Pilot-grade authentication: HMAC-signed bearer tokens, stdlib only.
+"""Session-backed authentication.
 
-Every request carries a token asserting ``{role, sub}``; the FastAPI
-dependencies below verify the signature and hand the endpoint the authenticated
-subject id. Endpoints derive ``buyer_id``/``seller_id`` from that subject — never
-from the request body — so identity cannot be spoofed by editing a field.
-
-ponytail: shared-secret HMAC, no refresh/rotation/user store. This is enough to
-give a pilot real identity without a database. Upgrade path once persistence
-lands: fastapi-users or Supabase Auth backed by a real user table (see
-ROADMAP.md).
+Login (the auth endpoints, added alongside) stores a session row keyed by the
+sha256 of an opaque bearer token; the dependencies below resolve that token to
+``(role, sub=user_id)`` with one indexed lookup. Endpoints derive
+``buyer_id``/``seller_id`` from the authenticated principal — never a request
+body — so identity cannot be spoofed. Sessions are revocable: logout, bans,
+and password resets delete rows.
 """
 
-import base64
 import hashlib
-import hmac
+import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException
-from pydantic import BaseModel, Field, ValidationError
+from pwdlib import PasswordHash
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from .db import get_session
+from .entities import AuthSession, User
+from .models import UserRole
 from .settings import settings
 
-Role = Literal["buyer", "seller", "admin"]
-
-# ponytail: shared secret from settings (MARKETPLACE_SECRET), dev fallback keeps
-# local/test turnkey. Rotate by changing the secret; real KMS/rotation is a
-# post-pilot concern.
-_SECRET = settings.marketplace_secret.encode()
+_password_hash = PasswordHash.recommended()  # argon2id
 
 
-class _Claims(BaseModel):
-    role: Role
-    sub: str = Field(min_length=1, max_length=128)
-    exp: int  # unix seconds; tokens expire (closes the never-expiring-token gap)
+def hash_password(password: str) -> str:
+    return _password_hash.hash(password)
 
 
-def _b64(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+def verify_password(password: str, password_hash: str) -> bool:
+    return _password_hash.verify(password, password_hash)
 
 
-def _unb64(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+# Verified against when login hits an unknown email, so response timing does
+# not reveal whether an account exists.
+_DUMMY_HASH = _password_hash.hash("timing-equalizer")
 
 
-def _sign(payload: str) -> str:
-    return _b64(hmac.new(_SECRET, payload.encode(), hashlib.sha256).digest())
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def mint_token(role: str, sub: str, ttl_hours: float | None = None) -> str:
-    """Issue a signed token asserting that ``sub`` acts as ``role`` until ``exp``.
-
-    Dev/pilot helper — in production, tokens are minted at login by the real
-    auth provider, not by this function. Raises on an invalid role.
-    """
-    ttl = settings.token_ttl_hours if ttl_hours is None else ttl_hours
-    exp = int((datetime.now(UTC) + timedelta(hours=ttl)).timestamp())
-    claims = _Claims.model_validate({"role": role, "sub": sub, "exp": exp})
-    payload = _b64(claims.model_dump_json().encode())
-    return f"{payload}.{_sign(payload)}"
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
-def _verify(token: str) -> _Claims:
-    payload, _, sig = token.partition(".")
-    if not payload or not sig or not hmac.compare_digest(sig, _sign(payload)):
-        raise HTTPException(status_code=401, detail="invalid token")
-    try:
-        claims = _Claims.model_validate_json(_unb64(payload))
-    except (ValidationError, ValueError):
-        raise HTTPException(status_code=401, detail="invalid token") from None
-    if claims.exp < int(datetime.now(UTC).timestamp()):
-        raise HTTPException(status_code=401, detail="token expired")
+def create_session(db: Session, user: User) -> tuple[str, datetime]:
+    """Issue an opaque bearer for ``user``; only its sha256 is stored."""
+    raw = secrets.token_urlsafe(32)
+    expires_at = _now() + timedelta(hours=settings.session_ttl_hours)
+    db.add(AuthSession(user_id=user.id, token_hash=_hash_token(raw), expires_at=expires_at))
+    db.flush()
+    return raw, expires_at
+
+
+@dataclass(frozen=True)
+class Claims:
+    role: UserRole
+    sub: str  # user id
+
+
+def _resolve_bearer(db: Session, authorization: str) -> Claims | None:
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    user = db.scalar(
+        select(User)
+        .join(AuthSession, AuthSession.user_id == User.id)
+        .where(AuthSession.token_hash == _hash_token(token), AuthSession.expires_at > _now())
+    )
+    if user is None:
+        return None
+    return Claims(role=user.role, sub=user.id)
+
+
+_SessionDep = Annotated[Session, Depends(get_session)]
+
+
+def _principal(session: _SessionDep, authorization: Annotated[str, Header()] = "") -> Claims:
+    claims = _resolve_bearer(session, authorization)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return claims
 
 
-def _principal(authorization: Annotated[str, Header()] = "") -> _Claims:
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(status_code=401, detail="missing bearer token")
-    return _verify(token)
-
-
-Principal = Annotated[_Claims, Depends(_principal)]
+Principal = Annotated[Claims, Depends(_principal)]
 
 
 def require_admin(claims: Principal) -> str:
-    if claims.role != "admin":
+    if claims.role is not UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="admin credentials required")
     return claims.sub
 
 
 def current_buyer(claims: Principal) -> str:
-    if claims.role != "buyer":
+    if claims.role is not UserRole.BUYER:
         raise HTTPException(status_code=403, detail="buyer credentials required")
     return claims.sub
 
 
 def current_seller(claims: Principal) -> str:
-    if claims.role != "seller":
+    if claims.role is not UserRole.SELLER:
         raise HTTPException(status_code=403, detail="seller credentials required")
     return claims.sub
 
 
-def peek_principal(authorization: str | None) -> str | None:
+def peek_principal(db: Session, authorization: str | None) -> str | None:
     """Best-effort principal ("role:sub") for middleware. None when absent or
     invalid — the strict endpoint dependencies still produce the real 401."""
     if not authorization:
         return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        return None
-    try:
-        claims = _verify(token)
-    except HTTPException:
-        return None
-    return f"{claims.role}:{claims.sub}"
+    claims = _resolve_bearer(db, authorization)
+    return None if claims is None else f"{claims.role}:{claims.sub}"
