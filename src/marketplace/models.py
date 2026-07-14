@@ -245,6 +245,20 @@ class LoginRequest(BaseModel):
     role: UserRole  # the same email may own one account per role
 
 
+class VerifyRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+class ResetRequest(BaseModel):
+    email: EmailStr
+    role: Literal[UserRole.BUYER, UserRole.SELLER]
+
+
+class ResetConfirmRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class QuoteRequest(BaseModel):
     service_type_id: str = Field(min_length=1, max_length=128)
 

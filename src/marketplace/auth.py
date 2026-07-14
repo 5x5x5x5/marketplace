@@ -17,13 +17,24 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pwdlib import PasswordHash
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from . import repo
 from .db import SessionLocal, get_session
-from .entities import AuthSession, User
-from .models import LoginRequest, SessionOut, SignupRequest, UserOut, UserRole
+from .entities import AuthSession, EmailToken, User
+from .mail import EmailSender, get_mail_sender
+from .models import (
+    EmailTokenPurpose,
+    LoginRequest,
+    ResetConfirmRequest,
+    ResetRequest,
+    SessionOut,
+    SignupRequest,
+    UserOut,
+    UserRole,
+    VerifyRequest,
+)
 from .settings import settings
 
 _password_hash = PasswordHash.recommended()  # argon2id
@@ -129,8 +140,35 @@ def _session_out(db: Session, user: User) -> SessionOut:
     return SessionOut(token=token, expires_at=expires_at, user=UserOut.model_validate(user))
 
 
+_VERIFY_TTL_HOURS = 48
+_RESET_TTL_HOURS = 1
+
+MailDep = Annotated[EmailSender, Depends(get_mail_sender)]
+
+
+def _issue_email_token(
+    db: Session, mail: EmailSender, user: User, purpose: EmailTokenPurpose
+) -> None:
+    raw = secrets.token_urlsafe(32)
+    ttl = _VERIFY_TTL_HOURS if purpose is EmailTokenPurpose.VERIFY else _RESET_TTL_HOURS
+    db.add(
+        EmailToken(
+            user_id=user.id,
+            purpose=purpose,
+            token_hash=_hash_token(raw),
+            expires_at=_now() + timedelta(hours=ttl),
+        )
+    )
+    action = "verify" if purpose is EmailTokenPurpose.VERIFY else "password-reset/confirm"
+    mail.send(
+        user.email,
+        "Verify your email" if purpose is EmailTokenPurpose.VERIFY else "Reset your password",
+        f"Visit {settings.base_url}/{action}?token={raw}",
+    )
+
+
 @auth_router.post("/signup", response_model=SessionOut, status_code=201)
-def signup(body: SignupRequest, db: _SessionDep) -> SessionOut:
+def signup(body: SignupRequest, db: _SessionDep, mail: MailDep) -> SessionOut:
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email, User.role == body.role)) is not None:
         raise HTTPException(status_code=409, detail="an account with this email and role exists")
@@ -147,6 +185,7 @@ def signup(body: SignupRequest, db: _SessionDep) -> SessionOut:
         repo.get_or_create_buyer(db, user.id)
     else:
         repo.get_or_create_seller(db, user.id)
+    _issue_email_token(db, mail, user, EmailTokenPurpose.VERIFY)
     return _session_out(db, user)
 
 
@@ -177,6 +216,55 @@ def me(claims: Principal, db: _SessionDep) -> User:
     if user is None:  # session outlived the user row (deleted account)
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return user
+
+
+@auth_router.post("/verify")
+def verify_email(body: VerifyRequest, db: _SessionDep) -> dict[str, str]:
+    row = db.scalar(
+        select(EmailToken).where(EmailToken.token_hash == _hash_token(body.token)).with_for_update()
+    )
+    if (
+        row is None
+        or row.used_at is not None
+        or row.expires_at < _now()
+        or row.purpose is not EmailTokenPurpose.VERIFY
+    ):
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    user = db.get(User, row.user_id)
+    if user is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    user.email_verified = True
+    row.used_at = _now()
+    return {"status": "verified"}
+
+
+@auth_router.post("/password-reset/request")
+def request_password_reset(body: ResetRequest, db: _SessionDep, mail: MailDep) -> dict[str, str]:
+    user = db.scalar(select(User).where(User.email == body.email.lower(), User.role == body.role))
+    if user is not None:
+        _issue_email_token(db, mail, user, EmailTokenPurpose.RESET)
+    return {"status": "ok"}  # identical either way: no account enumeration
+
+
+@auth_router.post("/password-reset/confirm")
+def confirm_password_reset(body: ResetConfirmRequest, db: _SessionDep) -> dict[str, str]:
+    row = db.scalar(
+        select(EmailToken).where(EmailToken.token_hash == _hash_token(body.token)).with_for_update()
+    )
+    if (
+        row is None
+        or row.used_at is not None
+        or row.expires_at < _now()
+        or row.purpose is not EmailTokenPurpose.RESET
+    ):
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    user = db.get(User, row.user_id)
+    if user is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    user.password_hash = hash_password(body.new_password)
+    row.used_at = _now()
+    db.execute(delete(AuthSession).where(AuthSession.user_id == user.id))  # revoke everything
+    return {"status": "password reset"}
 
 
 def bootstrap_admin() -> None:

@@ -28,6 +28,7 @@ from marketplace import api
 from marketplace.auth import _hash_token, hash_password  # pyright: ignore[reportPrivateUsage]
 from marketplace.db import SessionLocal, engine, init_db
 from marketplace.entities import AuthSession, Base, SellerProfile, User
+from marketplace.mail import RecordingEmailSender, use_sender
 from marketplace.models import UserRole
 from marketplace.payments import fake_provider
 from marketplace.payments.fake import FakeProvider
@@ -55,6 +56,15 @@ def clean_tables() -> Iterator[None]:
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(api.app)
+
+
+@pytest.fixture
+def mail_outbox() -> Iterator[RecordingEmailSender]:
+    """Capture outbound mail via the port (tests read tokens here, not logs)."""
+    recorder = RecordingEmailSender()
+    previous = use_sender(recorder)
+    yield recorder
+    use_sender(previous)
 
 
 TEST_PASSWORD = "test-password-123"
