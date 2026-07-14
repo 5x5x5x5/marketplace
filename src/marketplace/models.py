@@ -71,6 +71,22 @@ class PayoutStatus(StrEnum):
     FAILED = "failed"  # transfer rejected/errored; admin retries via /v1/admin/payouts/{id}/retry
 
 
+class EventKind(StrEnum):
+    OFFER_RECEIVED = "offer_received"  # seller: the 2-minute clock is ticking
+    JOB_ACCEPTED_BUYER = "job_accepted_buyer"
+    JOB_COMPLETED_BUYER = "job_completed_buyer"
+    JOB_EXPIRED_BUYER = "job_expired_buyer"
+    JOB_CANCELLED_SELLER = "job_cancelled_seller"
+    REFUND_ISSUED_BUYER = "refund_issued_buyer"
+    PAYOUT_FAILED_ADMIN = "payout_failed_admin"
+
+
+class NotificationStatus(StrEnum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"  # terminal after notify_max_attempts; inspect via admin endpoint
+
+
 # ---------- Response views ----------
 
 
@@ -190,6 +206,20 @@ class SellerProfileOut(BaseModel):
 class OnboardingOut(BaseModel):
     onboarding_url: str
     payments_ready: bool
+
+
+class NotificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: str
+    email: str
+    kind: EventKind
+    status: NotificationStatus
+    attempts: int
+    last_error: str | None
+    created_at: datetime
+    sent_at: datetime | None
 
 
 class AuditOut(BaseModel):

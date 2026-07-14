@@ -29,7 +29,16 @@ from sqlalchemy import (
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from .models import EmailTokenPurpose, JobStatus, OfferStatus, PaymentStatus, PayoutStatus, UserRole
+from .models import (
+    EmailTokenPurpose,
+    EventKind,
+    JobStatus,
+    NotificationStatus,
+    OfferStatus,
+    PaymentStatus,
+    PayoutStatus,
+    UserRole,
+)
 
 
 def _now() -> datetime:
@@ -326,3 +335,25 @@ class EmailToken(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
     expires_at: Mapped[datetime] = mapped_column(_TS)
     used_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
+
+
+class Notification(Base):
+    """Transactional-outbox row: enqueued inside the domain transaction,
+    delivered by the drainer. `email` and `payload` are snapshots taken at
+    enqueue time — the drainer never re-queries mutable domain state."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    email: Mapped[str] = mapped_column(String(320))
+    kind: Mapped[EventKind] = mapped_column(_enum(EventKind))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[NotificationStatus] = mapped_column(
+        _enum(NotificationStatus), default=NotificationStatus.PENDING, index=True
+    )
+    attempts: Mapped[int] = mapped_column(default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(_TS, default=_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    sent_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
+    last_error: Mapped[str | None] = mapped_column(String(512), default=None)
