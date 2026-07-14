@@ -474,6 +474,13 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
     if session.scalar(select(Review).where(Review.job_id == job_id)) is not None:
         raise HTTPException(status_code=409, detail="job already reviewed")
 
+    seller = repo.get_or_create_seller(session, job.seller_id)
+    seller.rating_count += 1
+    seller.rating_sum += body.rating
+    # get_or_create_seller's session.get() autoflushes any pending INSERT, so
+    # the review is added only after it — otherwise the UNIQUE(job_id)
+    # violation would surface uncaught by that autoflush, not by the guarded
+    # flush() below.
     review = Review(
         job_id=job.id,
         buyer_id=buyer_id,
@@ -482,10 +489,12 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
         comment=body.comment,
     )
     session.add(review)
-    seller = repo.get_or_create_seller(session, job.seller_id)
-    seller.rating_count += 1
-    seller.rating_sum += body.rating
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
+        # the sequential duplicate, not a 500.
+        raise HTTPException(status_code=409, detail="job already reviewed") from None
     return review
 
 
@@ -507,7 +516,12 @@ def open_dispute(
         job_id=job.id, source=DisputeSource.BUYER, buyer_id=buyer_id, reason=body.reason
     )
     session.add(dispute)
-    session.flush()
+    try:
+        session.flush()
+    except IntegrityError:
+        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
+        # the sequential duplicate, not a 500.
+        raise HTTPException(status_code=409, detail="job already disputed") from None
     if job.seller_id is not None:
         notifications.enqueue(
             session,
@@ -704,6 +718,13 @@ def review_buyer(
     if session.scalar(select(SellerReview).where(SellerReview.job_id == job_id)) is not None:
         raise HTTPException(status_code=409, detail="job already reviewed")
 
+    buyer = repo.get_or_create_buyer(session, job.buyer_id)
+    buyer.rating_count += 1
+    buyer.rating_sum += body.rating
+    # get_or_create_buyer's session.get() autoflushes any pending INSERT, so
+    # the review is added only after it — otherwise the UNIQUE(job_id)
+    # violation would surface uncaught by that autoflush, not by the guarded
+    # flush() below.
     review = SellerReview(
         job_id=job.id,
         seller_id=seller_id,
@@ -712,9 +733,6 @@ def review_buyer(
         comment=body.comment,
     )
     session.add(review)
-    buyer = repo.get_or_create_buyer(session, job.buyer_id)
-    buyer.rating_count += 1
-    buyer.rating_sum += body.rating
     try:
         session.flush()
     except IntegrityError:
