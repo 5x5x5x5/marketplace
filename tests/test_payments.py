@@ -76,7 +76,7 @@ def test_onboarded_seller_is_matched(
     assert len(client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()) == 1
 
 
-def _accept_first_offer(client: TestClient, seller: Header) -> dict[str, object]:
+def accept_first_offer(client: TestClient, seller: Header) -> dict[str, object]:
     offer = client.get("/v1/seller/offers", headers=seller).json()[0]
     r = client.post(f"/v1/seller/offers/{offer['id']}/accept", headers=seller)
     assert r.status_code == 200, r.text
@@ -89,7 +89,7 @@ def test_accept_charges_and_goes_accepted_inline(
     """Fake charges succeed instantly → the job lands straight in ACCEPTED."""
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    accepted = _accept_first_offer(client, auth("seller", "s1"))
+    accepted = accept_first_offer(client, auth("seller", "s1"))
     assert accepted["status"] == "accepted"
 
     view = client.get(f"/v1/jobs/{job['id']}", headers=auth("buyer", "alice")).json()
@@ -104,7 +104,7 @@ def test_accept_with_async_charge_awaits_payment(
     fake_payments.next_charge_status = PaymentStatus.PENDING
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    accepted = _accept_first_offer(client, auth("seller", "s1"))
+    accepted = accept_first_offer(client, auth("seller", "s1"))
     assert accepted["status"] == "awaiting_payment"
 
     view = client.get(f"/v1/jobs/{job['id']}", headers=auth("buyer", "alice")).json()
@@ -119,7 +119,7 @@ def test_awaiting_payment_holds_the_capacity_slot(
     fake_payments.next_charge_status = PaymentStatus.PENDING
     onboard_and_avail(client, auth, basic_service, "s1")  # capacity 1
     new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))  # awaiting payment
+    accept_first_offer(client, auth("seller", "s1"))  # awaiting payment
     job2 = new_job(client, auth, basic_service, "bob")
     assert job2["status"] == "expired"  # only seller's slot is held
 
@@ -143,14 +143,14 @@ def test_provider_outage_rolls_accept_back(
     assert r2.json()["status"] == "accepted"
 
 
-def _pending_accept(
+def pending_accept(
     client: TestClient, auth: AuthFactory, sid: str, fake: FakeProvider
 ) -> tuple[str, str]:
     """Set up a job accepted with a pending charge; return (job_id, provider_payment_id)."""
     fake.next_charge_status = PaymentStatus.PENDING
     onboard_and_avail(client, auth, sid, "s1")
     job = new_job(client, auth, sid, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     with SessionLocal() as s:
         pid = s.scalar(
             select(Payment.provider_payment_id).where(Payment.job_id == UUID(str(job["id"])))
@@ -162,7 +162,7 @@ def _pending_accept(
 def test_webhook_success_activates_the_job(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     r = client.post(
         "/v1/payments/webhook",
         json={"event_id": "evt_1", "kind": "payment_succeeded", "object_id": pid},
@@ -199,7 +199,7 @@ def test_webhook_dedup_is_a_noop(client: TestClient, auth: AuthFactory) -> None:
 def test_late_failure_never_undoes_success(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     client.post(
         "/v1/payments/webhook",
         json={"event_id": "evt_s", "kind": "payment_succeeded", "object_id": pid},
@@ -216,7 +216,7 @@ def test_late_failure_never_undoes_success(
 def test_webhook_failure_records_but_keeps_waiting(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     client.post(
         "/v1/payments/webhook",
         json={"event_id": "evt_f", "kind": "payment_failed", "object_id": pid},
@@ -253,7 +253,7 @@ def test_malformed_webhook_is_400(client: TestClient) -> None:
 def test_payment_timeout_expires_job_and_frees_slot(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     # Age the job past the payment TTL (white-box, same precedent as seed_rating).
     with SessionLocal() as s:
         job = s.get(Job, UUID(job_id))
@@ -273,7 +273,7 @@ def test_sweep_void_failure_leaves_job_for_next_sweep(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
     """A failed void must not expire the job — the next sweep retries the void."""
-    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     with SessionLocal() as s:
         job = s.get(Job, UUID(job_id))
         assert job is not None
@@ -293,7 +293,7 @@ def test_sweep_void_failure_leaves_job_for_next_sweep(
 def _completed_job(client: TestClient, auth: AuthFactory, sid: str) -> str:
     onboard_and_avail(client, auth, sid, "s1")
     job = new_job(client, auth, sid, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
     assert r.status_code == 200, r.text
     return str(job["id"])
@@ -319,7 +319,7 @@ def test_transfer_outage_marks_payout_failed_but_completes(
 ) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     fake_payments.fail_next_call = True
     r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
     assert r.status_code == 200  # the work happened; money owed is recorded, not dropped
@@ -337,7 +337,7 @@ def test_admin_retries_failed_payout(
 ) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     fake_payments.fail_next_call = True
     client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
     payout_id = client.get("/v1/admin/payouts", headers=admin).json()[0]["id"]
@@ -364,7 +364,7 @@ def test_reversed_transfer_retry_forces_a_new_transfer(
     with no money moved. The retry must use a fresh key."""
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     fake_payments.next_transfer_status = PayoutStatus.FAILED  # created, then reversed
     r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
     assert r.status_code == 200
@@ -383,7 +383,7 @@ def test_reversed_transfer_retry_forces_a_new_transfer(
 def test_buyer_cancels_awaiting_payment_voids_charge(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: FakeProvider
 ) -> None:
-    job_id, pid = _pending_accept(client, auth, basic_service, fake_payments)
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     r = client.post(f"/v1/jobs/{job_id}/cancel", headers=auth("buyer", "alice"))
     assert r.status_code == 200
     assert r.json()["status"] == "cancelled"
@@ -402,7 +402,7 @@ def test_admin_cancel_of_paid_job_refunds(
 ) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))  # instant success → paid
+    accept_first_offer(client, auth("seller", "s1"))  # instant success → paid
 
     with SessionLocal() as s:
         pid = s.scalar(
@@ -430,7 +430,7 @@ def test_stale_success_never_resurrects_a_refund(
     event id, so it passes dedup) must not flip the payment back to SUCCEEDED."""
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))  # instant success → paid
+    accept_first_offer(client, auth("seller", "s1"))  # instant success → paid
 
     with SessionLocal() as s:
         pid = s.scalar(
@@ -458,6 +458,6 @@ def test_buyer_still_cannot_cancel_accepted(
 ) -> None:
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    _accept_first_offer(client, auth("seller", "s1"))
+    accept_first_offer(client, auth("seller", "s1"))
     r = client.post(f"/v1/jobs/{job['id']}/cancel", headers=auth("buyer", "alice"))
     assert r.status_code == 409  # paid + committed: only an admin unwinds this
