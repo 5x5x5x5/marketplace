@@ -14,7 +14,7 @@ from marketplace.mail import RecordingEmailSender
 from marketplace.models import EventKind, NotificationStatus, PaymentStatus, UserRole
 from marketplace.notifications import RENDERERS, drain_once, enqueue, enqueue_admins
 from marketplace.payments.fake import FakeProvider
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.test_payments import _accept_first_offer, _pending_accept, new_job, onboard_and_avail
 
 
@@ -363,3 +363,57 @@ def test_smtp_sender_skips_login_and_tls_when_unconfigured(
         from_addr="noreply@example.test",
     ).send("to@example.test", "s", "b")
     assert kinds == ["connect", "send", "quit"]
+
+
+# ---------- Admin endpoints + maintenance loop pieces ----------
+
+
+def test_admin_notifications_list_and_filter(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    new_job(client, auth, basic_service, "alice")
+    pending = client.get(
+        "/v1/admin/notifications", params={"status": "pending"}, headers=admin
+    ).json()
+    assert len(pending) == 1
+    assert pending[0]["kind"] == "offer_received"
+    assert pending[0]["attempts"] == 0
+    _drain()
+    assert (
+        client.get("/v1/admin/notifications", params={"status": "pending"}, headers=admin).json()
+        == []
+    )
+    sent = client.get("/v1/admin/notifications", params={"status": "sent"}, headers=admin).json()
+    assert len(sent) == 1 and sent[0]["sent_at"] is not None
+
+
+def test_admin_manual_drain(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    new_job(client, auth, basic_service, "alice")
+    r = client.post("/v1/admin/notifications/drain", headers=admin)
+    assert r.status_code == 200
+    assert r.json() == {"sent": 1}  # console sender: send is a log line, still counts
+    audit = client.get("/v1/admin/audit", headers=admin).json()
+    assert any(a["action"] == "drain_notifications" for a in audit)
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="SKIP LOCKED is only real on Postgres")
+def test_concurrent_drain_never_double_sends(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    onboard_and_avail(client, auth, basic_service, "s1")
+    for buyer in ("a1", "a2", "a3", "a4", "a5"):
+        new_job(client, auth, basic_service, buyer)
+    recorder = RecordingEmailSender()  # list.append is GIL-atomic
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        totals = list(pool.map(lambda _: drain_once(recorder), range(2)))
+    # Every offer email exists exactly once across both drains - no row sent twice.
+    offer_mails = [m for m in recorder.sent if "New offer" in m[1]]
+    assert sum(totals) == len(recorder.sent)
+    job_ids = [m[2].rsplit("Job: ", 1)[1] for m in offer_mails]
+    assert len(job_ids) == len(set(job_ids))

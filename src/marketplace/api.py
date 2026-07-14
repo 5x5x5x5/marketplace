@@ -12,10 +12,12 @@ row locks, not a process-wide lock. Buyer and seller responses use distinct view
 models that omit the other side's number (`models.py`).
 """
 
+import asyncio
 import logging
 import math
+import time
 from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import UUID
@@ -26,13 +28,14 @@ from sqlalchemy.orm import Session
 
 from . import notifications, repo
 from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
-from .db import get_session, init_db
+from .db import SessionLocal, get_session, init_db
 from .entities import (
     AuditLog,
     AuthSession,
     Availability,
     EmailToken,
     Job,
+    Notification,
     Offer,
     Payment,
     Payout,
@@ -45,6 +48,7 @@ from .entities import (
     WebhookEvent,
 )
 from .idempotency import IdempotencyMiddleware
+from .mail import get_mail_sender
 from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
     AdminSellerBody,
@@ -57,6 +61,8 @@ from .models import (
     MarginFloorBody,
     MarginSummaryOut,
     MatchingStrategyBody,
+    NotificationOut,
+    NotificationStatus,
     OfferStatus,
     OnboardingOut,
     PaymentStatus,
@@ -229,6 +235,37 @@ def _sweep(session: Session, provider: PaymentProvider) -> None:
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
     _sweep_expired_auth(session)
+
+
+def _run_drain_once() -> None:
+    """One outbox drain pass on a worker thread (sync Session stays off the loop)."""
+    notifications.drain_once(get_mail_sender())
+
+
+def _run_sweep_once() -> None:
+    with SessionLocal() as session:
+        _sweep(session, get_provider())
+        session.commit()
+
+
+async def _maintenance_loop() -> None:
+    """The template's heartbeat: drain the outbox every few seconds and run the
+    sweeps every minute, so offers/payments/sessions expire — and sellers get
+    their 2-minute-TTL offer emails — even when no requests arrive. Ticks are
+    crash-proof; cancellation (lifespan shutdown) stops the loop."""
+    last_sweep = time.monotonic()
+    while True:
+        await asyncio.sleep(settings.notify_drain_seconds)
+        try:
+            await asyncio.to_thread(_run_drain_once)
+        except Exception:
+            logger.exception("notification drain tick failed")
+        if time.monotonic() - last_sweep >= settings.sweep_interval_seconds:
+            last_sweep = time.monotonic()
+            try:
+                await asyncio.to_thread(_run_sweep_once)
+            except Exception:
+                logger.exception("sweep tick failed")
 
 
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
@@ -935,6 +972,28 @@ def retry_payout(
     return payout
 
 
+@admin_router.get("/notifications", response_model=list[NotificationOut])
+def list_notifications(
+    session: SessionDep,
+    status: NotificationStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[Notification]:
+    stmt = select(Notification)
+    if status is not None:
+        stmt = stmt.where(Notification.status == status)
+    rows = session.scalars(stmt.order_by(Notification.created_at.desc())).all()
+    return _paginate(rows, limit, offset)
+
+
+@admin_router.post("/notifications/drain")
+def drain_notifications(session: SessionDep, admin_id: AdminId) -> dict[str, int]:
+    """Manual drain for ops/cron — the in-process loop normally handles this."""
+    sent = notifications.drain_once(get_mail_sender())
+    audit(session, admin_id, "drain_notifications", "notifications", {"sent": sent})
+    return {"sent": sent}
+
+
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)
 def margins_summary(session: SessionDep) -> MarginSummaryOut:
     txs = session.scalars(select(Transaction)).all()
@@ -1084,7 +1143,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         init_db()
     bootstrap_admin()
     logger.info("marketplace starting (db=%s)", settings.database_url.split("://", 1)[0])
+    maintenance = asyncio.create_task(_maintenance_loop())
     yield
+    maintenance.cancel()
+    with suppress(asyncio.CancelledError):
+        await maintenance
 
 
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
