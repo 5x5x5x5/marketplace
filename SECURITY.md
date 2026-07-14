@@ -1,9 +1,10 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). The subsequent
-**template build** moved state to Postgres and changed a few security-relevant
-mechanics — see the update note first.
+hardening** closed the exploitable findings (status table below). Three
+updates followed, in order: the **template build** (moved state to Postgres),
+**payments** (added an escrow provider), and **real-user auth** (replaced the
+pilot HMAC tokens with DB-backed sessions) — see the update notes below.
 
 ## Update — template build
 
@@ -14,6 +15,8 @@ mechanics — see the update note first.
   true-parallel test can run against Postgres via `DATABASE_URL`.
 - **Tokens now expire** (`exp` claim; `TOKEN_TTL_HOURS`), closing the
   never-expiring-token gap. Still pilot-grade HMAC — not production auth.
+  *(Superseded — see "Update — real-user auth" below: HMAC tokens and
+  `TOKEN_TTL_HOURS` are deleted, not just expired.)*
 - **Seller capacity** is enforced under a row lock on accept, so a seller can't
   exceed their configured concurrent-job limit even under racing accepts.
 - **Money is `Decimal`** end-to-end; the margin floor is enforced on quantized
@@ -56,18 +59,70 @@ mechanics — see the update note first.
   (already-canceled counts as success), and a transactional outbox is the
   eventual upgrade path.
 
+## Update — real-user auth
+
+Pilot-grade HMAC tokens (`mint_token`, `MARKETPLACE_SECRET`) are gone —
+deleted, not deprecated. Identity now resolves through DB-backed sessions:
+
+- **Sessions are opaque bearers, hashed at rest.** `POST /v1/auth/signup` and
+  `POST /v1/auth/login` issue a random 32-byte token; only its sha256 is
+  stored (`auth_sessions.token_hash`). A leaked database dump doesn't hand out
+  usable bearer tokens. Every authenticated request does one indexed lookup
+  (`token_hash` + `expires_at > now`) to resolve `(role, user_id)`.
+- **Sessions are revocable, not just expiring.** Logout deletes the one row
+  for that token. A password reset deletes *every* session row for that user
+  (`confirm_password_reset`) — a stolen token stops working the moment the
+  owner resets their password. The same row-deletion path is where a future
+  ban/suspend would hook in. Sessions also carry a TTL
+  (`SESSION_TTL_HOURS`, default 72); expired rows are left for the lazy sweep
+  rather than actively purged.
+- **Passwords are argon2id via `pwdlib`** (`auth.hash_password`/
+  `verify_password`), never stored or logged in plaintext.
+- **Login gives no account-existence signal.** An unknown email still runs a
+  password verify against a fixed dummy hash before returning the same 401 as
+  a wrong password, so response timing doesn't distinguish "no such account"
+  from "wrong password."
+- **Password-reset-request is uniform-200 by design** (`POST
+  /v1/auth/password-reset/request` always replies `{"status": "ok"}`,
+  independent of whether the email/role exists) — no enumeration via status
+  code or body.
+- **One account is one email + one role.** The same email may hold a separate
+  buyer account and seller account; `(email, role)` is the uniqueness key, not
+  `email` alone. There's no self-serve admin signup — the admin account is
+  seeded once at startup from `ADMIN_EMAIL`/`ADMIN_PASSWORD`.
+- **Email verification and password reset ride the same `EmailSender` port**
+  (`src/marketplace/mail.py`). The shipped `ConsoleEmailSender` logs instead of
+  sending. Mail-send failure is a guarded boundary: `_issue_email_token`
+  catches and logs, so a broken/slow mail provider never fails or
+  fingerprints the enclosing request (signup still 201s; reset-request still
+  200s) — the token row is already committed, so the user can re-request.
+
+**Residuals, named rather than hidden:**
+- **No login rate-limiting.** Brute-forcing a password is not throttled at
+  the app layer; this is deliberately deferred to the gateway (see
+  `ROADMAP.md`'s API-hardening item), same posture as the rest of the API.
+- **A timing delta remains on `password-reset/request`.** The response body
+  and status code are identical either way, but the exists-branch does
+  strictly more work (an `EmailToken` insert plus a send attempt) than the
+  ghost branch, so wall-clock time leaks a faint signal. Closing it needs
+  constant-time work on the ghost path, which isn't built. Accepted at pilot
+  grade alongside the no-rate-limiting posture above.
+- **Email verification gates nothing yet.** `POST /v1/auth/verify` flips
+  `email_verified`, but no endpoint checks that flag — signup and login both
+  work on an unverified account, because the console adapter can't prove
+  mail was actually deliverable. A fork wiring in a real sender is expected
+  to add the gate at the same time.
+
 ## Threat model (pilot)
 
 Identity comes from an authenticated principal, never from a request body or
-query param. Three roles: `buyer`, `seller`, `admin`. Tokens are HMAC-signed
-(`src/marketplace/auth.py`) — **pilot-grade** (shared secret, no user store, no
-rotation). This is enough to give real users distinct, unspoofable identities
-without a database; it is **not** production auth. See `ROADMAP.md` for the
-upgrade path (real user store + provider).
-
-Set `MARKETPLACE_SECRET` in any non-local environment. The dev fallback secret
-is insecure by design and must never be used where untrusted clients can reach
-the API.
+query param. Three roles: `buyer`, `seller`, `admin`, each resolved from an
+`auth_sessions` row (see "Update — real-user auth" above) — not a shared
+secret, not a caller-supplied claim. This is enough to give real users
+distinct, unspoofable, revocable identities; the residuals above (no
+rate-limiting, the reset-timing delta, verification gating nothing) are
+named pilot-grade gaps, not silent ones. See `ROADMAP.md` for what's still
+ahead (admin RBAC, OAuth/social login).
 
 ## Findings and status
 

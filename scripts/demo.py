@@ -13,29 +13,69 @@ from uuid import UUID
 
 # Point at a throwaway DB before importing the app.
 os.environ.setdefault("DATABASE_URL", f"sqlite+pysqlite:///{tempfile.mkdtemp()}/demo.db")
-os.environ.setdefault("MARKETPLACE_SECRET", "demo-secret")
+os.environ.setdefault("ADMIN_EMAIL", "admin@demo.test")
+os.environ.setdefault("ADMIN_PASSWORD", "demo-admin-password")
+# Real env vars outrank .env in pydantic-settings: pin these empty so a
+# developer's .env (with a real Stripe key) can never flip this demo from the
+# fake provider onto the live API.
+os.environ.setdefault("STRIPE_SECRET_KEY", "")
+os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
 
+import email_validator
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace import api
-from marketplace.auth import mint_token
 from marketplace.db import SessionLocal, init_db
 from marketplace.entities import Payment
 from marketplace.models import PaymentStatus
 from marketplace.payments import fake_provider
 
+# This script uses reserved *.test addresses (RFC 2606); email-validator's
+# EmailStr backing rejects them as "special-use" domains unless told this is a
+# test environment. This is the library's own documented switch for it — see
+# tests/conftest.py for the same override.
+email_validator.TEST_ENVIRONMENT = True
 
-def bearer(role: str, sub: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {mint_token(role, sub)}"}
+
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def signup(c: TestClient, email: str, role: str) -> dict[str, object]:
+    resp = c.post(
+        "/v1/auth/signup",
+        json={
+            "email": email,
+            "password": "demo-password-1",
+            "role": role,
+            "display_name": email.split("@")[0],
+        },
+    )
+    return resp.json()
 
 
 def main() -> None:
     init_db()
-    c = TestClient(api.app)
-    admin = bearer("admin", "ops")
-    alice = bearer("buyer", "alice")
-    carol = bearer("seller", "carol")
+    with TestClient(api.app) as c:
+        _run(c)
+
+
+def _run(c: TestClient) -> None:
+    admin_login = c.post(
+        "/v1/auth/login",
+        json={"email": "admin@demo.test", "password": "demo-admin-password", "role": "admin"},
+    ).json()
+    admin = bearer(admin_login["token"])
+
+    alice_signup = signup(c, "buyer@demo.test", "buyer")
+    alice = bearer(alice_signup["token"])
+    alice_id = alice_signup["user"]["id"]
+
+    carol_signup = signup(c, "seller@demo.test", "seller")
+    carol = bearer(carol_signup["token"])
+    carol_id = carol_signup["user"]["id"]
+
     sid = "rideshare"
 
     print("1. Admin configures a service type + a surge pipeline")
@@ -52,7 +92,7 @@ def main() -> None:
     c.put("/v1/admin/config/margin_floor", json={"absolute": 3}, headers=admin)
 
     print("2. Seller Carol (capacity 2) onboards for payments, then posts availability")
-    c.put("/v1/admin/sellers/carol", json={"capacity": 2}, headers=admin)
+    c.put(f"/v1/admin/sellers/{carol_id}", json={"capacity": 2}, headers=admin)
     onboard = c.post("/v1/seller/payments/onboard", headers=carol).json()
     print(f"   seller onboarded: payments_ready={onboard['payments_ready']}")
     c.post("/v1/seller/availability", json={"service_type_id": sid}, headers=carol)
@@ -119,9 +159,15 @@ def main() -> None:
     payout2 = next(p for p in payouts if p["job_id"] == job2_id)
     print(f"   payout status = {payout2['status']}")
 
+    print("12. Alice checks her own identity")
+    me = c.get("/v1/auth/me", headers=alice).json()
+    print(f"   me: id={me['id']} email={me['email']} role={me['role']}")
+
     assert onboard["payments_ready"] is True
     assert view2["status"] == "accepted"
     assert payout2["status"] == "paid"
+    assert me["id"] == alice_id
+    assert me["email"] == "buyer@demo.test"
     print("\nAll asserts passed: onboarding ready, async accept resolved via webhook, payout paid.")
 
 

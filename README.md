@@ -9,8 +9,8 @@ the admin API. Fork it and specialize it per market.
 ## Stack
 
 FastAPI · Pydantic v2 · SQLAlchemy 2.0 + Alembic · Postgres (SQLite for local/tests)
-· pilot-grade HMAC auth. Money is `Decimal`, serialized as JSON strings. Pyright
-strict across `src/` and `tests/`.
+· DB-backed session auth (argon2 password hashing via `pwdlib`). Money is
+`Decimal`, serialized as JSON strings. Pyright strict across `src/` and `tests/`.
 
 ## Mechanism
 
@@ -60,17 +60,46 @@ The test suite runs against whatever `DATABASE_URL` points at, so `DATABASE_URL=
 
 ## Auth
 
-Every request carries a bearer token asserting a role (`buyer`/`seller`/`admin`),
-a subject id, and an expiry. Identity is taken from the token, **never** from the
-request body. Pilot-grade HMAC (`src/marketplace/auth.py`); set `MARKETPLACE_SECRET`
-outside local dev. `GET /healthz` is unauthenticated. See `SECURITY.md`.
+Real users, not minted tokens. Signup creates a password-holding `User` row and
+an opaque bearer session; every request after that carries `Authorization:
+Bearer <token>`, resolved to `(role, user_id)` by one indexed lookup against
+`auth_sessions`. Identity is taken from the resolved session, **never** from the
+request body. Sessions are revocable (logout, password reset, and a future ban
+path all just delete rows) and expire after `SESSION_TTL_HOURS` (default 72).
+`GET /healthz` and `POST /v1/payments/webhook` are the only unauthenticated
+routes. See `SECURITY.md`.
+
+An **account is one email + one role**: the same email can hold a separate buyer
+account and a separate seller account (each with its own password), but never
+two accounts in the same role. There is no self-serve admin signup — the admin
+account is seeded at startup from `ADMIN_EMAIL`/`ADMIN_PASSWORD` (see
+`.env.example`); leave them unset and no admin account exists.
 
 ```python
-from marketplace.auth import mint_token
-headers = {"Authorization": f"Bearer {mint_token('buyer', 'alice')}"}
+import httpx
+r = httpx.post(f"{BASE}/v1/auth/signup", json={
+    "email": "alice@example.com", "password": "correct-horse-battery",
+    "role": "buyer", "display_name": "Alice",
+})
+headers = {"Authorization": f"Bearer {r.json()['token']}"}
 ```
 
+**`/v1/auth`** — `POST /signup` (201, returns a session) · `POST /login` ·
+`POST /logout` · `GET /me` · `POST /verify` (email verification token) ·
+`POST /password-reset/request` · `POST /password-reset/confirm` (revokes every
+session on that account).
+
+Outbound mail (verification/reset links) goes through an `EmailSender` port
+(`src/marketplace/mail.py`); the shipped adapter just logs the message, so
+links land in the server log until a fork plugs in a real sender (SES, Resend,
+Postmark, …). Email verification doesn't gate anything yet — signup and login
+both work on an unverified account — because there's no real sender to make a
+verification requirement meaningful. A fork wires that gate in alongside its
+mail adapter.
+
 ## Endpoints (all under `/v1`)
+
+**Auth** (`/v1/auth/…`) — see the Auth section above.
 
 **Buyer** — `POST /quotes` · `POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
 `POST /jobs/{id}/cancel` · `POST /jobs/{id}/review`
@@ -147,6 +176,6 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
 ## Out of scope / next
 
-Notifications, trust & safety (disputes/chargebacks, partial refunds, fraud
-review), a background scheduler, and replacing the pilot HMAC auth with a real
-provider. See `ROADMAP.md`.
+Notifications (the mail port is in place; nothing sends push/SMS yet), trust &
+safety (disputes/chargebacks, partial refunds, fraud review), a background
+scheduler, and OAuth/social login. See `ROADMAP.md`.

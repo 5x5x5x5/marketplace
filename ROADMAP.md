@@ -23,26 +23,44 @@ users, then gets forked and specialized per market vertical. The differentiator
   admin refund (charge refunded at Stripe), transfer reversal → payout retry
   under a fresh idempotency key (new transfer, not a replay), and the
   payment-timeout sweep voiding a live PaymentIntent.
+- **Auth (done):** pilot HMAC (`mint_token`/`MARKETPLACE_SECRET`) is deleted;
+  real signup/login/logout/me/verify/password-reset over DB-backed, revocable
+  sessions (`/v1/auth/*`). Separate accounts per role (`unique(email, role)`),
+  argon2 password hashing, admin seeded from `ADMIN_EMAIL`/`ADMIN_PASSWORD` at
+  startup, and an `EmailSender` port (console adapter for now) backing
+  verification/reset. Residuals named in `SECURITY.md`: no login
+  rate-limiting, a timing delta on `password-reset/request`, and email
+  verification doesn't gate anything yet (no real mail sender to make the
+  gate meaningful).
 
 ## Done ✓
 
 Persistence (Postgres/SQLAlchemy/Alembic) · Decimal money · lifecycle
 completeness (cancel/decline/offer-timeout/re-match/graceful-expiry) · ratings
 write-path feeding `highest_rated` · seller tier + capacity management · `/v1`
-API versioning · admin audit log · token expiry · **payments & payouts**
-(seller onboarding gate, escrow charge-at-accept/transfer-at-complete, async
-payment via signed+deduped webhook, payment-timeout sweep, cancel void/refund,
-admin payout retry — Stripe Connect controller-properties accounts, fake
-provider for dev/tests; **verified end-to-end against a real Stripe test
-account 2026-07-13**: onboarding, charge, signed webhook, and transfer all
-worked first-contact with zero adapter changes) · **idempotency keys** (client
-`Idempotency-Key` header on money-mutating POSTs, replayed per-principal).
+API versioning · admin audit log · **payments & payouts** (seller onboarding
+gate, escrow charge-at-accept/transfer-at-complete, async payment via
+signed+deduped webhook, payment-timeout sweep, cancel void/refund, admin
+payout retry — Stripe Connect controller-properties accounts, fake provider
+for dev/tests; **verified end-to-end against a real Stripe test account
+2026-07-13**: onboarding, charge, signed webhook, and transfer all worked
+first-contact with zero adapter changes) · **idempotency keys** (client
+`Idempotency-Key` header on money-mutating POSTs, replayed per-principal) ·
+**real-user auth** (DB-backed, revocable, sha256-at-rest sessions replacing
+pilot HMAC; separate buyer/seller/admin accounts; argon2 passwords; admin
+bootstrap from env; email verification + password reset over an `EmailSender`
+port — residuals: no login rate-limiting, a reset-timing delta, verification
+gates nothing yet; see `SECURITY.md`).
 
 ## What's still ahead
 
 Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
 
-1. **Notifications** — email/push on offered/accepted/completed (async).
+1. **Notifications** — email/push on offered/accepted/completed (async). Now
+   unblocked: every identity has a verified-or-not email (`User.email`) and
+   the outbound-mail port already exists (`src/marketplace/mail.py`,
+   currently backing verification/reset) — a real sender adapter and this
+   phase share the same seam.
 2. **Trust & safety** — disputes/chargebacks, partial refunds, seller→buyer
    reviews, fraud/abuse, moderation.
 3. **Processing fees in the margin math** — the `Transaction` ledger records
@@ -59,10 +77,13 @@ Rough priority. Each is fork-agnostic — build generic here, specialize after f
    off the event loop under load); a TTL sweep for the `idempotency_keys` /
    `webhook_events` tables; a PG-gated cancel-vs-webhook race test; indexes on
    `provider_account_id`/`provider_transfer_id`.
-6. **Admin RBAC** — beyond the single shared operator token.
+6. **Admin RBAC** — beyond the single shared admin role; every admin account
+   currently has identical, full authority.
 7. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
-8. **Auth** — replace pilot HMAC with a real user store + provider (fastapi-users /
-   Supabase Auth).
+8. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
+   Fork-time item: real-user auth (password signup/login, sessions, argon2,
+   verification/reset) already shipped — see "Done" above and `SECURITY.md`.
+   This is additive, not a replacement.
 
 ## Build vs template: build
 
@@ -85,9 +106,12 @@ Postgres behind adapters so none of these choices lock you in. When ready:
   global edge (you don't yet).
 - **DB** — Neon (serverless, branching) or Supabase (bundles auth; note the
   7-day inactivity pause on free projects).
-- **Auth** — fastapi-users (currently maintenance-mode; a successor is in
-  progress) or Supabase Auth. Avoid Auth0/Clerk MAU pricing cliffs until
-  enterprise SSO justifies them. Replaces the pilot HMAC tokens.
+- **Auth** — implemented in-house (DB-backed sessions, argon2, `/v1/auth/*`;
+  see "Done" above and `SECURITY.md`) rather than rented, so there's no
+  vendor lock-in on identity. A fork wanting OAuth/social login or managed
+  user infra instead can layer fastapi-users (currently maintenance-mode; a
+  successor is in progress) or Supabase Auth on top; avoid Auth0/Clerk MAU
+  pricing cliffs until enterprise SSO justifies them.
 - **Payments** — implemented (Stripe Connect, controller-properties accounts).
   Wired against `stripe` 15.3.0's `.v1` namespace; verified end-to-end on a
   real Stripe test account 2026-07-13 (onboarding, charge, signed webhooks,
