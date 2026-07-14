@@ -25,7 +25,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from . import repo
-from .auth import current_buyer, current_seller, require_admin
+from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
 from .db import get_session, init_db
 from .entities import (
     AuditLog,
@@ -964,6 +964,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Create tables for SQLite/dev. Production applies Alembic migrations instead.
     if settings.database_url.startswith("sqlite"):
         init_db()
+    bootstrap_admin()
     logger.info("marketplace starting (db=%s)", settings.database_url.split("://", 1)[0])
     yield
 
@@ -977,6 +978,7 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(auth_router)
 app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)

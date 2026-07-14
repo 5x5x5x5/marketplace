@@ -9,19 +9,21 @@ and password resets delete rows.
 """
 
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pwdlib import PasswordHash
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .db import get_session
+from . import repo
+from .db import SessionLocal, get_session
 from .entities import AuthSession, User
-from .models import UserRole
+from .models import LoginRequest, SessionOut, SignupRequest, UserOut, UserRole
 from .settings import settings
 
 _password_hash = PasswordHash.recommended()  # argon2id
@@ -115,3 +117,85 @@ def peek_principal(db: Session, authorization: str | None) -> str | None:
         return None
     claims = _resolve_bearer(db, authorization)
     return None if claims is None else f"{claims.role}:{claims.sub}"
+
+
+logger = logging.getLogger("marketplace.auth")
+
+auth_router = APIRouter(prefix="/v1/auth", tags=["auth"])
+
+
+def _session_out(db: Session, user: User) -> SessionOut:
+    token, expires_at = create_session(db, user)
+    return SessionOut(token=token, expires_at=expires_at, user=UserOut.model_validate(user))
+
+
+@auth_router.post("/signup", response_model=SessionOut, status_code=201)
+def signup(body: SignupRequest, db: _SessionDep) -> SessionOut:
+    email = body.email.lower()
+    if db.scalar(select(User).where(User.email == email, User.role == body.role)) is not None:
+        raise HTTPException(status_code=409, detail="an account with this email and role exists")
+    user = User(
+        email=email,
+        role=UserRole(body.role),
+        password_hash=hash_password(body.password),
+        display_name=body.display_name,
+    )
+    db.add(user)
+    db.flush()
+    # The domain record exists from the first moment the identity does.
+    if user.role is UserRole.BUYER:
+        repo.get_or_create_buyer(db, user.id)
+    else:
+        repo.get_or_create_seller(db, user.id)
+    return _session_out(db, user)
+
+
+@auth_router.post("/login", response_model=SessionOut)
+def login(body: LoginRequest, db: _SessionDep) -> SessionOut:
+    user = db.scalar(select(User).where(User.email == body.email.lower(), User.role == body.role))
+    if user is None:
+        verify_password(body.password, _DUMMY_HASH)  # equalize timing; no enumeration
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    return _session_out(db, user)
+
+
+@auth_router.post("/logout")
+def logout(db: _SessionDep, authorization: Annotated[str, Header()] = "") -> dict[str, str]:
+    _, _, token = authorization.partition(" ")
+    row = db.scalar(select(AuthSession).where(AuthSession.token_hash == _hash_token(token)))
+    if row is None:
+        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    db.delete(row)
+    return {"status": "logged out"}
+
+
+@auth_router.get("/me", response_model=UserOut)
+def me(claims: Principal, db: _SessionDep) -> User:
+    user = db.get(User, claims.sub)
+    if user is None:  # session outlived the user row (deleted account)
+        raise HTTPException(status_code=401, detail="missing or invalid bearer token")
+    return user
+
+
+def bootstrap_admin() -> None:
+    """Seed the admin account from settings at startup. Empty settings -> no
+    admin (logged), which is fine for tests and the bare template."""
+    if not (settings.admin_email and settings.admin_password):
+        logger.info("ADMIN_EMAIL/ADMIN_PASSWORD unset; no admin account seeded")
+        return
+    email = settings.admin_email.lower()
+    with SessionLocal() as db:
+        exists = db.scalar(select(User).where(User.email == email, User.role == UserRole.ADMIN))
+        if exists is None:
+            db.add(
+                User(
+                    email=email,
+                    role=UserRole.ADMIN,
+                    password_hash=hash_password(settings.admin_password),
+                    display_name="admin",
+                )
+            )
+            db.commit()
+            logger.info("admin account seeded for %s", email)

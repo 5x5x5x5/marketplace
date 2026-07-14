@@ -19,6 +19,7 @@ os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 
+import email_validator
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
@@ -30,6 +31,11 @@ from marketplace.entities import AuthSession, Base, SellerProfile, User
 from marketplace.models import UserRole
 from marketplace.payments import fake_provider
 from marketplace.payments.fake import FakeProvider
+
+# Test fixtures use reserved *.test addresses (RFC 2606); email-validator's
+# EmailStr backing rejects them as "special-use" domains unless told this is a
+# test environment. This is the library's own documented switch for it.
+email_validator.TEST_ENVIRONMENT = True
 
 Header = dict[str, str]
 AuthFactory = Callable[[str, str], Header]
