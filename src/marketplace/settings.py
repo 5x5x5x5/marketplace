@@ -4,6 +4,8 @@
 in the test suite (no Docker needed). SQLAlchemy keeps the schema portable.
 """
 
+from decimal import Decimal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +47,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_starttls: bool = True
     mail_from: str = "marketplace@localhost"
+
+    # Disputes: buyer-opened arbitration on completed jobs.
+    dispute_window_days: int = 7
+    chargeback_fee_usd: Decimal = Decimal("15.00")  # provider fee on a lost chargeback
 
 
 settings = Settings()

@@ -30,6 +30,9 @@ from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .models import (
+    AdjustmentKind,
+    DisputeSource,
+    DisputeStatus,
     EmailTokenPurpose,
     EventKind,
     JobStatus,
@@ -357,3 +360,41 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
     sent_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
     last_error: Mapped[str | None] = mapped_column(String(512), default=None)
+
+
+class Dispute(Base):
+    """One per job. Buyer-opened arbitration or a provider chargeback; the
+    money outcome lives in `adjustments`, never by editing booked rows."""
+
+    __tablename__ = "disputes"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    source: Mapped[DisputeSource] = mapped_column(_enum(DisputeSource))
+    buyer_id: Mapped[str] = mapped_column(String(128), index=True)
+    reason: Mapped[str] = mapped_column(String(2000))
+    status: Mapped[DisputeStatus] = mapped_column(
+        _enum(DisputeStatus), default=DisputeStatus.OPEN, index=True
+    )
+    refund_amount: Mapped[Decimal | None] = mapped_column(_MONEY, default=None)
+    clawback_amount: Mapped[Decimal | None] = mapped_column(_MONEY, default=None)
+    resolution_note: Mapped[str | None] = mapped_column(String(2000), default=None)
+    provider_dispute_id: Mapped[str | None] = mapped_column(String(256), default=None, index=True)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
+
+
+class Adjustment(Base):
+    """Append-only money corrections. Amounts are positive; kind carries the
+    sign. Transaction rows are immutable — this ledger is the only place a
+    resolution touches the books."""
+
+    __tablename__ = "adjustments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), index=True)
+    dispute_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("disputes.id"), index=True)
+    kind: Mapped[AdjustmentKind] = mapped_column(_enum(AdjustmentKind))
+    amount: Mapped[Decimal] = mapped_column(_MONEY)
+    provider_ref: Mapped[str | None] = mapped_column(String(256), default=None)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)

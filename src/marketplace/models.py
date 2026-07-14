@@ -87,6 +87,25 @@ class NotificationStatus(StrEnum):
     FAILED = "failed"  # terminal after notify_max_attempts; inspect via admin endpoint
 
 
+class DisputeSource(StrEnum):
+    BUYER = "buyer"
+    PROVIDER = "provider"  # chargeback arriving via the payment provider
+
+
+class DisputeStatus(StrEnum):
+    OPEN = "open"
+    RESOLVED = "resolved"  # admin arbitration; 0/0 amounts = rejected
+    CHARGEBACK_WON = "chargeback_won"
+    CHARGEBACK_LOST = "chargeback_lost"
+
+
+class AdjustmentKind(StrEnum):
+    REFUND = "refund"  # reduces net margin
+    CLAWBACK = "clawback"  # increases net margin
+    CHARGEBACK_LOSS = "chargeback_loss"  # reduces net margin
+    CHARGEBACK_FEE = "chargeback_fee"  # reduces net margin
+
+
 # ---------- Response views ----------
 
 
