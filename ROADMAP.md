@@ -50,39 +50,40 @@ first-contact with zero adapter changes) · **idempotency keys** (client
 pilot HMAC; separate buyer/seller/admin accounts; argon2 passwords; admin
 bootstrap from env; email verification + password reset over an `EmailSender`
 port — residuals: no login rate-limiting, a reset-timing delta, verification
-gates nothing yet; see `SECURITY.md`).
+gates nothing yet; see `SECURITY.md`) · **notifications + background
+scheduler** (transactional outbox: seven lifecycle events enqueued inside the
+domain transaction with role-safe payload snapshots; drained with
+retry/backoff by an in-process maintenance loop that also runs the sweeps on
+a clock — offers, stale payments, and sessions now expire without traffic;
+stdlib SMTP adapter behind `SMTP_HOST`, console adapter otherwise; admin
+list/drain endpoints; an external-worker extraction needs no schema change).
 
 ## What's still ahead
 
 Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
 
-1. **Notifications** — email/push on offered/accepted/completed (async). Now
-   unblocked: every identity has a verified-or-not email (`User.email`) and
-   the outbound-mail port already exists (`src/marketplace/mail.py`,
-   currently backing verification/reset) — a real sender adapter and this
-   phase share the same seam.
-2. **Trust & safety** — disputes/chargebacks, partial refunds, seller→buyer
-   reviews, fraud/abuse, moderation.
-3. **Processing fees in the margin math** — the `Transaction` ledger records
+1. **Trust & safety** — disputes/chargebacks, partial refunds, seller→buyer
+   reviews, fraud/abuse, moderation. Notification preferences/digests land
+   here too (everything sent today is transactional).
+2. **Processing fees in the margin math** — the `Transaction` ledger records
    margin gross of provider fees (Stripe: ~2.9% + 30¢ per charge, and the fee
    is kept on refunds — a refunded job costs the platform the fee with no
    ledger entry). Verified on the test account: $50.00 ledger margin landed as
    $42.14 cash after $7.86 in fees. Either absorb expected fees in the margin
    floor or record a per-transaction fee estimate alongside the margin.
-4. **Background scheduler** — replace the lazy offer-expiry / payment-timeout
-   sweep with a cron/worker.
-5. **Observability & ops** — metrics, structured request logging, an error
+3. **Observability & ops** — metrics, structured request logging, an error
    envelope so a crafted body never surfaces a 500. Payments hardening
    follow-ups: the webhook handler is async-over-sync-`Session` (move DB work
    off the event loop under load); a TTL sweep for the `idempotency_keys` /
    `webhook_events` tables; a PG-gated cancel-vs-webhook race test; indexes on
    `provider_account_id`/`provider_transfer_id`. Standing rule: no endpoint
    should echo a secret into a stored idempotency response (auth paths are
-   now excluded; audit future secret-returning POSTs).
-6. **Admin RBAC** — beyond the single shared admin role; every admin account
+   now excluded; audit future secret-returning POSTs). A TTL sweep for old
+   SENT/FAILED `notifications` rows joins the same bucket.
+4. **Admin RBAC** — beyond the single shared admin role; every admin account
    currently has identical, full authority.
-7. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
-8. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
+5. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
+6. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
    Fork-time item: real-user auth (password signup/login, sessions, argon2,
    verification/reset) already shipped — see "Done" above and `SECURITY.md`.
    This is additive, not a replacement.

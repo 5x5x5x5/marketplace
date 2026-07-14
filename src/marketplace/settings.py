@@ -32,5 +32,19 @@ class Settings(BaseSettings):
     admin_password: str = ""
     base_url: str = "http://localhost:8000"  # used in verification/reset links
 
+    # Notifications: transactional outbox drained by the in-process loop.
+    notify_drain_seconds: int = 5
+    notify_max_attempts: int = 5
+    sweep_interval_seconds: int = 60
+
+    # Mail delivery: SMTP_HOST set -> stdlib SMTP adapter (any provider's SMTP
+    # endpoint, or Mailpit locally); empty -> console adapter (logs only).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+    mail_from: str = "marketplace@localhost"
+
 
 settings = Settings()

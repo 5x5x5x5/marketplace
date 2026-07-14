@@ -61,6 +61,12 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 - **Webhook handling stays dedup-idempotent.** Every inbound event is recorded
   in `WebhookEvent` keyed on the provider's event id before it's applied; a
   replay must no-op, never re-apply.
+- **Notifications are enqueue-only inside the domain transaction.** Write them
+  via `notifications.enqueue`/`enqueue_admins` in the same transaction as the
+  state change — never call the mail port from an endpoint. Sends happen only
+  in `notifications.drain_once` (the maintenance loop / admin drain). Payloads
+  are role-safe snapshots at enqueue time: seller payloads never carry
+  `buyer_price`, buyer payloads never carry `seller_payout`.
 
 ## Subtle bits
 
@@ -98,14 +104,24 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   scraping the console adapter's log output. Restore the previous sender
   (`use_sender` returns it) when done — the fixture in `conftest.py` does this
   around each test.
+- The maintenance loop (`api._maintenance_loop`, spawned in the lifespan)
+  never runs in tests: the `client` fixture builds `TestClient(api.app)`
+  without entering its context manager, so tests call
+  `notifications.drain_once()` deterministically instead of waiting on ticks.
+  `SMTP_HOST` is pinned empty in `conftest.py` so a developer `.env` can never
+  make the suite send real mail.
+- Import direction for notifications is one-way:
+  `api -> notifications -> (mail, db, entities, models)`. The loop lives in
+  `api.py` because it ticks `_sweep`; putting it in `notifications.py` would
+  create a cycle.
 
 ## Explicit non-goals (roadmap, not now)
 
-Notifications, seller→buyer reviews, a background scheduler (lazy sweep +
-admin trigger instead), gateway rate-limiting, admin RBAC (single shared admin
-role for now), and OAuth/social login. Seller bidding is out (this is not an
-auction). Payments now ship (Stripe Connect via `payments/port.py`, fake
-provider for dev/tests) and are verified against a real Stripe test account;
-disputes/chargebacks + partial refunds are still ahead. Auth now ships
-(DB-backed sessions, real signup/login — see the Non-negotiables above and
-`SECURITY.md`) — see `ROADMAP.md`.
+Seller→buyer reviews, notification preferences/digests, gateway rate-limiting,
+admin RBAC (single shared admin role for now), and OAuth/social login. Seller
+bidding is out (this is not an auction). Payments ship (Stripe Connect via
+`payments/port.py`, verified against a real Stripe test account);
+disputes/chargebacks + partial refunds are still ahead. Auth ships (DB-backed
+sessions, real signup/login). Notifications + the background scheduler ship
+(transactional outbox + in-process maintenance loop; external-worker
+extraction needs no schema change) — see `ROADMAP.md`.
