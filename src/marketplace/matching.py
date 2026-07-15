@@ -68,8 +68,10 @@ def required_spread(buyer_price: Decimal, floor: MarginFloor, fees: FeeConfig) -
     return effective_floor(buyer_price, floor) + estimated_fee(buyer_price, fees)
 
 
-def passes_floor(buyer_price: Decimal, payout: Decimal, floor: MarginFloor) -> bool:
-    return (buyer_price - payout) >= effective_floor(buyer_price, floor)
+def passes_floor(
+    buyer_price: Decimal, payout: Decimal, floor: MarginFloor, fees: FeeConfig
+) -> bool:
+    return (buyer_price - payout) >= required_spread(buyer_price, floor, fees)
 
 
 def _priced(
@@ -79,7 +81,7 @@ def _priced(
     out: list[tuple[Candidate, Decimal]] = []
     for c in candidates:
         payout = seller_payout_for(c, cfg, supply, demand)
-        if passes_floor(buyer_price, payout, cfg.margin_floor):
+        if passes_floor(buyer_price, payout, cfg.margin_floor, cfg.fees):
             out.append((c, payout))
     return out
 

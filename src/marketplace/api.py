@@ -67,7 +67,7 @@ from .entities import (
 )
 from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
-from .matching import STRATEGIES, effective_floor, seller_payout_for
+from .matching import STRATEGIES, required_spread, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
@@ -541,12 +541,19 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
     ]
     probe = min(payouts) if payouts else None
     if probe is not None:
-        floor = effective_floor(buyer_price, cfg.margin_floor)
-        if buyer_price - probe < floor:
+        required = required_spread(buyer_price, cfg.margin_floor, cfg.fees)
+        if buyer_price - probe < required:
             # Round the corrected price UP to a whole unit so it isn't pinned to
-            # exactly probe + floor (which would leak the seller's payout).
-            target = to_money(math.ceil(probe + floor))
+            # exactly probe + required (which would leak the seller's payout).
+            # Both the pct floor and the fee grow with the bumped price, so one
+            # ceil can undershoot — walk whole units until the invariant holds,
+            # bounded by the ceiling.
             ceiling = to_money(cfg.service.base_buyer_price * cfg.margin_floor.ceiling_multiplier)
+            target = to_money(math.ceil(probe + required))
+            while target <= ceiling and target - probe < required_spread(
+                target, cfg.margin_floor, cfg.fees
+            ):
+                target += 1
             if target > ceiling:
                 raise HTTPException(
                     status_code=422,
