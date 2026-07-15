@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from . import notifications, repo
 from .auth import (
     Claims,
+    Principal,
     auth_router,
     bootstrap_admin,
     current_buyer,
@@ -49,6 +50,7 @@ from .entities import (
     EmailToken,
     Job,
     Notification,
+    NotificationMute,
     Offer,
     Payment,
     Payout,
@@ -88,6 +90,8 @@ from .models import (
     MarginSummaryOut,
     MatchingStrategyBody,
     NotificationOut,
+    NotificationPreferenceOut,
+    NotificationPreferencesUpdate,
     NotificationStatus,
     OfferStatus,
     OnboardingOut,
@@ -399,6 +403,61 @@ def my_reports(session: SessionDep, claims: ParticipantClaims) -> list[Report]:
             .order_by(Report.created_at.desc())
         ).all()
     )
+
+
+# ---------- Notification preferences router ----------
+
+prefs_router = APIRouter(prefix="/v1", tags=["preferences"])
+
+
+def _pref_rows(session: Session, claims: Claims) -> list[NotificationPreferenceOut]:
+    kinds = [k for k, role in notifications.KIND_ROLES.items() if role is claims.role]
+    muted = set(
+        session.scalars(
+            select(NotificationMute.kind).where(NotificationMute.user_id == claims.sub)
+        ).all()
+    )
+    return [
+        NotificationPreferenceOut(
+            kind=k,
+            muted=k in muted and k not in notifications.MUST_SEND,
+            locked=k in notifications.MUST_SEND,
+        )
+        for k in kinds
+    ]
+
+
+@prefs_router.get("/notification-preferences", response_model=list[NotificationPreferenceOut])
+def get_notification_preferences(
+    session: SessionDep, claims: Principal
+) -> list[NotificationPreferenceOut]:
+    return _pref_rows(session, claims)
+
+
+@prefs_router.put("/notification-preferences", response_model=list[NotificationPreferenceOut])
+def put_notification_preferences(
+    body: NotificationPreferencesUpdate, session: SessionDep, claims: Principal
+) -> list[NotificationPreferenceOut]:
+    wanted = set(body.muted)
+    for kind in wanted:
+        if kind in notifications.MUST_SEND:
+            raise HTTPException(status_code=422, detail=f"{kind} cannot be muted")
+        if notifications.KIND_ROLES[kind] is not claims.role:
+            raise HTTPException(status_code=422, detail=f"{kind} is not a {claims.role} kind")
+    # Serialize concurrent PUTs for the same user: naive delete-then-insert
+    # under READ COMMITTED unions both sets (each DELETE misses the other's
+    # uncommitted rows). The row lock makes replace-set last-writer-wins.
+    session.get(User, claims.sub, with_for_update=True)
+    session.execute(delete(NotificationMute).where(NotificationMute.user_id == claims.sub))
+    for kind in sorted(wanted):
+        session.add(NotificationMute(user_id=claims.sub, kind=kind))
+    try:
+        session.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=409, detail="preferences changed concurrently, retry"
+        ) from None
+    return _pref_rows(session, claims)
 
 
 # ---------- Buyer router ----------
@@ -1884,4 +1943,5 @@ app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)
 app.include_router(reports_router)
+app.include_router(prefs_router)
 app.include_router(payments_router)
