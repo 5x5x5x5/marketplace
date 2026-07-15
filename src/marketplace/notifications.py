@@ -98,11 +98,15 @@ def enqueue_admins(session: Session, kind: EventKind, payload: dict[str, Any]) -
                 )
             ).all()
         )
+    sent_any = False
     for admin in admins:
         if admin.id in muted:
             logger.debug("notification %s muted by admin %s", kind, admin.id)
             continue
         session.add(Notification(user_id=admin.id, email=admin.email, kind=kind, payload=payload))
+        sent_any = True
+    if not sent_any and kind not in MUST_SEND:
+        logger.warning("notification %s skipped: all admin recipients muted", kind)
 
 
 # ---------- Renderers: pure payload -> (subject, body) ----------

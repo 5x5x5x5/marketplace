@@ -253,7 +253,10 @@ def _run(c: TestClient) -> None:
 
     # --- Act 6: notification preferences (mute the nudge, money mail stays) ---
     print("19. Carol mutes offer_received — a new job matches silently")
-    c.put("/v1/notification-preferences", json={"muted": ["offer_received"]}, headers=carol)
+    mute_resp = c.put(
+        "/v1/notification-preferences", json={"muted": ["offer_received"]}, headers=carol
+    )
+    assert mute_resp.status_code == 200, mute_resp.text
 
     def offer_mail_count() -> int:
         rows = c.get("/v1/admin/notifications", headers=admin).json()
@@ -268,7 +271,8 @@ def _run(c: TestClient) -> None:
     assert offers, "offer should still exist in-app"
 
     print("20. Carol unmutes — the next offer mails again")
-    c.put("/v1/notification-preferences", json={"muted": []}, headers=carol)
+    unmute_resp = c.put("/v1/notification-preferences", json={"muted": []}, headers=carol)
+    assert unmute_resp.status_code == 200, unmute_resp.text
     q = c.post("/v1/quotes", json={"service_type_id": sid}, headers=alice).json()
     c.post("/v1/jobs", json={"quote_id": q["id"]}, headers=alice)
     assert offer_mail_count() == before + 1

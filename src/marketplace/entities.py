@@ -432,7 +432,7 @@ class NotificationMute(Base):
     __table_args__ = (UniqueConstraint("user_id", "kind"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     kind: Mapped[EventKind] = mapped_column(_enum(EventKind))
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
 
