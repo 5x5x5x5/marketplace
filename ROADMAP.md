@@ -82,7 +82,10 @@ users, then gets forked and specialized per market vertical. The differentiator
   stamped onto every charge at charge time (never recomputed later), and the
   margin floor is enforced net of that estimate at both quote time and
   match-time candidate filtering so a floor-priced job can't be signed at a
-  loss. `GET /v1/admin/margins/summary` adds `fees_estimated` and
+  loss for the fee config in force at quote/match time — a fee-config change
+  between quote and accept is applied at the stamp, the same
+  eventual-consistency stance as the margin floor itself.
+  `GET /v1/admin/margins/summary` adds `fees_estimated` and
   `platform_margin_net_of_fees` — a cash view over SUCCEEDED/REFUNDED charges
   that matches what actually lands in the bank account. See `SECURITY.md`.
 

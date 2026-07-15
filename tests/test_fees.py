@@ -125,6 +125,30 @@ def test_summary_excludes_uncaptured_charges(
     assert Decimal(summary["fees_estimated"]) == Decimal("0.00")
 
 
+def test_summary_excludes_voided_charges(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """A PENDING charge that an admin cancel voids to FAILED never captured —
+    still excluded, same as the PENDING state it came from."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    fake_provider.next_charge_status = PaymentStatus.PENDING
+    job = new_job(client, auth, basic_service, "alice")
+    offer = client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()[0]
+    client.post(f"/v1/seller/offers/{offer['id']}/accept", headers=auth("seller", "s1"))
+    assert job["id"]  # charge parked AWAITING_PAYMENT
+
+    r = client.post(f"/v1/admin/jobs/{job['id']}/cancel", headers=admin)
+    assert r.status_code == 200
+
+    with SessionLocal() as s:
+        payment = s.scalars(select(Payment).where(Payment.job_id == UUID(str(job["id"])))).one()
+        assert payment.status == PaymentStatus.FAILED
+        assert payment.fee_estimate > 0  # stamped at charge time, never captured
+
+    summary = client.get("/v1/admin/margins/summary", headers=admin).json()
+    assert Decimal(summary["fees_estimated"]) == Decimal("0.00")
+
+
 def test_summary_net_math_exact(
     client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
 ) -> None:

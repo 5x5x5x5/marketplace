@@ -244,11 +244,13 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   which is fork work). Pre-migration payment rows (charged before migration
   #9) carry `0`, not a backfilled estimate.
 - **The margin floor is enforced net of the fee estimate, at quote/match
-  time, so a floor-priced job can't be signed at a loss.** Both enforcement
-  sites — the quote-path check and match-time candidate filtering
-  (`passes_floor`) — compare against `matching.required_spread(buyer_price,
-  margin_floor, fees)`, never the gross spread; see the "Money is `Decimal`"
-  bullet above.
+  time, so a floor-priced job can't be signed at a loss — for the fee config
+  in force at quote/match time; a fee-config change between quote and accept
+  is applied at the stamp, the same eventual-consistency stance as the margin
+  floor itself.** Both enforcement sites — the quote-path check and
+  match-time candidate filtering (`passes_floor`) — compare against
+  `matching.required_spread(buyer_price, margin_floor, fees)`, never the
+  gross spread; see the "Money is `Decimal`" bullet above.
 
 ## Threat model (pilot)
 
