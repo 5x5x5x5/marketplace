@@ -90,9 +90,16 @@ def test_suspended_buyer_verbs(
     job = new_job(client, auth, basic_service, "alice")
     accept_first_offer(client, auth("seller", "s1"))
     buyer = auth("buyer", "alice")
+    # Quote obtained BEFORE suspension, spent AFTER — isolates create_job's own
+    # guard from create_quote's (already covered below).
+    spare_quote_id = client.post(
+        "/v1/quotes", json={"service_type_id": basic_service}, headers=buyer
+    ).json()["id"]
     _suspend(client, admin, "alice")
 
     r = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer)
+    assert r.status_code == 403 and r.json()["detail"] == "account suspended"
+    r = client.post("/v1/jobs", json={"quote_id": spare_quote_id}, headers=buyer)
     assert r.status_code == 403 and r.json()["detail"] == "account suspended"
     # reads still work
     assert client.get("/v1/jobs", headers=buyer).status_code == 200
@@ -101,13 +108,51 @@ def test_suspended_buyer_verbs(
     assert client.post(f"/v1/jobs/{job['id']}/cancel", headers=buyer).status_code == 200
 
 
+def test_suspended_buyer_review_and_dispute_gated(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """review_job and open_dispute (both buyer acquisition-adjacent verbs) 403
+    while the buyer is suspended, once there's a completed job to act on."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    accept_first_offer(client, auth("seller", "s1"))
+    client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    buyer = auth("buyer", "alice")
+    _suspend(client, admin, "alice")
+
+    r = client.post(f"/v1/jobs/{job['id']}/review", json={"rating": 5}, headers=buyer)
+    assert r.status_code == 403 and r.json()["detail"] == "account suspended"
+    r = client.post(
+        f"/v1/jobs/{job['id']}/dispute", json={"reason": "not as described"}, headers=buyer
+    )
+    assert r.status_code == 403 and r.json()["detail"] == "account suspended"
+
+
+def test_suspended_seller_onboarding_gated(
+    client: TestClient, auth: AuthFactory, admin: Header
+) -> None:
+    """onboard_payments 403s while the seller is suspended."""
+    seller = auth("seller", "s9")
+    _suspend(client, admin, "s9")
+    r = client.post("/v1/seller/payments/onboard", headers=seller)
+    assert r.status_code == 403 and r.json()["detail"] == "account suspended"
+
+
 def test_suspended_seller_verbs(
     client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
 ) -> None:
     """Seller acquisition 403s; complete (finish verb) still works."""
     onboard_and_avail(client, auth, basic_service, "s1")
     job = new_job(client, auth, basic_service, "alice")
-    accept_first_offer(client, auth("seller", "s1"))
+    # A second job while job's offer is still open — both land as OFFERED
+    # (matching only counts ACCEPTED/AWAITING_PAYMENT against capacity), so we
+    # can accept one now and leave the other's offer open to test accept_offer
+    # against below. Offer ids fetched BEFORE suspending (GETs stay open).
+    other_job = new_job(client, auth, basic_service, "bob")
+    offers = client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()
+    offer_id = next(o["id"] for o in offers if o["job_id"] == job["id"])
+    other_offer_id = next(o["id"] for o in offers if o["job_id"] == other_job["id"])
+    client.post(f"/v1/seller/offers/{offer_id}/accept", headers=auth("seller", "s1"))
     seller = auth("seller", "s1")
     _suspend(client, admin, "s1")
 
@@ -117,6 +162,9 @@ def test_suspended_seller_verbs(
         ).status_code
         == 403
     )
+    # accept_offer gated too: the other job's offer is still open
+    r = client.post(f"/v1/seller/offers/{other_offer_id}/accept", headers=seller)
+    assert r.status_code == 403 and r.json()["detail"] == "account suspended"
     # finish verb allowed: complete the in-flight job
     r = client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=seller)
     assert r.status_code == 200
