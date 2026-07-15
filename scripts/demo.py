@@ -10,6 +10,7 @@ by swapping the client for httpx pointed at your host.
 import os
 import tempfile
 import time
+from decimal import Decimal
 from uuid import UUID
 
 # Point at a throwaway DB before importing the app.
@@ -278,10 +279,19 @@ def _run(c: TestClient) -> None:
     assert offer_mail_count() == before + 1
     print("   offer mail queued after unmute")
 
+    # --- Act 7: fee-aware margin (the summary matches the bank account) ---
+    print("21. Fees: the margin summary is net of the provider's estimated cut")
+    s3 = c.get("/v1/admin/margins/summary", headers=admin).json()
+    fees = Decimal(s3["fees_estimated"])
+    net = Decimal(s3["platform_margin_net_of_fees"])
+    assert fees > 0, s3
+    assert net == Decimal(s3["platform_margin"]) + Decimal(s3["adjustments_net"]) - fees, s3
+    print(f"   fees_estimated={fees}  margin gross={s3['platform_margin']}  net_of_fees={net}")
+
     print(
         "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
         "payout paid, offer email loop-delivered, moderation loop closed, "
-        "notification mute/unmute enforced at enqueue."
+        "notification mute/unmute enforced at enqueue, margin reported net of provider fees."
     )
 
 

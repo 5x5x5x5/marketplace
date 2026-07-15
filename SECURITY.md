@@ -1,14 +1,16 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Six
+hardening** closed the exploitable findings (status table below). Seven
 updates followed, in order: the **template build** (moved state to Postgres),
 **payments** (added an escrow provider), **real-user auth** (replaced the
 pilot HMAC tokens with DB-backed sessions), **disputes** (added arbitration
 over the escrow — partial refunds/clawbacks and chargeback recording),
 **moderation** (suspension, comment takedown, and counterparty abuse
-reports), and **notification preferences** (per-kind mutes with a
-server-side money floor) — see the update notes below.
+reports), **notification preferences** (per-kind mutes with a
+server-side money floor), and **fee-aware margin** (admin-tunable
+provider-fee estimate stamped onto every charge, floor enforced net of it) —
+see the update notes below.
 
 ## Update — template build
 
@@ -229,6 +231,24 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   floor is enforced at `enqueue` (`notifications.MUST_SEND`), not at the API
   boundary. The outbox is what will actually send, so that is where the
   floor has to hold.
+
+## Update — fee-aware margin
+
+- **`Payment.fee_estimate` is an estimate, not reconciled provider actuals.**
+  It's computed from the admin-tunable `pct`/`fixed` platform config (`PUT
+  /v1/admin/config/fees`, defaulting to Stripe's 2.9% + 30¢) and stamped onto
+  the row once, at charge time — it is never recomputed later, so a
+  subsequent config change doesn't retroactively reprice historical charges,
+  and it can drift from what the provider actually deducts (a true
+  reconciliation would read the provider's charge/balance-transaction fee,
+  which is fork work). Pre-migration payment rows (charged before migration
+  #9) carry `0`, not a backfilled estimate.
+- **The margin floor is enforced net of the fee estimate, at quote/match
+  time, so a floor-priced job can't be signed at a loss.** Both enforcement
+  sites — the quote-path check and match-time candidate filtering
+  (`passes_floor`) — compare against `matching.required_spread(buyer_price,
+  margin_floor, fees)`, never the gross spread; see the "Money is `Decimal`"
+  bullet above.
 
 ## Threat model (pilot)
 
