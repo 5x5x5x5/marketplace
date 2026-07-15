@@ -24,8 +24,9 @@ from .entities import (
     PlatformConfig,
     SellerProfile,
     ServiceType,
+    User,
 )
-from .models import JobStatus
+from .models import JobStatus, UserStatus
 
 
 def get_or_create_seller(session: Session, seller_id: str) -> SellerProfile:
@@ -125,9 +126,19 @@ def eligible_candidates(
     avails = session.scalars(
         select(Availability).where(Availability.service_type_id == service_type_id)
     ).all()
+    if not avails:
+        return []
+    suspended = set(
+        session.scalars(
+            select(User.id).where(
+                User.id.in_([a.seller_id for a in avails]),
+                User.status == UserStatus.SUSPENDED,
+            )
+        ).all()
+    )
     out: list[Candidate] = []
     for a in avails:
-        if a.seller_id in exclude:
+        if a.seller_id in exclude or a.seller_id in suspended:
             continue
         prof = get_or_create_seller(session, a.seller_id)
         if not prof.payments_ready:

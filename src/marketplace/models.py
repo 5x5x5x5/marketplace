@@ -315,6 +315,20 @@ class BuyerProfileOut(BaseModel):
     completed_jobs: int
 
 
+class SuspendRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class UserModerationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    display_name: str
+    status: UserStatus
+    suspended_reason: str | None
+    suspended_at: datetime | None
+
+
 class OnboardingOut(BaseModel):
     onboarding_url: str
     payments_ready: bool

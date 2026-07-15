@@ -51,6 +51,7 @@ from .entities import (
     SellerReview,
     ServiceType,
     Transaction,
+    User,
     WebhookEvent,
 )
 from .idempotency import IdempotencyMiddleware
@@ -96,7 +97,11 @@ from .models import (
     ServiceTypeBody,
     ServiceTypeOut,
     Side,
+    SuspendRequest,
     TransactionOut,
+    UserModerationOut,
+    UserRole,
+    UserStatus,
     to_money,
 )
 from .payments import get_provider
@@ -121,6 +126,14 @@ ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _require_active(session: Session, user_id: str) -> None:
+    """Verb gate for suspension: acquisition endpoints call this first.
+    A missing row is treated as active (auth already proved the principal)."""
+    user = session.get(User, user_id)
+    if user is not None and user.status is UserStatus.SUSPENDED:
+        raise HTTPException(status_code=403, detail="account suspended")
 
 
 # ---------- Matching / offer helpers ----------
@@ -307,6 +320,7 @@ buyer_router = APIRouter(prefix="/v1", tags=["buyer"])
 
 @buyer_router.post("/quotes", response_model=QuoteOut)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
+    _require_active(session, buyer_id)
     cfg = repo.load_pricing_config(session, req.service_type_id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
@@ -363,6 +377,7 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
 
 @buyer_router.post("/jobs", response_model=BuyerJobView)
 def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) -> Job:
+    _require_active(session, buyer_id)
     quote = session.get(Quote, req.quote_id, with_for_update=True)
     # Same 404 whether missing or not-yours — don't confirm someone else's quote.
     if quote is None or quote.buyer_id != buyer_id:
@@ -466,6 +481,7 @@ def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
 
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut)
 def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id: BuyerId) -> Review:
+    _require_active(session, buyer_id)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -502,6 +518,7 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
 def open_dispute(
     job_id: UUID, body: DisputeRequest, session: SessionDep, buyer_id: BuyerId
 ) -> Dispute:
+    _require_active(session, buyer_id)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -607,6 +624,7 @@ def onboard_payments(
 
     `payments_ready` flips via the provider's account webhook (instantly for the
     fake provider); matching only offers jobs to ready sellers."""
+    _require_active(session, seller_id)
     seller = repo.get_or_create_seller(session, seller_id)
     if seller.provider_account_id is None:
         try:
@@ -631,6 +649,7 @@ def onboard_payments(
 def post_availability(
     req: AvailabilityRequest, session: SessionDep, seller_id: SellerId
 ) -> dict[str, str]:
+    _require_active(session, seller_id)
     if session.get(ServiceType, req.service_type_id) is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
     repo.get_or_create_seller(session, seller_id)
@@ -710,6 +729,7 @@ def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -
 def review_buyer(
     job_id: UUID, body: ReviewRequest, session: SessionDep, seller_id: SellerId
 ) -> SellerReview:
+    _require_active(session, seller_id)
     job = session.get(Job, job_id)
     if job is None or job.seller_id != seller_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -746,6 +766,7 @@ def review_buyer(
 def accept_offer(
     offer_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
 ) -> Job:
+    _require_active(session, seller_id)
     offer = session.get(Offer, offer_id, with_for_update=True)
     if offer is None or offer.seller_id != seller_id:
         raise HTTPException(status_code=404, detail="offer not found")
@@ -1040,6 +1061,40 @@ def admin_update_seller(
     )
     session.flush()
     return seller
+
+
+@admin_router.post("/users/{user_id}/suspend", response_model=UserModerationOut)
+def suspend_user(
+    user_id: str, body: SuspendRequest, session: SessionDep, admin_id: AdminId
+) -> User:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.role is UserRole.ADMIN:
+        raise HTTPException(status_code=422, detail="admins cannot be suspended")
+    if user.status is UserStatus.SUSPENDED:
+        raise HTTPException(status_code=409, detail="user already suspended")
+    user.status = UserStatus.SUSPENDED
+    user.suspended_reason = body.reason
+    user.suspended_at = _now()
+    audit(session, admin_id, "suspend_user", user_id, {"reason": body.reason})
+    session.flush()
+    return user
+
+
+@admin_router.post("/users/{user_id}/reinstate", response_model=UserModerationOut)
+def reinstate_user(user_id: str, session: SessionDep, admin_id: AdminId) -> User:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.status is not UserStatus.SUSPENDED:
+        raise HTTPException(status_code=409, detail="user is not suspended")
+    user.status = UserStatus.ACTIVE
+    user.suspended_reason = None
+    user.suspended_at = None
+    audit(session, admin_id, "reinstate_user", user_id, {})
+    session.flush()
+    return user
 
 
 @admin_router.get("/buyers", response_model=list[BuyerProfileOut])
