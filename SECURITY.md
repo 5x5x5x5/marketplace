@@ -159,8 +159,9 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   `GET /v1/profile` returns `rating`/`rating_count`, never the individual
   `SellerReview` rows or comments; those stay admin-side (`GET
   /v1/admin/buyers` is the same aggregate, not a review list). The
-  moderation sub-phase below answers the deferred question: buyers still
-  don't see individual reviews; admins gained the ability to hide one.
+  moderation sub-phase revisited this: each party can now read their own
+  job's review row(s) — no party ids, hidden comments read null (see the
+  moderation update below); cross-job review lists stay admin-side.
 
 ## Update — moderation
 

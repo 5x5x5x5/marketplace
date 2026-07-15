@@ -127,6 +127,16 @@ query, so it is covered by construction.
   - REVIEW/SELLER_REVIEW target eligibility: reporter is the review's
     author or subject. (Reporting a review you authored is allowed — a
     "please take my comment down" request.)
+  - *(Amended at final review.)* Subject-side report rights require
+    discoverability the original spec forgot to provide: no participant
+    surface exposed review ids. Added `GET /v1/jobs/{id}/reviews` (buyer)
+    and `GET /v1/seller/jobs/{id}/reviews` (seller) — party-guarded 404,
+    `JobReviewOut {id, kind, rating, comment, created_at}` with NO party
+    ids (identity asymmetry holds), `comment` via `public_comment` (hidden
+    stays hidden even to the parties), `kind` values equal to the report
+    `target_kind` strings so the pair is directly reportable. This
+    supersedes the takedown section's "no non-admin endpoint returns a
+    stored review after creation" observation.
   - On create: `notifications.enqueue_admins(EventKind.REPORT_OPENED_ADMIN,
     {report_id, target_kind, target_id, reason})` — mirrors dispute-opened.
 - `GET /v1/reports` — reporter's own reports: `id, target_kind, target_id,
