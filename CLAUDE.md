@@ -130,7 +130,7 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Explicit non-goals (roadmap, not now)
 
-Notification preferences/digests, gateway rate-limiting, admin RBAC (single
+Notification digests, gateway rate-limiting, admin RBAC (single
 shared admin role for now), and OAuth/social login. Automatic abuse
 signals/limits (report-count thresholds, auto-suspend) are deferred
 indefinitely — fork-specific heuristics, not a generic default. Seller
