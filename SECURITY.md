@@ -211,6 +211,11 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   deterministic (`user-{id[:8]}`), independent of the takedown path so it
   can be applied to a harassment-via-display-name case with no review
   involved.
+- **Job parties can read their own job's reviews.** `GET /v1/jobs/{id}/reviews`
+  (buyer) and `GET /v1/seller/jobs/{id}/reviews` (seller) return that job's
+  review(s) (id, kind, rating, comment, created_at) — no party ids, and a
+  hidden comment reads as `null` even to the job's own parties — giving the
+  subject of an abusive review the id it needs to file a report against it.
 
 ## Threat model (pilot)
 

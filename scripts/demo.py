@@ -219,8 +219,11 @@ def _run(c: TestClient) -> None:
     assert summary2["platform_margin_net"] != summary2["platform_margin"]
 
     # --- Act 5: moderation (report -> takedown -> suspension -> reinstate) ---
-    print("15. Carol reports Alice's review; the admin queue lights up")
-    review_id = c.get("/v1/admin/reviews/buyer", headers=admin).json()[0]["id"]
+    print("15. Carol discovers Alice's review of her own job, then reports it")
+    job_reviews = c.get(f"/v1/seller/jobs/{job_id}/reviews", headers=carol).json()
+    review = next(r for r in job_reviews if r["kind"] == "review")
+    review_id = review["id"]
+    print(f"   seller-side discovery: kind={review['kind']} rating={review['rating']}")
     report = c.post(
         "/v1/reports",
         json={"target_kind": "review", "target_id": review_id, "reason": "abusive language"},

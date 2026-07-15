@@ -110,14 +110,17 @@ mail adapter.
 
 **Buyer** — `POST /quotes` · `POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
 `POST /jobs/{id}/cancel` · `GET /profile` (own rating aggregate) ·
-`POST /jobs/{id}/review` · `POST /reports` · `GET /reports` (own filed
+`POST /jobs/{id}/review` · `GET /jobs/{id}/reviews` (own job's review(s),
+no party ids) · `POST /reports` · `GET /reports` (own filed
 reports; shared with seller, see Seller list)
 
 **Seller** (`/v1/seller/…`) — `PUT|GET /profile` (own capacity) ·
 `POST /payments/onboard` · `POST|DELETE /availability[/{service_type_id}]` ·
 `GET /offers` · `GET /jobs` · `POST /offers/{id}/accept` ·
 `POST /offers/{id}/decline` · `POST /jobs/{id}/complete` ·
-`POST /jobs/{id}/review` (rate the buyer) · `POST /v1/reports` ·
+`POST /jobs/{id}/review` (rate the buyer) ·
+`GET /jobs/{id}/reviews` (own job's review(s), no party ids) ·
+`POST /v1/reports` ·
 `GET /v1/reports` (shared with buyer, not `/seller`-prefixed — see Buyer list)
 
 **Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·

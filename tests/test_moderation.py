@@ -389,3 +389,160 @@ def test_concurrent_duplicate_report_races_to_409(
     assert codes == [201, 409], codes
     with SessionLocal() as s:
         assert len(s.scalars(select(Report)).all()) == 1
+
+
+def _idem(headers: Header, key: str) -> Header:
+    return {**headers, "Idempotency-Key": key}
+
+
+def test_idempotency_does_not_replay_stale_suspension_403(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """A reversible 403 (suspension) must never be cached: reinstate, then a
+    replay of the SAME Idempotency-Key must execute for real, not return the
+    stale 403 forever."""
+    buyer = auth("buyer", "alice")
+    _suspend(client, admin, "alice")
+    keyed = _idem(buyer, "quote-attempt-1")
+    r1 = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=keyed)
+    assert r1.status_code == 403 and r1.json()["detail"] == "account suspended"
+
+    client.post("/v1/admin/users/alice/reinstate", headers=admin)
+
+    r2 = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=keyed)
+    assert r2.status_code == 200, r2.text
+
+
+def test_idempotency_does_not_replay_stale_report_403(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _reviewed_job(client, basic_service, auth)
+    seller = auth("seller", "s1")
+    _suspend(client, admin, "s1")
+    keyed = _idem(seller, "report-attempt-1")
+    r1 = _report(client, keyed, "user", "alice")
+    assert r1.status_code == 403
+
+    client.post("/v1/admin/users/s1/reinstate", headers=admin)
+
+    r2 = _report(client, keyed, "user", "alice")
+    assert r2.status_code == 201, r2.text
+
+
+def test_report_canonicalizes_uuid_variants(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Case/hyphen/urn variants of the same review UUID must all collide on
+    the same canonical target_id — no UNIQUE evasion, no duplicate rows."""
+    _reviewed_job(client, basic_service, auth)
+    seller = auth("seller", "s1")
+    review_id = client.get("/v1/admin/reviews/buyer", headers=admin).json()[0]["id"]
+
+    r1 = _report(client, seller, "review", review_id)
+    assert r1.status_code == 201, r1.text
+    r2 = _report(client, seller, "review", review_id.upper())
+    assert r2.status_code == 409, r2.text
+
+    with SessionLocal() as s:
+        rows = s.scalars(select(Report)).all()
+        assert len(rows) == 1
+        assert rows[0].target_id == review_id.lower()
+
+
+def _double_reviewed_job(client: TestClient, basic_service: str, auth: AuthFactory) -> str:
+    """Completed job with BOTH a buyer->seller review and a seller->buyer
+    review, seller/buyer comments distinguishable. Returns job id."""
+    job_id = _reviewed_job(client, basic_service, auth)
+    r = client.post(
+        f"/v1/seller/jobs/{job_id}/review",
+        json={"rating": 4, "comment": "prompt buyer"},
+        headers=auth("seller", "s1"),
+    )
+    assert r.status_code == 200, r.text
+    return job_id
+
+
+def test_job_reviews_seller_can_discover_and_report_buyer_review(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id = _double_reviewed_job(client, basic_service, auth)
+    seller = auth("seller", "s1")
+    reviews = client.get(f"/v1/seller/jobs/{job_id}/reviews", headers=seller).json()
+    assert len(reviews) == 2
+    for row in reviews:
+        assert "buyer_id" not in row and "seller_id" not in row
+    by_kind = {r["kind"]: r for r in reviews}
+    assert by_kind["review"]["rating"] == 2
+    assert by_kind["review"]["comment"] == "rude and late"
+    assert by_kind["seller_review"]["rating"] == 4
+    assert by_kind["seller_review"]["comment"] == "prompt buyer"
+
+    # end-to-end: the id+kind pair is directly reportable
+    r = client.post(
+        "/v1/reports",
+        json={
+            "target_kind": by_kind["review"]["kind"],
+            "target_id": by_kind["review"]["id"],
+            "reason": "abusive language",
+        },
+        headers=seller,
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_job_reviews_buyer_symmetric(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id = _double_reviewed_job(client, basic_service, auth)
+    buyer = auth("buyer", "alice")
+    reviews = client.get(f"/v1/jobs/{job_id}/reviews", headers=buyer).json()
+    assert len(reviews) == 2
+    for row in reviews:
+        assert "buyer_id" not in row and "seller_id" not in row
+    by_kind = {r["kind"]: r for r in reviews}
+    r = client.post(
+        "/v1/reports",
+        json={
+            "target_kind": by_kind["seller_review"]["kind"],
+            "target_id": by_kind["seller_review"]["id"],
+            "reason": "abusive language",
+        },
+        headers=buyer,
+    )
+    assert r.status_code == 201, r.text
+
+
+def test_job_reviews_non_party_gets_404(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    job_id = _double_reviewed_job(client, basic_service, auth)
+    onboard_and_avail(client, auth, basic_service, "s2")
+    other_seller = auth("seller", "s2")
+    assert client.get(f"/v1/seller/jobs/{job_id}/reviews", headers=other_seller).status_code == 404
+    other_buyer = auth("buyer", "bob")
+    assert client.get(f"/v1/jobs/{job_id}/reviews", headers=other_buyer).status_code == 404
+
+
+def test_job_reviews_hidden_comment_reads_null_rating_stays(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    job_id = _reviewed_job(client, basic_service, auth)
+    review_id = client.get("/v1/admin/reviews/buyer", headers=admin).json()[0]["id"]
+    client.post(f"/v1/admin/reviews/buyer/{review_id}/hide", headers=admin)
+
+    seller = auth("seller", "s1")
+    reviews = client.get(f"/v1/seller/jobs/{job_id}/reviews", headers=seller).json()
+    assert len(reviews) == 1
+    assert reviews[0]["comment"] is None
+    assert reviews[0]["rating"] == 2
+
+
+def test_job_reviews_empty_list_when_none_yet(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    accept_first_offer(client, auth("seller", "s1"))
+    client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    seller = auth("seller", "s1")
+    assert client.get(f"/v1/seller/jobs/{job['id']}/reviews", headers=seller).json() == []

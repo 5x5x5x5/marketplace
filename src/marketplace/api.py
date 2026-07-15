@@ -82,6 +82,7 @@ from .models import (
     DisputeStatus,
     EventKind,
     JobCreateRequest,
+    JobReviewOut,
     JobStatus,
     MarginFloorBody,
     MarginSummaryOut,
@@ -327,6 +328,7 @@ ParticipantClaims = Annotated[Claims, Depends(current_participant)]
 def file_report(body: ReportRequest, session: SessionDep, claims: ParticipantClaims) -> Report:
     reporter_id = claims.sub
     _require_active(session, reporter_id)
+    target_id = body.target_id
     if body.target_kind is ReportTargetKind.USER:
         target = session.get(User, body.target_id)
         if target is None:
@@ -356,11 +358,15 @@ def file_report(body: ReportRequest, session: SessionDep, claims: ParticipantCla
             raise HTTPException(status_code=404, detail="target not found")
         if reporter_id not in (row.buyer_id, row.seller_id):
             raise HTTPException(status_code=403, detail="not a party to this review")
+        # Canonicalize: UUID() accepts many textual forms of the same value
+        # (case, hyphens, braces, urn:uuid:); storing the raw string would let
+        # each variant evade the (reporter, target) UNIQUE and re-notify admins.
+        target_id = str(review_uuid)
 
     report = Report(
         reporter_id=reporter_id,
         target_kind=body.target_kind,
-        target_id=body.target_id,
+        target_id=target_id,
         reason=body.reason,
     )
     session.add(report)
@@ -376,7 +382,7 @@ def file_report(body: ReportRequest, session: SessionDep, claims: ParticipantCla
         {
             "report_id": str(report.id),
             "target_kind": body.target_kind,
-            "target_id": body.target_id,
+            "target_id": target_id,
             "reason": body.reason,
             "reporter_id": reporter_id,
         },
@@ -407,6 +413,36 @@ def _buyer_view(session: Session, job: Job) -> BuyerJobView:
         if job.status == JobStatus.AWAITING_PAYMENT:
             view.client_secret = payment.client_secret
     return view
+
+
+def _job_reviews(session: Session, job_id: UUID) -> list[JobReviewOut]:
+    """Both reviews for a job (0-2), explicitly constructed — no party ids,
+    and `comment` reads through `public_comment` so a hidden comment is null
+    even to the job's own parties."""
+    out: list[JobReviewOut] = []
+    review = session.scalar(select(Review).where(Review.job_id == job_id))
+    if review is not None:
+        out.append(
+            JobReviewOut(
+                id=review.id,
+                kind=ReportTargetKind.REVIEW.value,
+                rating=review.rating,
+                comment=review.public_comment,
+                created_at=review.created_at,
+            )
+        )
+    seller_review = session.scalar(select(SellerReview).where(SellerReview.job_id == job_id))
+    if seller_review is not None:
+        out.append(
+            JobReviewOut(
+                id=seller_review.id,
+                kind=ReportTargetKind.SELLER_REVIEW.value,
+                rating=seller_review.rating,
+                comment=seller_review.public_comment,
+                created_at=seller_review.created_at,
+            )
+        )
+    return out
 
 
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"])
@@ -663,6 +699,16 @@ def get_dispute_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> D
     return dispute
 
 
+@buyer_router.get("/jobs/{job_id}/reviews", response_model=list[JobReviewOut])
+def list_job_reviews_buyer(
+    job_id: UUID, session: SessionDep, buyer_id: BuyerId
+) -> list[JobReviewOut]:
+    job = session.get(Job, job_id)
+    if job is None or job.buyer_id != buyer_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _job_reviews(session, job_id)
+
+
 # ---------- Seller router ----------
 
 seller_router = APIRouter(prefix="/v1/seller", tags=["seller"])
@@ -817,6 +863,16 @@ def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -
     if dispute is None:
         raise HTTPException(status_code=404, detail="no dispute for this job")
     return dispute
+
+
+@seller_router.get("/jobs/{job_id}/reviews", response_model=list[JobReviewOut])
+def list_job_reviews_seller(
+    job_id: UUID, session: SessionDep, seller_id: SellerId
+) -> list[JobReviewOut]:
+    job = session.get(Job, job_id)
+    if job is None or job.seller_id != seller_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _job_reviews(session, job_id)
 
 
 @seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut)

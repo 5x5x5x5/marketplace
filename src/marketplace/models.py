@@ -242,6 +242,21 @@ class SellerReviewOut(BaseModel):
     created_at: datetime
 
 
+class JobReviewOut(BaseModel):
+    """A job's own review(s), as read by either party to that job. No party
+    ids (identity asymmetry: an id string enables cross-job linkability the
+    party of one's own job doesn't otherwise have — the counterparty's role
+    in *this* job is contextually known, but their id stays withheld).
+    `kind` is exactly the `target_kind` string `POST /v1/reports` expects,
+    so the id+kind pair returned here is directly reportable."""
+
+    id: UUID
+    kind: str
+    rating: int
+    comment: str | None
+    created_at: datetime
+
+
 class AdminReviewOut(BaseModel):
     """Unified admin view over both review tables; party ids normalized to
     author/subject. Admin sees the raw comment plus the hidden flag."""
