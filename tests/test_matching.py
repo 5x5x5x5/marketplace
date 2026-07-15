@@ -105,3 +105,40 @@ def test_floor_filters_candidate(
 
     _make_job(client, auth, basic_service)
     assert _offered_to(client, auth, ["cheap_seller", "ok_seller"]) == "ok_seller"
+
+
+def test_floor_filters_candidate_fee_aware(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """A candidate that clears the gross floor but not the fee-aware one must
+    still be filtered at match time, not just at the quote-path bump.
+
+    fifo (not cheapest_payout) is deliberately used: cheapest_payout always
+    resolves to the globally-cheapest candidate, which the quote-path bump
+    already guarantees clears the fee-aware floor — so it can never expose a
+    gap between the gross and fee-aware checks inside `_priced`. fifo instead
+    picks by `available_since`, so an *earlier*, marginally-priced candidate
+    can beat a *later*, safely-priced one — unless match-time filtering (not
+    just the quote-time probe) removes it first.
+
+    Buyer price stays 20.00 (no quote-time bump: the probe uses the
+    globally-cheapest payout, 7.00, whose 13.00 spread clears 5.88 easily).
+    early_seller (registered first): payout 14.70, spread 5.30 — clears the
+    gross floor (5) but not the fee-aware required spread (5.88 = floor 5 +
+    fee 0.88 on a 20.00 buyer price). late_seller (registered second): payout
+    7.00, spread 13.00 — clears both.
+
+    Under fee-aware passes_floor, early_seller is filtered out of `_priced`
+    entirely, leaving late_seller as the only valid candidate — it wins by
+    default. Under the gross mutation (buyer_price - payout >=
+    effective_floor, no fee term), early_seller also clears and, being
+    earlier, wins fifo's tie-break instead.
+    """
+    _tiered_pipeline(client, admin, basic_service, {"early": 1.05, "late": 0.5})
+    client.put("/v1/admin/config/matching_strategy", json={"strategy": "fifo"}, headers=admin)
+    client.put("/v1/admin/config/margin_floor", json={"absolute": 5}, headers=admin)
+    _seller(client, auth, basic_service, "early_seller", "early")  # payout 14.70, spread 5.30
+    _seller(client, auth, basic_service, "late_seller", "late")  # payout 7.00, spread 13.00
+
+    _make_job(client, auth, basic_service)
+    assert _offered_to(client, auth, ["early_seller", "late_seller"]) == "late_seller"
