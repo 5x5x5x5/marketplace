@@ -115,6 +115,8 @@ class PlatformConfig(Base):
     margin_absolute: Mapped[Decimal] = mapped_column(_MONEY, default=Decimal(0))
     margin_pct: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=Decimal(0))
     ceiling_multiplier: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal(3))
+    fee_pct: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=Decimal("0.029"))
+    fee_fixed: Mapped[Decimal] = mapped_column(_MONEY, default=Decimal("0.30"))
     matching_strategy: Mapped[str] = mapped_column(String(64), default="cheapest_payout")
     adjuster_params: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
@@ -295,6 +297,7 @@ class Payment(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id"), unique=True)
     buyer_id: Mapped[str] = mapped_column(String(128), index=True)
     amount: Mapped[Decimal] = mapped_column(_MONEY)
+    fee_estimate: Mapped[Decimal] = mapped_column(_MONEY, default=Decimal(0))
     currency: Mapped[str] = mapped_column(String(8), default="usd")
     status: Mapped[PaymentStatus] = mapped_column(
         _enum(PaymentStatus), default=PaymentStatus.PENDING, index=True

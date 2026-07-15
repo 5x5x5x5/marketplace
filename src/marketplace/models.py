@@ -549,5 +549,14 @@ class MarginFloorBody(BaseModel):
     )
 
 
+class FeesBody(BaseModel):
+    pct: Decimal = Field(
+        default=Decimal("0.029"), ge=0, lt=1, allow_inf_nan=False, max_digits=5, decimal_places=4
+    )
+    fixed: Decimal = Field(
+        default=Decimal("0.30"), ge=0, allow_inf_nan=False, max_digits=12, decimal_places=2
+    )
+
+
 class MatchingStrategyBody(BaseModel):
     strategy: str = Field(min_length=1, max_length=64)

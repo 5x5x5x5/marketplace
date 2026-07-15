@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .config import Candidate, MarginFloor, PricingConfig
+from .config import Candidate, FeeConfig, MarginFloor, PricingConfig
 from .models import Side, to_money
 from .pricing import PricingContext, run_pipeline
 
@@ -57,6 +57,15 @@ def seller_payout_for(
 
 def effective_floor(buyer_price: Decimal, floor: MarginFloor) -> Decimal:
     return max(floor.absolute, to_money(floor.pct * buyer_price))
+
+
+def estimated_fee(amount: Decimal, fees: FeeConfig) -> Decimal:
+    return to_money(amount * fees.pct + fees.fixed)
+
+
+def required_spread(buyer_price: Decimal, floor: MarginFloor, fees: FeeConfig) -> Decimal:
+    """Minimum spread that nets positive: the floor plus the provider's cut."""
+    return effective_floor(buyer_price, floor) + estimated_fee(buyer_price, fees)
 
 
 def passes_floor(buyer_price: Decimal, payout: Decimal, floor: MarginFloor) -> bool:

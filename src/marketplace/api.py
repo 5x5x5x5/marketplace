@@ -83,6 +83,7 @@ from .models import (
     DisputeSource,
     DisputeStatus,
     EventKind,
+    FeesBody,
     JobCreateRequest,
     JobReviewOut,
     JobStatus,
@@ -1171,6 +1172,7 @@ def get_config(session: SessionDep) -> dict[str, Any]:
             "pct": str(pc.margin_pct),
             "ceiling_multiplier": str(pc.ceiling_multiplier),
         },
+        "fees": {"pct": str(pc.fee_pct), "fixed": str(pc.fee_fixed)},
         "matching_strategy": pc.matching_strategy,
         "adjuster_params": pc.adjuster_params,
     }
@@ -1224,6 +1226,15 @@ def update_margin_floor(
         "pct": str(pc.margin_pct),
         "ceiling_multiplier": str(pc.ceiling_multiplier),
     }
+
+
+@admin_router.put("/config/fees")
+def update_fees(body: FeesBody, session: SessionDep, admin_id: AdminId) -> dict[str, str]:
+    pc = repo.get_platform_config(session)
+    pc.fee_pct = body.pct
+    pc.fee_fixed = body.fixed
+    audit(session, admin_id, "update_fees", "platform", body.model_dump(mode="json"))
+    return {"pct": str(pc.fee_pct), "fixed": str(pc.fee_fixed)}
 
 
 @admin_router.put("/config/matching_strategy")
