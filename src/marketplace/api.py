@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
@@ -60,6 +60,7 @@ from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
+    AdminReviewOut,
     AdminSellerBody,
     AuditOut,
     AvailabilityRequest,
@@ -1093,6 +1094,81 @@ def reinstate_user(user_id: str, session: SessionDep, admin_id: AdminId) -> User
     user.suspended_reason = None
     user.suspended_at = None
     audit(session, admin_id, "reinstate_user", user_id, {})
+    session.flush()
+    return user
+
+
+def _admin_review_out(row: Review | SellerReview) -> AdminReviewOut:
+    author, subject = (
+        (row.buyer_id, row.seller_id) if isinstance(row, Review) else (row.seller_id, row.buyer_id)
+    )
+    return AdminReviewOut(
+        id=row.id,
+        job_id=row.job_id,
+        author_id=author,
+        subject_id=subject,
+        rating=row.rating,
+        comment=row.comment,
+        comment_hidden=row.comment_hidden,
+        created_at=row.created_at,
+    )
+
+
+@admin_router.get("/reviews/{kind}", response_model=list[AdminReviewOut])
+def admin_list_reviews(
+    kind: Literal["buyer", "seller"], session: SessionDep, admin_id: AdminId
+) -> list[AdminReviewOut]:
+    model = Review if kind == "buyer" else SellerReview
+    rows = session.scalars(select(model).order_by(model.created_at.desc())).all()
+    return [_admin_review_out(r) for r in rows]
+
+
+def _set_comment_hidden(
+    kind: Literal["buyer", "seller"],
+    review_id: UUID,
+    hidden: bool,
+    session: Session,
+    admin_id: str,
+) -> AdminReviewOut:
+    model = Review if kind == "buyer" else SellerReview
+    row = session.get(model, review_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="review not found")
+    if row.comment_hidden == hidden:
+        raise HTTPException(status_code=409, detail="review already in that state")
+    row.comment_hidden = hidden
+    audit(
+        session,
+        admin_id,
+        "hide_review" if hidden else "unhide_review",
+        f"{kind}:{review_id}",
+        {},
+    )
+    session.flush()
+    return _admin_review_out(row)
+
+
+@admin_router.post("/reviews/{kind}/{review_id}/hide", response_model=AdminReviewOut)
+def admin_hide_review(
+    kind: Literal["buyer", "seller"], review_id: UUID, session: SessionDep, admin_id: AdminId
+) -> AdminReviewOut:
+    return _set_comment_hidden(kind, review_id, True, session, admin_id)
+
+
+@admin_router.post("/reviews/{kind}/{review_id}/unhide", response_model=AdminReviewOut)
+def admin_unhide_review(
+    kind: Literal["buyer", "seller"], review_id: UUID, session: SessionDep, admin_id: AdminId
+) -> AdminReviewOut:
+    return _set_comment_hidden(kind, review_id, False, session, admin_id)
+
+
+@admin_router.post("/users/{user_id}/reset_display_name", response_model=UserModerationOut)
+def admin_reset_display_name(user_id: str, session: SessionDep, admin_id: AdminId) -> User:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    user.display_name = f"user-{user.id[:8]}"
+    audit(session, admin_id, "reset_display_name", user_id, {})
     session.flush()
     return user
 

@@ -1,7 +1,11 @@
 """Moderation: suspension, content takedown, reports. Spec: 2026-07-14-moderation-design.md."""
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
+from marketplace.db import SessionLocal
+from marketplace.entities import SellerProfile
 from marketplace.models import PaymentStatus
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
@@ -187,3 +191,78 @@ def test_suspended_seller_leaves_matching(
     client.post("/v1/admin/users/s1/reinstate", headers=admin)
     new_job(client, auth, basic_service, "alice")
     assert len(client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()) >= 1
+
+
+def _reviewed_job(client: TestClient, basic_service: str, auth: AuthFactory) -> str:
+    """Completed job where alice reviewed s1 (buyer-kind review). Returns job id."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    job = new_job(client, auth, basic_service, "alice")
+    accept_first_offer(client, auth("seller", "s1"))
+    client.post(f"/v1/seller/jobs/{job['id']}/complete", headers=auth("seller", "s1"))
+    r = client.post(
+        f"/v1/jobs/{job['id']}/review",
+        json={"rating": 2, "comment": "rude and late"},
+        headers=auth("buyer", "alice"),
+    )
+    assert r.status_code == 200, r.text
+    return str(job["id"])
+
+
+def test_hide_and_unhide_review(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _reviewed_job(client, basic_service, auth)
+    listed = client.get("/v1/admin/reviews/buyer", headers=admin).json()
+    assert len(listed) == 1
+    review = listed[0]
+    assert review["author_id"] == "alice" and review["subject_id"] == "s1"
+    assert review["comment"] == "rude and late" and review["comment_hidden"] is False
+
+    r = client.post(f"/v1/admin/reviews/buyer/{review['id']}/hide", headers=admin)
+    assert r.status_code == 200
+    assert r.json()["comment_hidden"] is True
+    assert r.json()["comment"] == "rude and late"  # admin still sees the text
+    # idempotence guard
+    assert (
+        client.post(f"/v1/admin/reviews/buyer/{review['id']}/hide", headers=admin).status_code
+        == 409
+    )
+    # aggregate untouched by hiding
+    with SessionLocal() as s:
+        prof = s.get(SellerProfile, "s1")
+        assert prof is not None and prof.rating_count == 1 and prof.rating_sum == 2
+
+    r = client.post(f"/v1/admin/reviews/buyer/{review['id']}/unhide", headers=admin)
+    assert r.status_code == 200 and r.json()["comment_hidden"] is False
+    assert (
+        client.post(f"/v1/admin/reviews/buyer/{review['id']}/unhide", headers=admin).status_code
+        == 409
+    )
+
+
+def test_hide_seller_review_kind(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    job_id = _reviewed_job(client, basic_service, auth)
+    client.post(
+        f"/v1/seller/jobs/{job_id}/review",
+        json={"rating": 1, "comment": "bad buyer"},
+        headers=auth("seller", "s1"),
+    )
+    listed = client.get("/v1/admin/reviews/seller", headers=admin).json()
+    assert len(listed) == 1
+    assert listed[0]["author_id"] == "s1" and listed[0]["subject_id"] == "alice"
+    r = client.post(f"/v1/admin/reviews/seller/{listed[0]['id']}/hide", headers=admin)
+    assert r.status_code == 200
+    # unknown id -> 404 (valid UUID, no row)
+    assert client.post(f"/v1/admin/reviews/seller/{uuid4()}/hide", headers=admin).status_code == 404
+
+
+def test_reset_display_name(client: TestClient, auth: AuthFactory, admin: Header) -> None:
+    auth("buyer", "alice")
+    r = client.post("/v1/admin/users/alice/reset_display_name", headers=admin)
+    assert r.status_code == 200
+    assert r.json()["display_name"] == "user-" + "alice"[:8]
+    assert (
+        client.post("/v1/admin/users/nobody/reset_display_name", headers=admin).status_code == 404
+    )

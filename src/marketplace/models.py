@@ -223,7 +223,7 @@ class ReviewOut(BaseModel):
     job_id: UUID
     seller_id: str
     rating: int
-    comment: str | None
+    comment: str | None = Field(default=None, validation_alias="public_comment")
     created_at: datetime
 
 
@@ -238,7 +238,21 @@ class SellerReviewOut(BaseModel):
     id: UUID
     job_id: UUID
     rating: int
+    comment: str | None = Field(default=None, validation_alias="public_comment")
+    created_at: datetime
+
+
+class AdminReviewOut(BaseModel):
+    """Unified admin view over both review tables; party ids normalized to
+    author/subject. Admin sees the raw comment plus the hidden flag."""
+
+    id: UUID
+    job_id: UUID
+    author_id: str
+    subject_id: str
+    rating: int
     comment: str | None
+    comment_hidden: bool
     created_at: datetime
 
 
