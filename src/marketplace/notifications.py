@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
-from .entities import Notification, User
+from .entities import Notification, NotificationMute, User
 from .mail import EmailSender
 from .models import EventKind, NotificationStatus, UserRole
 from .settings import settings
@@ -69,6 +69,16 @@ def enqueue(session: Session, kind: EventKind, user_id: str, payload: dict[str, 
     if user is None:
         logger.warning("notification %s skipped: no user %s", kind, user_id)
         return
+    if kind not in MUST_SEND and (
+        session.scalar(
+            select(NotificationMute.id).where(
+                NotificationMute.user_id == user.id, NotificationMute.kind == kind
+            )
+        )
+        is not None
+    ):
+        logger.debug("notification %s muted by user %s", kind, user_id)
+        return
     session.add(Notification(user_id=user.id, email=user.email, kind=kind, payload=payload))
 
 
@@ -78,7 +88,20 @@ def enqueue_admins(session: Session, kind: EventKind, payload: dict[str, Any]) -
     if not admins:
         logger.warning("notification %s skipped: no admin accounts", kind)
         return
+    muted: set[str] = set()
+    if kind not in MUST_SEND:
+        muted = set(
+            session.scalars(
+                select(NotificationMute.user_id).where(
+                    NotificationMute.kind == kind,
+                    NotificationMute.user_id.in_([a.id for a in admins]),
+                )
+            ).all()
+        )
     for admin in admins:
+        if admin.id in muted:
+            logger.debug("notification %s muted by admin %s", kind, admin.id)
+            continue
         session.add(Notification(user_id=admin.id, email=admin.email, kind=kind, payload=payload))
 
 
