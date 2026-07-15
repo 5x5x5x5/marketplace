@@ -26,6 +26,35 @@ from .settings import settings
 
 logger = logging.getLogger("marketplace.notifications")
 
+# The floor: mail that records money movement can never be muted.
+MUST_SEND: frozenset[EventKind] = frozenset(
+    {
+        EventKind.REFUND_ISSUED_BUYER,
+        EventKind.DISPUTE_RESOLVED_BUYER,
+        EventKind.DISPUTE_RESOLVED_SELLER,
+        EventKind.PAYOUT_FAILED_ADMIN,
+    }
+)
+
+# Recipient role per kind. Explicit beats deriving from name suffixes; the
+# coverage test fails fast when a kind is added without a mapping.
+KIND_ROLES: dict[EventKind, UserRole] = {
+    EventKind.OFFER_RECEIVED: UserRole.SELLER,
+    EventKind.JOB_ACCEPTED_BUYER: UserRole.BUYER,
+    EventKind.JOB_COMPLETED_BUYER: UserRole.BUYER,
+    EventKind.JOB_EXPIRED_BUYER: UserRole.BUYER,
+    EventKind.JOB_CANCELLED_SELLER: UserRole.SELLER,
+    EventKind.REFUND_ISSUED_BUYER: UserRole.BUYER,
+    EventKind.PAYOUT_FAILED_ADMIN: UserRole.ADMIN,
+    EventKind.DISPUTE_OPENED_SELLER: UserRole.SELLER,
+    EventKind.DISPUTE_OPENED_ADMIN: UserRole.ADMIN,
+    EventKind.DISPUTE_RESOLVED_BUYER: UserRole.BUYER,
+    EventKind.DISPUTE_RESOLVED_SELLER: UserRole.SELLER,
+    EventKind.CHARGEBACK_OPENED_ADMIN: UserRole.ADMIN,
+    EventKind.CHARGEBACK_CLOSED_ADMIN: UserRole.ADMIN,
+    EventKind.REPORT_OPENED_ADMIN: UserRole.ADMIN,
+}
+
 _BACKOFF_BASE_SECONDS = 30
 
 
