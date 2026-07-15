@@ -24,12 +24,20 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import notifications, repo
-from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
+from .auth import (
+    Claims,
+    auth_router,
+    bootstrap_admin,
+    current_buyer,
+    current_participant,
+    current_seller,
+    require_admin,
+)
 from .db import SessionLocal, get_session, init_db
 from .entities import (
     Adjustment,
@@ -46,6 +54,7 @@ from .entities import (
     Payout,
     Pipeline,
     Quote,
+    Report,
     Review,
     SellerProfile,
     SellerReview,
@@ -60,6 +69,7 @@ from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
+    AdminReportOut,
     AdminReviewOut,
     AdminSellerBody,
     AuditOut,
@@ -86,7 +96,12 @@ from .models import (
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
+    ReportOut,
+    ReportRequest,
+    ReportStatus,
+    ReportTargetKind,
     ResolveDisputeRequest,
+    ResolveReportRequest,
     ReviewOut,
     ReviewRequest,
     SellerDisputeOut,
@@ -300,6 +315,84 @@ async def _maintenance_loop() -> None:
 
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
     return list(rows[offset : offset + limit])
+
+
+# ---------- Reports router ----------
+
+reports_router = APIRouter(prefix="/v1", tags=["reports"])
+ParticipantClaims = Annotated[Claims, Depends(current_participant)]
+
+
+@reports_router.post("/reports", response_model=ReportOut, status_code=201)
+def file_report(body: ReportRequest, session: SessionDep, claims: ParticipantClaims) -> Report:
+    reporter_id = claims.sub
+    _require_active(session, reporter_id)
+    if body.target_kind is ReportTargetKind.USER:
+        target = session.get(User, body.target_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="target not found")
+        if target.id == reporter_id:
+            raise HTTPException(status_code=422, detail="cannot report yourself")
+        shared = session.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                or_(
+                    and_(Job.buyer_id == reporter_id, Job.seller_id == target.id),
+                    and_(Job.seller_id == reporter_id, Job.buyer_id == target.id),
+                )
+            )
+        )
+        if not shared:
+            raise HTTPException(status_code=403, detail="not a counterparty")
+    else:
+        model = Review if body.target_kind is ReportTargetKind.REVIEW else SellerReview
+        try:
+            review_uuid = UUID(body.target_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="target not found") from None
+        row = session.get(model, review_uuid)
+        if row is None:
+            raise HTTPException(status_code=404, detail="target not found")
+        if reporter_id not in (row.buyer_id, row.seller_id):
+            raise HTTPException(status_code=403, detail="not a party to this review")
+
+    report = Report(
+        reporter_id=reporter_id,
+        target_kind=body.target_kind,
+        target_id=body.target_id,
+        reason=body.reason,
+    )
+    session.add(report)
+    try:
+        session.flush()
+    except IntegrityError:
+        # Duplicate (sequential or concurrent) loses the UNIQUE race — same
+        # answer either way, not a 500.
+        raise HTTPException(status_code=409, detail="already reported") from None
+    notifications.enqueue_admins(
+        session,
+        EventKind.REPORT_OPENED_ADMIN,
+        {
+            "report_id": str(report.id),
+            "target_kind": body.target_kind,
+            "target_id": body.target_id,
+            "reason": body.reason,
+            "reporter_id": reporter_id,
+        },
+    )
+    return report
+
+
+@reports_router.get("/reports", response_model=list[ReportOut])
+def my_reports(session: SessionDep, claims: ParticipantClaims) -> list[Report]:
+    return list(
+        session.scalars(
+            select(Report)
+            .where(Report.reporter_id == claims.sub)
+            .order_by(Report.created_at.desc())
+        ).all()
+    )
 
 
 # ---------- Buyer router ----------
@@ -1173,6 +1266,39 @@ def admin_reset_display_name(user_id: str, session: SessionDep, admin_id: AdminI
     return user
 
 
+@admin_router.get("/reports", response_model=list[AdminReportOut])
+def admin_list_reports(
+    session: SessionDep, admin_id: AdminId, status: ReportStatus | None = None
+) -> list[Report]:
+    q = select(Report).order_by(Report.created_at.desc())
+    if status is not None:
+        q = q.where(Report.status == status)
+    return list(session.scalars(q).all())
+
+
+@admin_router.post("/reports/{report_id}/resolve", response_model=AdminReportOut)
+def resolve_report(
+    report_id: UUID, body: ResolveReportRequest, session: SessionDep, admin_id: AdminId
+) -> Report:
+    report = session.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    if report.status is not ReportStatus.OPEN:
+        raise HTTPException(status_code=409, detail="report already resolved")
+    report.status = body.status
+    report.resolution_note = body.note
+    report.resolved_at = _now()
+    audit(
+        session,
+        admin_id,
+        "resolve_report",
+        str(report_id),
+        {"status": body.status, "note": body.note or ""},
+    )
+    session.flush()
+    return report
+
+
 @admin_router.get("/buyers", response_model=list[BuyerProfileOut])
 def admin_list_buyers(session: SessionDep, admin_id: AdminId) -> list[BuyerProfile]:
     return list(session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all())
@@ -1701,4 +1827,5 @@ app.include_router(auth_router)
 app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)
+app.include_router(reports_router)
 app.include_router(payments_router)

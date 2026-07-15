@@ -256,6 +256,36 @@ class AdminReviewOut(BaseModel):
     created_at: datetime
 
 
+class ReportRequest(BaseModel):
+    target_kind: ReportTargetKind
+    target_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ReportOut(BaseModel):
+    """Reporter's view — admin prose (resolution_note) never appears here."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    target_kind: ReportTargetKind
+    target_id: str
+    reason: str
+    status: ReportStatus
+    created_at: datetime
+
+
+class AdminReportOut(ReportOut):
+    reporter_id: str
+    resolution_note: str | None
+    resolved_at: datetime | None
+
+
+class ResolveReportRequest(BaseModel):
+    status: Literal[ReportStatus.ACTIONED, ReportStatus.DISMISSED]
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class BuyerDisputeOut(BaseModel):
     """Buyer's view — no seller money (clawback) ever appears here."""
 

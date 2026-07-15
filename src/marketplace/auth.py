@@ -122,6 +122,13 @@ def current_seller(claims: Principal) -> str:
     return claims.sub
 
 
+def current_participant(claims: Principal) -> Claims:
+    """Buyer or seller — the roles that can file reports."""
+    if claims.role is UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="buyer or seller credentials required")
+    return claims
+
+
 def peek_principal(db: Session, authorization: str | None) -> str | None:
     """Best-effort principal ("role:sub") for middleware. None when absent or
     invalid — the strict endpoint dependencies still produce the real 401."""

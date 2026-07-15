@@ -1,14 +1,21 @@
 """Moderation: suspension, content takedown, reports. Spec: 2026-07-14-moderation-design.md."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
+from sqlalchemy import select
 
+from marketplace import api
 from marketplace.db import SessionLocal
-from marketplace.entities import SellerProfile
+from marketplace.entities import Report, SellerProfile
+from marketplace.mail import RecordingEmailSender
 from marketplace.models import PaymentStatus
 from marketplace.payments.fake import FakeProvider
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.test_payments import accept_first_offer, new_job, onboard_and_avail
 
 
@@ -266,3 +273,119 @@ def test_reset_display_name(client: TestClient, auth: AuthFactory, admin: Header
     assert (
         client.post("/v1/admin/users/nobody/reset_display_name", headers=admin).status_code == 404
     )
+
+
+def _report(
+    client: TestClient, headers: Header, kind: str, target: str, reason: str = "abusive"
+) -> Response:
+    return client.post(
+        "/v1/reports",
+        json={"target_kind": kind, "target_id": target, "reason": reason},
+        headers=headers,
+    )
+
+
+def test_report_eligibility_matrix(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _reviewed_job(client, basic_service, auth)  # alice <-> s1 share a job
+    seller = auth("seller", "s1")
+    buyer = auth("buyer", "alice")
+    review_id = client.get("/v1/admin/reviews/buyer", headers=admin).json()[0]["id"]
+
+    # counterparty user: OK
+    r = _report(client, seller, "user", "alice")
+    assert r.status_code == 201, r.text
+    assert r.json()["status"] == "open"
+    # duplicate: 409
+    assert _report(client, seller, "user", "alice").status_code == 409
+    # stranger: 403
+    auth("buyer", "bob")
+    assert _report(client, auth("seller", "s1"), "user", "bob").status_code == 403
+    # self: 422
+    assert _report(client, buyer, "user", "alice").status_code == 422
+    # unknown user: 404
+    assert _report(client, seller, "user", "ghost").status_code == 404
+    # review subject reports the review: OK
+    assert _report(client, seller, "review", review_id).status_code == 201
+    # review author reports own review ("take my comment down"): OK
+    assert _report(client, buyer, "review", review_id).status_code == 201
+    # unrelated party on the review: 403
+    assert _report(client, auth("buyer", "bob"), "review", review_id).status_code == 403
+    # malformed review id: 404
+    assert _report(client, seller, "seller_review", "not-a-uuid").status_code == 404
+    # admin bearer cannot file: 403
+    assert _report(client, admin, "user", "alice").status_code == 403
+
+
+def test_suspended_reporter_cannot_file(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    _reviewed_job(client, basic_service, auth)
+    _suspend(client, admin, "s1")
+    r = _report(client, auth("seller", "s1"), "user", "alice")
+    assert r.status_code == 403 and r.json()["detail"] == "account suspended"
+
+
+def test_report_views_and_resolve(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    mail_outbox: RecordingEmailSender,
+) -> None:
+    _reviewed_job(client, basic_service, auth)
+    seller = auth("seller", "s1")
+    report_id = _report(client, seller, "user", "alice").json()["id"]
+
+    # admin was notified on create (RecordingEmailSender.sent is a list of
+    # (to, subject, body) tuples — mail.py:33)
+    from marketplace.notifications import drain_once
+
+    drain_once(mail_outbox)
+    assert any("Report filed" in sent[1] for sent in mail_outbox.sent)
+
+    # reporter view: status only, no admin prose
+    mine = client.get("/v1/reports", headers=seller).json()
+    assert len(mine) == 1 and "resolution_note" not in mine[0]
+
+    # admin filter + resolve
+    assert len(client.get("/v1/admin/reports?status=open", headers=admin).json()) == 1
+    assert client.get("/v1/admin/reports?status=bogus", headers=admin).status_code == 422
+    r = client.post(
+        f"/v1/admin/reports/{report_id}/resolve",
+        json={"status": "actioned", "note": "hid the comment"},
+        headers=admin,
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "actioned" and r.json()["resolved_at"] is not None
+    # terminal: 409
+    assert (
+        client.post(
+            f"/v1/admin/reports/{report_id}/resolve", json={"status": "dismissed"}, headers=admin
+        ).status_code
+        == 409
+    )
+    # reporter now sees the status, still not the note
+    mine = client.get("/v1/reports", headers=seller).json()
+    assert mine[0]["status"] == "actioned" and "resolution_note" not in mine[0]
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel writes are only real on Postgres")
+def test_concurrent_duplicate_report_races_to_409(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    _reviewed_job(client, basic_service, auth)
+    seller = auth("seller", "s1")
+    barrier = threading.Barrier(2)
+
+    def submit(_: int) -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return _report(c, seller, "user", "alice").status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        codes = sorted(pool.map(submit, range(2)))
+    assert codes == [201, 409], codes
+    with SessionLocal() as s:
+        assert len(s.scalars(select(Report)).all()) == 1
