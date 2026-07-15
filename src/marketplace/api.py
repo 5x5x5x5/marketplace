@@ -67,7 +67,7 @@ from .entities import (
 )
 from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
-from .matching import STRATEGIES, required_spread, seller_payout_for
+from .matching import STRATEGIES, estimated_fee, required_spread, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
@@ -1031,6 +1031,7 @@ def accept_offer(
             provider=provider.name,
             provider_payment_id=charge.provider_payment_id,
             client_secret=charge.client_secret,
+            fee_estimate=estimated_fee(job.buyer_price, repo.fee_config(session)),
         )
     )
 
@@ -1709,6 +1710,9 @@ def resolve_dispute(
 
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)
 def margins_summary(session: SessionDep) -> MarginSummaryOut:
+    """Margin summary. Fee fields are a CASH view: a fee is sunk the moment a
+    charge captures, so refunded jobs' fees show as losses and charged-but-in-
+    flight jobs dip net until their margin books at completion."""
     txs = session.scalars(select(Transaction)).all()
     revenue = sum((t.buyer_price for t in txs), to_money(0))
     payouts = sum((t.seller_payout for t in txs), to_money(0))
@@ -1722,6 +1726,17 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
         AdjustmentKind.CHARGEBACK_FEE: -1,
     }
     adjustments_net = sum((a.amount * signs[a.kind] for a in adjustments), to_money(0))
+    fees = sum(
+        (
+            p_fee
+            for p_fee in session.scalars(
+                select(Payment.fee_estimate).where(
+                    Payment.status.in_((PaymentStatus.SUCCEEDED, PaymentStatus.REFUNDED))
+                )
+            ).all()
+        ),
+        to_money(0),
+    )
     return MarginSummaryOut(
         transactions=len(txs),
         gross_revenue=revenue,
@@ -1730,6 +1745,8 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
         take_rate=round(take_rate, 4),
         adjustments_net=to_money(adjustments_net),
         platform_margin_net=to_money(margin + adjustments_net),
+        fees_estimated=to_money(fees),
+        platform_margin_net_of_fees=to_money(margin + adjustments_net - fees),
     )
 
 

@@ -435,6 +435,8 @@ class MarginSummaryOut(BaseModel):
     take_rate: float
     adjustments_net: Decimal
     platform_margin_net: Decimal
+    fees_estimated: Decimal
+    platform_margin_net_of_fees: Decimal
 
 
 class UserOut(BaseModel):
