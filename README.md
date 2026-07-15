@@ -267,5 +267,5 @@ Trust & safety (disputes/chargebacks and partial refunds, seller→buyer
 reviews, moderation — suspension, comment takedown, and counterparty
 abuse reports — and notification preferences now all ship; see Disputes
 above, the Buyer/Seller/Admin endpoints, and Notification preferences
-below), push/SMS channels, fee-aware margin math, admin RBAC, and
-OAuth/social login. See `ROADMAP.md`.
+below; fee-aware margin math ships too — see the margins summary),
+push/SMS channels, admin RBAC, and OAuth/social login. See `ROADMAP.md`.
