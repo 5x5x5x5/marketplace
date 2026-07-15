@@ -85,6 +85,7 @@ class EventKind(StrEnum):
     DISPUTE_RESOLVED_SELLER = "dispute_resolved_seller"
     CHARGEBACK_OPENED_ADMIN = "chargeback_opened_admin"
     CHARGEBACK_CLOSED_ADMIN = "chargeback_closed_admin"
+    REPORT_OPENED_ADMIN = "report_opened_admin"
 
 
 class NotificationStatus(StrEnum):
@@ -103,6 +104,23 @@ class DisputeStatus(StrEnum):
     RESOLVED = "resolved"  # admin arbitration; 0/0 amounts = rejected
     CHARGEBACK_WON = "chargeback_won"
     CHARGEBACK_LOST = "chargeback_lost"
+
+
+class UserStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"  # verb-gated: acquisition blocked, completion/exit allowed
+
+
+class ReportTargetKind(StrEnum):
+    USER = "user"
+    REVIEW = "review"  # buyer→seller review (reviews table)
+    SELLER_REVIEW = "seller_review"  # seller→buyer review
+
+
+class ReportStatus(StrEnum):
+    OPEN = "open"
+    ACTIONED = "actioned"  # terminal; the tools were used (or not) explicitly
+    DISMISSED = "dismissed"  # terminal
 
 
 class AdjustmentKind(StrEnum):

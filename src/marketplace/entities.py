@@ -41,7 +41,10 @@ from .models import (
     OfferStatus,
     PaymentStatus,
     PayoutStatus,
+    ReportStatus,
+    ReportTargetKind,
     UserRole,
+    UserStatus,
 )
 
 
@@ -222,7 +225,13 @@ class Review(Base):
     seller_id: Mapped[str] = mapped_column(String(128), index=True)
     rating: Mapped[int] = mapped_column()
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
+    comment_hidden: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+
+    @property
+    def public_comment(self) -> str | None:
+        """Single home of the takedown invariant: non-admin views read this."""
+        return None if self.comment_hidden else self.comment
 
 
 class SellerReview(Base):
@@ -237,7 +246,33 @@ class SellerReview(Base):
     buyer_id: Mapped[str] = mapped_column(String(128), index=True)
     rating: Mapped[int] = mapped_column()
     comment: Mapped[str | None] = mapped_column(String(2000), default=None)
+    comment_hidden: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+
+    @property
+    def public_comment(self) -> str | None:
+        """Single home of the takedown invariant: non-admin views read this."""
+        return None if self.comment_hidden else self.comment
+
+
+class Report(Base):
+    """User-filed abuse report. Paper trail only: resolving one never
+    auto-suspends or auto-hides — admins act with the explicit tools."""
+
+    __tablename__ = "reports"
+    __table_args__ = (UniqueConstraint("reporter_id", "target_kind", "target_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    reporter_id: Mapped[str] = mapped_column(String(128), index=True)
+    target_kind: Mapped[ReportTargetKind] = mapped_column(_enum(ReportTargetKind))
+    target_id: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(2000))
+    status: Mapped[ReportStatus] = mapped_column(
+        _enum(ReportStatus), default=ReportStatus.OPEN, index=True
+    )
+    resolution_note: Mapped[str | None] = mapped_column(String(2000), default=None)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
 
 
 class AuditLog(Base):
@@ -332,6 +367,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     display_name: Mapped[str] = mapped_column(String(128))
     email_verified: Mapped[bool] = mapped_column(default=False)
+    status: Mapped[UserStatus] = mapped_column(
+        _enum(UserStatus), default=UserStatus.ACTIVE, index=True
+    )
+    suspended_reason: Mapped[str | None] = mapped_column(String(2000), default=None)
+    suspended_at: Mapped[datetime | None] = mapped_column(_TS, default=None)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
     updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
 
