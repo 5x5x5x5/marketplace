@@ -52,6 +52,19 @@ users, then gets forked and specialized per market vertical. The differentiator
   creation, the fake-provider seam documented, the dead charge-only dispute
   `related_id` fallback deleted, and a DB `CHECK` on `adjustments.amount`.
   See `SECURITY.md`.
+- **Moderation (done):** third T&S sub-phase — suspension, takedown, and
+  abuse reports (migration #7). Suspension is verb-gated, not a global
+  freeze: acquisition verbs (quotes, jobs, reviews, disputes, availability,
+  offer-accept, payments-onboard, report-filing) 403 for a suspended user,
+  while login, GETs, complete, decline, and cancel stay open and matching
+  drops suspended sellers — freeze-new/finish-in-flight by design, and
+  suspension itself never moves money. Takedown hides, never deletes: a
+  hidden comment vanishes from non-admin views but the rating, aggregates,
+  and admin visibility (raw text + flag) are untouched; a suspended/flagged
+  user's display name can be reset to `user-{id[:8]}`. Reports are
+  counterparty-only (a shared job, or a party to the review), one per
+  reporter per target ever, and resolving is terminal with no automatic
+  action taken. See `SECURITY.md`.
 
 ## Done ✓
 
@@ -85,16 +98,22 @@ same table via the existing webhook, not fought — evidence submission is
 fork work; see `SECURITY.md`) · **seller→buyer reviews** (mirror
 `seller_reviews` table, one per job; display-only buyer rating aggregate via
 `GET /v1/profile` and `GET /v1/admin/buyers`; independent of the
-buyer→seller direction, no double-blind; see `SECURITY.md`).
+buyer→seller direction, no double-blind; see `SECURITY.md`) ·
+**moderation** (verb-gated suspension excluding suspended sellers from
+matching; hide-not-delete takedown of review comments plus display-name
+reset; counterparty-only abuse reports with a terminal admin resolve and no
+automatic action; migration #7; see `SECURITY.md`).
 
 ## What's still ahead
 
 Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
 
-1. **Trust & safety** — disputes/chargebacks, partial refunds, and
-   seller→buyer reviews are done (see "Done" above). Remaining sub-phases, in
-   order: moderation/abuse → notification preferences (everything sent today is
-   transactional).
+1. **Trust & safety** — disputes/chargebacks, partial refunds, seller→buyer
+   reviews, and moderation (suspension/takedown/reports) are done (see
+   "Done" above). Remaining sub-phase: notification preferences (everything
+   sent today is transactional). Deferred, not scheduled: automatic abuse
+   signals/limits (report-count thresholds, auto-suspend) — the counters and
+   cutoffs are fork-specific heuristics, not a generic default.
 2. **Processing fees in the margin math** — the `Transaction` ledger records
    margin gross of provider fees (Stripe: ~2.9% + 30¢ per charge, and the fee
    is kept on refunds — a refunded job costs the platform the fee with no

@@ -110,13 +110,15 @@ mail adapter.
 
 **Buyer** — `POST /quotes` · `POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
 `POST /jobs/{id}/cancel` · `GET /profile` (own rating aggregate) ·
-`POST /jobs/{id}/review`
+`POST /jobs/{id}/review` · `POST /reports` · `GET /reports` (own filed
+reports; shared with seller, see Seller list)
 
 **Seller** (`/v1/seller/…`) — `PUT|GET /profile` (own capacity) ·
 `POST /payments/onboard` · `POST|DELETE /availability[/{service_type_id}]` ·
 `GET /offers` · `GET /jobs` · `POST /offers/{id}/accept` ·
 `POST /offers/{id}/decline` · `POST /jobs/{id}/complete` ·
-`POST /jobs/{id}/review` (rate the buyer)
+`POST /jobs/{id}/review` (rate the buyer) · `POST /v1/reports` ·
+`GET /v1/reports` (shared with buyer, not `/seller`-prefixed — see Buyer list)
 
 **Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·
 `PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
@@ -125,7 +127,11 @@ mail adapter.
 `GET /transactions` · `GET /payouts` ·
 `POST /payouts/{id}/retry` · `GET /notifications` ·
 `POST /notifications/drain` · `GET /margins/summary` · `GET /audit` ·
-`GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep`
+`GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep` ·
+`POST /users/{id}/suspend` · `POST /users/{id}/reinstate` ·
+`POST /users/{id}/reset_display_name` · `GET /reviews/{kind}` (`buyer`|`seller`) ·
+`POST /reviews/{kind}/{id}/hide` · `POST /reviews/{kind}/{id}/unhide` ·
+`GET /reports` · `POST /reports/{id}/resolve`
 
 **Payments** — `POST /payments/webhook` (provider event sink, unauthenticated,
 signature-verified)
@@ -246,8 +252,9 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
 ## Out of scope / next
 
-Trust & safety (disputes/chargebacks and partial refunds, and seller→buyer
-reviews, now ship — see Disputes above and the Buyer/Seller/Admin endpoints;
-moderation/abuse still ahead), notification preferences/digests and push/SMS
-channels, fee-aware margin math, admin RBAC, and OAuth/social login. See
+Trust & safety (disputes/chargebacks and partial refunds, seller→buyer
+reviews, and moderation — suspension, comment takedown, and counterparty
+abuse reports — now ship; see Disputes above and the Buyer/Seller/Admin
+endpoints; notification preferences still ahead), push/SMS channels,
+fee-aware margin math, admin RBAC, and OAuth/social login. See
 `ROADMAP.md`.

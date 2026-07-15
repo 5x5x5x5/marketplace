@@ -130,8 +130,10 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Explicit non-goals (roadmap, not now)
 
-Moderation/abuse, notification preferences/digests, gateway rate-limiting,
-admin RBAC (single shared admin role for now), and OAuth/social login. Seller
+Notification preferences/digests, gateway rate-limiting, admin RBAC (single
+shared admin role for now), and OAuth/social login. Automatic abuse
+signals/limits (report-count thresholds, auto-suspend) are deferred
+indefinitely — fork-specific heuristics, not a generic default. Seller
 bidding is out (this is not an auction). Payments ship (Stripe Connect via
 `payments/port.py`, verified against a real Stripe test account). Auth ships
 (DB-backed sessions, real signup/login). Notifications + the background
@@ -140,5 +142,9 @@ external-worker extraction needs no schema change). Disputes + partial
 refunds ship (buyer-initiated arbitration, admin resolution, Stripe
 chargebacks recorded through the same webhook). Seller→buyer reviews ship
 (display-only buyer rating aggregate — `POST /v1/seller/jobs/{id}/review`,
-`GET /v1/profile`, `GET /v1/admin/buyers`; gates nothing by design) — see
-`ROADMAP.md`.
+`GET /v1/profile`, `GET /v1/admin/buyers`; gates nothing by design).
+Moderation ships (migration #7): verb-gated suspension (acquisition verbs
+403; login/GETs/complete/decline/cancel stay open; matching drops suspended
+sellers), hide-not-delete comment takedown plus display-name reset, and
+counterparty-only abuse reports whose admin resolution is terminal and
+takes no automatic action — see `ROADMAP.md`.

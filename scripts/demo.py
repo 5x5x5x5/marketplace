@@ -217,9 +217,40 @@ def _run(c: TestClient) -> None:
     assert me["email"] == "buyer@demo.test"
     assert resolved["status"] == "resolved"
     assert summary2["platform_margin_net"] != summary2["platform_margin"]
+
+    # --- Act 5: moderation (report -> takedown -> suspension -> reinstate) ---
+    print("15. Carol reports Alice's review; the admin queue lights up")
+    review_id = c.get("/v1/admin/reviews/buyer", headers=admin).json()[0]["id"]
+    report = c.post(
+        "/v1/reports",
+        json={"target_kind": "review", "target_id": review_id, "reason": "abusive language"},
+        headers=carol,
+    ).json()
+    print(f"   report status = {report['status']}")
+
+    print("16. Admin hides the comment (rating and aggregates stay)")
+    hidden = c.post(f"/v1/admin/reviews/buyer/{review_id}/hide", headers=admin).json()
+    print(f"   comment_hidden = {hidden['comment_hidden']}")
+
+    print("17. Admin suspends Alice — acquisition blocked, reads still fine")
+    c.post(f"/v1/admin/users/{alice_id}/suspend", json={"reason": "abuse"}, headers=admin)
+    blocked = c.post("/v1/quotes", json={"service_type_id": sid}, headers=alice)
+    print(f"   new quote -> {blocked.status_code} {blocked.json()['detail']}")
+    assert blocked.status_code == 403
+
+    print("18. Reinstate + resolve the report (no automatic actions either way)")
+    c.post(f"/v1/admin/users/{alice_id}/reinstate", headers=admin)
+    resolved_report = c.post(
+        f"/v1/admin/reports/{report['id']}/resolve",
+        json={"status": "actioned", "note": "comment hidden"},
+        headers=admin,
+    ).json()
+    print(f"   report -> {resolved_report['status']}")
+    assert resolved_report["status"] == "actioned"
+
     print(
         "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
-        "payout paid, offer email loop-delivered."
+        "payout paid, offer email loop-delivered, moderation loop closed."
     )
 
 

@@ -1,12 +1,13 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Four
+hardening** closed the exploitable findings (status table below). Five
 updates followed, in order: the **template build** (moved state to Postgres),
 **payments** (added an escrow provider), **real-user auth** (replaced the
-pilot HMAC tokens with DB-backed sessions), and **disputes** (added
-arbitration over the escrow — partial refunds/clawbacks and chargeback
-recording) — see the update notes below.
+pilot HMAC tokens with DB-backed sessions), **disputes** (added arbitration
+over the escrow — partial refunds/clawbacks and chargeback recording), and
+**moderation** (suspension, comment takedown, and counterparty abuse
+reports) — see the update notes below.
 
 ## Update — template build
 
@@ -157,8 +158,59 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
 - **Seller→buyer reviews expose only the aggregate to the buyer.**
   `GET /v1/profile` returns `rating`/`rating_count`, never the individual
   `SellerReview` rows or comments; those stay admin-side (`GET
-  /v1/admin/buyers` is the same aggregate, not a review list) until the
-  moderation/abuse sub-phase decides whether buyers see more.
+  /v1/admin/buyers` is the same aggregate, not a review list). The
+  moderation sub-phase below answers the deferred question: buyers still
+  don't see individual reviews; admins gained the ability to hide one.
+
+## Update — moderation
+
+- **Reporting is counterparty-gated, not open season.** `POST /v1/reports`
+  only accepts a `user` target who shares a job with the reporter (either
+  direction) or a `review`/`seller_review` target the reporter is a party
+  to (author or subject) — a 403 otherwise, and a self-report is a 422. One
+  report per `(reporter, target)` pair, enforced by a DB `UNIQUE` so a
+  sequential or concurrent duplicate both land the same 409, never a 500.
+  Every filing notifies every admin (`REPORT_OPENED_ADMIN`) inside the same
+  transaction as the insert, via the existing enqueue-only outbox — no
+  filing is silently unseen.
+- **The reporter never sees the resolution note.** `ReportOut` (the
+  reporter's own `GET /v1/reports` view) carries `status` but not
+  `resolution_note`; that field exists only on `AdminReportOut`. The
+  admin's internal reasoning for actioning or dismissing a report is never
+  echoed back to the person who filed it.
+- **Resolving a report is terminal and inert.** `POST
+  /v1/admin/reports/{id}/resolve` requires `status` to already be
+  `open` (409 on a second resolve — no re-resolution, no status flip-flop)
+  and only writes `status`/`resolution_note`/`resolved_at` onto the report
+  row itself; it never touches the reported user, review, or job. Any
+  consequence (suspend, hide) is a deliberate, separate admin action —
+  resolving a report is not an automatic trigger.
+- **Suspension is verb-gated, not a global lock, and admins are exempt by
+  construction.** `suspend_user` 422s on a target whose `role is ADMIN`
+  before anything is written, so an admin account can never be suspended
+  (self or otherwise). For everyone else, `_require_active` gates only the
+  acquisition verbs (quotes, jobs, reviews, disputes, availability,
+  offer-accept, payments-onboard, report-filing) with a `403 {"detail":
+  "account suspended"}` — the only place suspension surfaces to the
+  suspended user; login, `GET`s, `complete`, `decline`, and `cancel` stay
+  reachable so in-flight work finishes. `repo`'s seller-matching query
+  anti-joins `UserStatus.SUSPENDED`, so a suspended seller stops receiving
+  new offers without a matching-side special case. Suspension itself never
+  calls a payment provider or touches a `Transaction`/`Payment` row — freeze
+  new, finish in-flight, move no money.
+- **Takedown hides, it never deletes.** `comment_hidden` is a boolean on
+  `Review`/`SellerReview`; hiding clears the comment from every non-admin
+  view (the reviewee's own reads, `GET /v1/profile`, etc. — `comment_hidden`
+  is the one property those views gate on) while `rating` and every rating
+  aggregate stay untouched — a hidden review still counts toward
+  `rating`/`rating_count`, only the free-text vanishes. Admin's
+  `GET /v1/admin/reviews/{kind}` and the hide/unhide endpoints always
+  return the raw `comment` plus the `comment_hidden` flag — admins can
+  always see what was hidden and why it was actioned. `POST
+  /v1/admin/users/{id}/reset_display_name` is idempotent-safe and
+  deterministic (`user-{id[:8]}`), independent of the takedown path so it
+  can be applied to a harassment-via-display-name case with no review
+  involved.
 
 ## Threat model (pilot)
 
