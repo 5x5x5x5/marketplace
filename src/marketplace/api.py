@@ -20,16 +20,24 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import notifications, repo
-from .auth import auth_router, bootstrap_admin, current_buyer, current_seller, require_admin
+from .auth import (
+    Claims,
+    auth_router,
+    bootstrap_admin,
+    current_buyer,
+    current_participant,
+    current_seller,
+    require_admin,
+)
 from .db import SessionLocal, get_session, init_db
 from .entities import (
     Adjustment,
@@ -46,11 +54,13 @@ from .entities import (
     Payout,
     Pipeline,
     Quote,
+    Report,
     Review,
     SellerProfile,
     SellerReview,
     ServiceType,
     Transaction,
+    User,
     WebhookEvent,
 )
 from .idempotency import IdempotencyMiddleware
@@ -59,6 +69,8 @@ from .matching import STRATEGIES, effective_floor, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
+    AdminReportOut,
+    AdminReviewOut,
     AdminSellerBody,
     AuditOut,
     AvailabilityRequest,
@@ -70,6 +82,7 @@ from .models import (
     DisputeStatus,
     EventKind,
     JobCreateRequest,
+    JobReviewOut,
     JobStatus,
     MarginFloorBody,
     MarginSummaryOut,
@@ -84,7 +97,12 @@ from .models import (
     PipelinesBody,
     QuoteOut,
     QuoteRequest,
+    ReportOut,
+    ReportRequest,
+    ReportStatus,
+    ReportTargetKind,
     ResolveDisputeRequest,
+    ResolveReportRequest,
     ReviewOut,
     ReviewRequest,
     SellerDisputeOut,
@@ -96,7 +114,11 @@ from .models import (
     ServiceTypeBody,
     ServiceTypeOut,
     Side,
+    SuspendRequest,
     TransactionOut,
+    UserModerationOut,
+    UserRole,
+    UserStatus,
     to_money,
 )
 from .payments import get_provider
@@ -121,6 +143,14 @@ ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _require_active(session: Session, user_id: str) -> None:
+    """Verb gate for suspension: acquisition endpoints call this first.
+    A missing row is treated as active (auth already proved the principal)."""
+    user = session.get(User, user_id)
+    if user is not None and user.status is UserStatus.SUSPENDED:
+        raise HTTPException(status_code=403, detail="account suspended")
 
 
 # ---------- Matching / offer helpers ----------
@@ -288,6 +318,89 @@ def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
     return list(rows[offset : offset + limit])
 
 
+# ---------- Reports router ----------
+
+reports_router = APIRouter(prefix="/v1", tags=["reports"])
+ParticipantClaims = Annotated[Claims, Depends(current_participant)]
+
+
+@reports_router.post("/reports", response_model=ReportOut, status_code=201)
+def file_report(body: ReportRequest, session: SessionDep, claims: ParticipantClaims) -> Report:
+    reporter_id = claims.sub
+    _require_active(session, reporter_id)
+    target_id = body.target_id
+    if body.target_kind is ReportTargetKind.USER:
+        target = session.get(User, body.target_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="target not found")
+        if target.id == reporter_id:
+            raise HTTPException(status_code=422, detail="cannot report yourself")
+        shared = session.scalar(
+            select(func.count())
+            .select_from(Job)
+            .where(
+                or_(
+                    and_(Job.buyer_id == reporter_id, Job.seller_id == target.id),
+                    and_(Job.seller_id == reporter_id, Job.buyer_id == target.id),
+                )
+            )
+        )
+        if not shared:
+            raise HTTPException(status_code=403, detail="not a counterparty")
+    else:
+        model = Review if body.target_kind is ReportTargetKind.REVIEW else SellerReview
+        try:
+            review_uuid = UUID(body.target_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="target not found") from None
+        row = session.get(model, review_uuid)
+        if row is None:
+            raise HTTPException(status_code=404, detail="target not found")
+        if reporter_id not in (row.buyer_id, row.seller_id):
+            raise HTTPException(status_code=403, detail="not a party to this review")
+        # Canonicalize: UUID() accepts many textual forms of the same value
+        # (case, hyphens, braces, urn:uuid:); storing the raw string would let
+        # each variant evade the (reporter, target) UNIQUE and re-notify admins.
+        target_id = str(review_uuid)
+
+    report = Report(
+        reporter_id=reporter_id,
+        target_kind=body.target_kind,
+        target_id=target_id,
+        reason=body.reason,
+    )
+    session.add(report)
+    try:
+        session.flush()
+    except IntegrityError:
+        # Duplicate (sequential or concurrent) loses the UNIQUE race — same
+        # answer either way, not a 500.
+        raise HTTPException(status_code=409, detail="already reported") from None
+    notifications.enqueue_admins(
+        session,
+        EventKind.REPORT_OPENED_ADMIN,
+        {
+            "report_id": str(report.id),
+            "target_kind": body.target_kind,
+            "target_id": target_id,
+            "reason": body.reason,
+            "reporter_id": reporter_id,
+        },
+    )
+    return report
+
+
+@reports_router.get("/reports", response_model=list[ReportOut])
+def my_reports(session: SessionDep, claims: ParticipantClaims) -> list[Report]:
+    return list(
+        session.scalars(
+            select(Report)
+            .where(Report.reporter_id == claims.sub)
+            .order_by(Report.created_at.desc())
+        ).all()
+    )
+
+
 # ---------- Buyer router ----------
 
 
@@ -302,11 +415,42 @@ def _buyer_view(session: Session, job: Job) -> BuyerJobView:
     return view
 
 
+def _job_reviews(session: Session, job_id: UUID) -> list[JobReviewOut]:
+    """Both reviews for a job (0-2), explicitly constructed — no party ids,
+    and `comment` reads through `public_comment` so a hidden comment is null
+    even to the job's own parties."""
+    out: list[JobReviewOut] = []
+    review = session.scalar(select(Review).where(Review.job_id == job_id))
+    if review is not None:
+        out.append(
+            JobReviewOut(
+                id=review.id,
+                kind=ReportTargetKind.REVIEW.value,
+                rating=review.rating,
+                comment=review.public_comment,
+                created_at=review.created_at,
+            )
+        )
+    seller_review = session.scalar(select(SellerReview).where(SellerReview.job_id == job_id))
+    if seller_review is not None:
+        out.append(
+            JobReviewOut(
+                id=seller_review.id,
+                kind=ReportTargetKind.SELLER_REVIEW.value,
+                rating=seller_review.rating,
+                comment=seller_review.public_comment,
+                created_at=seller_review.created_at,
+            )
+        )
+    return out
+
+
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"])
 
 
 @buyer_router.post("/quotes", response_model=QuoteOut)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
+    _require_active(session, buyer_id)
     cfg = repo.load_pricing_config(session, req.service_type_id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
@@ -363,6 +507,7 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
 
 @buyer_router.post("/jobs", response_model=BuyerJobView)
 def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) -> Job:
+    _require_active(session, buyer_id)
     quote = session.get(Quote, req.quote_id, with_for_update=True)
     # Same 404 whether missing or not-yours — don't confirm someone else's quote.
     if quote is None or quote.buyer_id != buyer_id:
@@ -466,6 +611,7 @@ def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
 
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut)
 def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id: BuyerId) -> Review:
+    _require_active(session, buyer_id)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -502,6 +648,7 @@ def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id:
 def open_dispute(
     job_id: UUID, body: DisputeRequest, session: SessionDep, buyer_id: BuyerId
 ) -> Dispute:
+    _require_active(session, buyer_id)
     job = session.get(Job, job_id)
     if job is None or job.buyer_id != buyer_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -550,6 +697,16 @@ def get_dispute_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> D
     if dispute is None:
         raise HTTPException(status_code=404, detail="no dispute for this job")
     return dispute
+
+
+@buyer_router.get("/jobs/{job_id}/reviews", response_model=list[JobReviewOut])
+def list_job_reviews_buyer(
+    job_id: UUID, session: SessionDep, buyer_id: BuyerId
+) -> list[JobReviewOut]:
+    job = session.get(Job, job_id)
+    if job is None or job.buyer_id != buyer_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _job_reviews(session, job_id)
 
 
 # ---------- Seller router ----------
@@ -607,6 +764,7 @@ def onboard_payments(
 
     `payments_ready` flips via the provider's account webhook (instantly for the
     fake provider); matching only offers jobs to ready sellers."""
+    _require_active(session, seller_id)
     seller = repo.get_or_create_seller(session, seller_id)
     if seller.provider_account_id is None:
         try:
@@ -631,6 +789,7 @@ def onboard_payments(
 def post_availability(
     req: AvailabilityRequest, session: SessionDep, seller_id: SellerId
 ) -> dict[str, str]:
+    _require_active(session, seller_id)
     if session.get(ServiceType, req.service_type_id) is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
     repo.get_or_create_seller(session, seller_id)
@@ -706,10 +865,21 @@ def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -
     return dispute
 
 
+@seller_router.get("/jobs/{job_id}/reviews", response_model=list[JobReviewOut])
+def list_job_reviews_seller(
+    job_id: UUID, session: SessionDep, seller_id: SellerId
+) -> list[JobReviewOut]:
+    job = session.get(Job, job_id)
+    if job is None or job.seller_id != seller_id:
+        raise HTTPException(status_code=404, detail="job not found")
+    return _job_reviews(session, job_id)
+
+
 @seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut)
 def review_buyer(
     job_id: UUID, body: ReviewRequest, session: SessionDep, seller_id: SellerId
 ) -> SellerReview:
+    _require_active(session, seller_id)
     job = session.get(Job, job_id)
     if job is None or job.seller_id != seller_id:
         raise HTTPException(status_code=404, detail="job not found")
@@ -746,6 +916,7 @@ def review_buyer(
 def accept_offer(
     offer_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
 ) -> Job:
+    _require_active(session, seller_id)
     offer = session.get(Offer, offer_id, with_for_update=True)
     if offer is None or offer.seller_id != seller_id:
         raise HTTPException(status_code=404, detail="offer not found")
@@ -1040,6 +1211,148 @@ def admin_update_seller(
     )
     session.flush()
     return seller
+
+
+@admin_router.post("/users/{user_id}/suspend", response_model=UserModerationOut)
+def suspend_user(
+    user_id: str, body: SuspendRequest, session: SessionDep, admin_id: AdminId
+) -> User:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.role is UserRole.ADMIN:
+        raise HTTPException(status_code=422, detail="admins cannot be suspended")
+    if user.status is UserStatus.SUSPENDED:
+        raise HTTPException(status_code=409, detail="user already suspended")
+    user.status = UserStatus.SUSPENDED
+    user.suspended_reason = body.reason
+    user.suspended_at = _now()
+    audit(session, admin_id, "suspend_user", user_id, {"reason": body.reason})
+    session.flush()
+    return user
+
+
+@admin_router.post("/users/{user_id}/reinstate", response_model=UserModerationOut)
+def reinstate_user(user_id: str, session: SessionDep, admin_id: AdminId) -> User:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if user.status is not UserStatus.SUSPENDED:
+        raise HTTPException(status_code=409, detail="user is not suspended")
+    user.status = UserStatus.ACTIVE
+    user.suspended_reason = None
+    user.suspended_at = None
+    audit(session, admin_id, "reinstate_user", user_id, {})
+    session.flush()
+    return user
+
+
+def _admin_review_out(row: Review | SellerReview) -> AdminReviewOut:
+    author, subject = (
+        (row.buyer_id, row.seller_id) if isinstance(row, Review) else (row.seller_id, row.buyer_id)
+    )
+    return AdminReviewOut(
+        id=row.id,
+        job_id=row.job_id,
+        author_id=author,
+        subject_id=subject,
+        rating=row.rating,
+        comment=row.comment,
+        comment_hidden=row.comment_hidden,
+        created_at=row.created_at,
+    )
+
+
+@admin_router.get("/reviews/{kind}", response_model=list[AdminReviewOut])
+def admin_list_reviews(
+    kind: Literal["buyer", "seller"], session: SessionDep, admin_id: AdminId
+) -> list[AdminReviewOut]:
+    model = Review if kind == "buyer" else SellerReview
+    rows = session.scalars(select(model).order_by(model.created_at.desc())).all()
+    return [_admin_review_out(r) for r in rows]
+
+
+def _set_comment_hidden(
+    kind: Literal["buyer", "seller"],
+    review_id: UUID,
+    hidden: bool,
+    session: Session,
+    admin_id: str,
+) -> AdminReviewOut:
+    model = Review if kind == "buyer" else SellerReview
+    row = session.get(model, review_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="review not found")
+    if row.comment_hidden == hidden:
+        raise HTTPException(status_code=409, detail="review already in that state")
+    row.comment_hidden = hidden
+    audit(
+        session,
+        admin_id,
+        "hide_review" if hidden else "unhide_review",
+        f"{kind}:{review_id}",
+        {},
+    )
+    session.flush()
+    return _admin_review_out(row)
+
+
+@admin_router.post("/reviews/{kind}/{review_id}/hide", response_model=AdminReviewOut)
+def admin_hide_review(
+    kind: Literal["buyer", "seller"], review_id: UUID, session: SessionDep, admin_id: AdminId
+) -> AdminReviewOut:
+    return _set_comment_hidden(kind, review_id, True, session, admin_id)
+
+
+@admin_router.post("/reviews/{kind}/{review_id}/unhide", response_model=AdminReviewOut)
+def admin_unhide_review(
+    kind: Literal["buyer", "seller"], review_id: UUID, session: SessionDep, admin_id: AdminId
+) -> AdminReviewOut:
+    return _set_comment_hidden(kind, review_id, False, session, admin_id)
+
+
+@admin_router.post("/users/{user_id}/reset_display_name", response_model=UserModerationOut)
+def admin_reset_display_name(user_id: str, session: SessionDep, admin_id: AdminId) -> User:
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    user.display_name = f"user-{user.id[:8]}"
+    audit(session, admin_id, "reset_display_name", user_id, {})
+    session.flush()
+    return user
+
+
+@admin_router.get("/reports", response_model=list[AdminReportOut])
+def admin_list_reports(
+    session: SessionDep, admin_id: AdminId, status: ReportStatus | None = None
+) -> list[Report]:
+    q = select(Report).order_by(Report.created_at.desc())
+    if status is not None:
+        q = q.where(Report.status == status)
+    return list(session.scalars(q).all())
+
+
+@admin_router.post("/reports/{report_id}/resolve", response_model=AdminReportOut)
+def resolve_report(
+    report_id: UUID, body: ResolveReportRequest, session: SessionDep, admin_id: AdminId
+) -> Report:
+    report = session.get(Report, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report not found")
+    if report.status is not ReportStatus.OPEN:
+        raise HTTPException(status_code=409, detail="report already resolved")
+    report.status = body.status
+    report.resolution_note = body.note
+    report.resolved_at = _now()
+    audit(
+        session,
+        admin_id,
+        "resolve_report",
+        str(report_id),
+        {"status": body.status, "note": body.note or ""},
+    )
+    session.flush()
+    return report
 
 
 @admin_router.get("/buyers", response_model=list[BuyerProfileOut])
@@ -1570,4 +1883,5 @@ app.include_router(auth_router)
 app.include_router(buyer_router)
 app.include_router(seller_router)
 app.include_router(admin_router)
+app.include_router(reports_router)
 app.include_router(payments_router)

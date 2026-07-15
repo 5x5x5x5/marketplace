@@ -1,8 +1,10 @@
 """Client-facing idempotency: optional Idempotency-Key header on POSTs.
 
-The first response (any status < 500) is stored per (principal, key) and
-replayed byte-for-byte on repeats. The same key on a different path is a 409.
-Uses its own short-lived DB sessions, separate from the request's.
+The first response is stored per (principal, key) and replayed byte-for-byte
+on repeats, except 401/403 (auth/authorization-state answers, not operation
+outcomes — a suspended-then-reinstated principal must not replay a stale
+403 forever) and 5xx. The same key on a different path is a 409. Uses its
+own short-lived DB sessions, separate from the request's.
 
 ponytail: the store races on truly concurrent duplicates — both execute, the
 unique constraint drops one record, and the DB row locks downstream already
@@ -92,14 +94,19 @@ class IdempotencyMiddleware:
 
         await self.app(scope, receive, record_send)
 
-        if captured_status < 500:
+        # int(...) re-widens the type: pyright can't see that record_send (an
+        # opaque callback passed to self.app) is what actually reassigns
+        # captured_status, so without this it stays narrowed to Literal[500]
+        # and flags the auth-status exclusion below as an always-true no-op.
+        status = int(captured_status)
+        if status < 500 and status != 401 and status != 403:
             with SessionLocal() as session:
                 session.add(
                     IdempotencyRecord(
                         principal=principal,
                         key=key,
                         path=path,
-                        response_status=captured_status,
+                        response_status=status,
                         response_body=captured_body.decode("utf-8", errors="replace"),
                     )
                 )

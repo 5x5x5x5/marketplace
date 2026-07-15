@@ -85,6 +85,7 @@ class EventKind(StrEnum):
     DISPUTE_RESOLVED_SELLER = "dispute_resolved_seller"
     CHARGEBACK_OPENED_ADMIN = "chargeback_opened_admin"
     CHARGEBACK_CLOSED_ADMIN = "chargeback_closed_admin"
+    REPORT_OPENED_ADMIN = "report_opened_admin"
 
 
 class NotificationStatus(StrEnum):
@@ -103,6 +104,23 @@ class DisputeStatus(StrEnum):
     RESOLVED = "resolved"  # admin arbitration; 0/0 amounts = rejected
     CHARGEBACK_WON = "chargeback_won"
     CHARGEBACK_LOST = "chargeback_lost"
+
+
+class UserStatus(StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"  # verb-gated: acquisition blocked, completion/exit allowed
+
+
+class ReportTargetKind(StrEnum):
+    USER = "user"
+    REVIEW = "review"  # buyer→seller review (reviews table)
+    SELLER_REVIEW = "seller_review"  # seller→buyer review
+
+
+class ReportStatus(StrEnum):
+    OPEN = "open"
+    ACTIONED = "actioned"  # terminal; the tools were used (or not) explicitly
+    DISMISSED = "dismissed"  # terminal
 
 
 class AdjustmentKind(StrEnum):
@@ -205,7 +223,7 @@ class ReviewOut(BaseModel):
     job_id: UUID
     seller_id: str
     rating: int
-    comment: str | None
+    comment: str | None = Field(default=None, validation_alias="public_comment")
     created_at: datetime
 
 
@@ -220,8 +238,67 @@ class SellerReviewOut(BaseModel):
     id: UUID
     job_id: UUID
     rating: int
+    comment: str | None = Field(default=None, validation_alias="public_comment")
+    created_at: datetime
+
+
+class JobReviewOut(BaseModel):
+    """A job's own review(s), as read by either party to that job. No party
+    ids (identity asymmetry: an id string enables cross-job linkability the
+    party of one's own job doesn't otherwise have — the counterparty's role
+    in *this* job is contextually known, but their id stays withheld).
+    `kind` is exactly the `target_kind` string `POST /v1/reports` expects,
+    so the id+kind pair returned here is directly reportable."""
+
+    id: UUID
+    kind: str
+    rating: int
     comment: str | None
     created_at: datetime
+
+
+class AdminReviewOut(BaseModel):
+    """Unified admin view over both review tables; party ids normalized to
+    author/subject. Admin sees the raw comment plus the hidden flag."""
+
+    id: UUID
+    job_id: UUID
+    author_id: str
+    subject_id: str
+    rating: int
+    comment: str | None
+    comment_hidden: bool
+    created_at: datetime
+
+
+class ReportRequest(BaseModel):
+    target_kind: ReportTargetKind
+    target_id: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ReportOut(BaseModel):
+    """Reporter's view — admin prose (resolution_note) never appears here."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    target_kind: ReportTargetKind
+    target_id: str
+    reason: str
+    status: ReportStatus
+    created_at: datetime
+
+
+class AdminReportOut(ReportOut):
+    reporter_id: str
+    resolution_note: str | None
+    resolved_at: datetime | None
+
+
+class ResolveReportRequest(BaseModel):
+    status: Literal[ReportStatus.ACTIONED, ReportStatus.DISMISSED]
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class BuyerDisputeOut(BaseModel):
@@ -295,6 +372,20 @@ class BuyerProfileOut(BaseModel):
     rating: float | None
     rating_count: int
     completed_jobs: int
+
+
+class SuspendRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class UserModerationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    display_name: str
+    status: UserStatus
+    suspended_reason: str | None
+    suspended_at: datetime | None
 
 
 class OnboardingOut(BaseModel):

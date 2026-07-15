@@ -188,6 +188,13 @@ def _render_chargeback_closed_admin(p: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _render_report_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Report filed against {p['target_kind']} {p['target_id']}",
+        (f'Reason: "{p["reason"]}"\nReporter: {p["reporter_id"]}\nReport: {p["report_id"]}'),
+    )
+
+
 RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.OFFER_RECEIVED: _render_offer_received,
     EventKind.JOB_ACCEPTED_BUYER: _render_job_accepted_buyer,
@@ -202,6 +209,7 @@ RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.DISPUTE_RESOLVED_SELLER: _render_dispute_resolved_seller,
     EventKind.CHARGEBACK_OPENED_ADMIN: _render_chargeback_opened_admin,
     EventKind.CHARGEBACK_CLOSED_ADMIN: _render_chargeback_closed_admin,
+    EventKind.REPORT_OPENED_ADMIN: _render_report_opened_admin,
 }
 
 
