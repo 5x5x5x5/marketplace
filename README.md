@@ -143,6 +143,10 @@ signature-verified)
 Seller: `GET /jobs/{id}/dispute`. Admin: `GET /disputes` ·
 `POST /disputes/{id}/resolve`
 
+**Notification preferences** (`/v1/notification-preferences`, all roles) —
+`GET` · `PUT` (replace-set; scoped to the authenticated principal's own
+role-eligible kinds — a buyer can't see or mute seller/admin kinds)
+
 ## Job & offer state machine
 
 - **Job**: `pending → awaiting_payment? → accepted → completed`; plus `expired`
@@ -256,8 +260,8 @@ floor and seller capacity. Register new ones with `@register_strategy("name")`.
 ## Out of scope / next
 
 Trust & safety (disputes/chargebacks and partial refunds, seller→buyer
-reviews, and moderation — suspension, comment takedown, and counterparty
-abuse reports — now ship; see Disputes above and the Buyer/Seller/Admin
-endpoints; notification preferences still ahead), push/SMS channels,
-fee-aware margin math, admin RBAC, and OAuth/social login. See
-`ROADMAP.md`.
+reviews, moderation — suspension, comment takedown, and counterparty
+abuse reports — and notification preferences now all ship; see Disputes
+above, the Buyer/Seller/Admin endpoints, and Notification preferences
+below), push/SMS channels, fee-aware margin math, admin RBAC, and
+OAuth/social login. See `ROADMAP.md`.

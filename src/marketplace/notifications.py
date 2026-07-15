@@ -19,12 +19,41 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
-from .entities import Notification, User
+from .entities import Notification, NotificationMute, User
 from .mail import EmailSender
 from .models import EventKind, NotificationStatus, UserRole
 from .settings import settings
 
 logger = logging.getLogger("marketplace.notifications")
+
+# The floor: mail that records money movement can never be muted.
+MUST_SEND: frozenset[EventKind] = frozenset(
+    {
+        EventKind.REFUND_ISSUED_BUYER,
+        EventKind.DISPUTE_RESOLVED_BUYER,
+        EventKind.DISPUTE_RESOLVED_SELLER,
+        EventKind.PAYOUT_FAILED_ADMIN,
+    }
+)
+
+# Recipient role per kind. Explicit beats deriving from name suffixes; the
+# coverage test fails fast when a kind is added without a mapping.
+KIND_ROLES: dict[EventKind, UserRole] = {
+    EventKind.OFFER_RECEIVED: UserRole.SELLER,
+    EventKind.JOB_ACCEPTED_BUYER: UserRole.BUYER,
+    EventKind.JOB_COMPLETED_BUYER: UserRole.BUYER,
+    EventKind.JOB_EXPIRED_BUYER: UserRole.BUYER,
+    EventKind.JOB_CANCELLED_SELLER: UserRole.SELLER,
+    EventKind.REFUND_ISSUED_BUYER: UserRole.BUYER,
+    EventKind.PAYOUT_FAILED_ADMIN: UserRole.ADMIN,
+    EventKind.DISPUTE_OPENED_SELLER: UserRole.SELLER,
+    EventKind.DISPUTE_OPENED_ADMIN: UserRole.ADMIN,
+    EventKind.DISPUTE_RESOLVED_BUYER: UserRole.BUYER,
+    EventKind.DISPUTE_RESOLVED_SELLER: UserRole.SELLER,
+    EventKind.CHARGEBACK_OPENED_ADMIN: UserRole.ADMIN,
+    EventKind.CHARGEBACK_CLOSED_ADMIN: UserRole.ADMIN,
+    EventKind.REPORT_OPENED_ADMIN: UserRole.ADMIN,
+}
 
 _BACKOFF_BASE_SECONDS = 30
 
@@ -40,6 +69,16 @@ def enqueue(session: Session, kind: EventKind, user_id: str, payload: dict[str, 
     if user is None:
         logger.warning("notification %s skipped: no user %s", kind, user_id)
         return
+    if kind not in MUST_SEND and (
+        session.scalar(
+            select(NotificationMute.id).where(
+                NotificationMute.user_id == user.id, NotificationMute.kind == kind
+            )
+        )
+        is not None
+    ):
+        logger.debug("notification %s muted by user %s", kind, user_id)
+        return
     session.add(Notification(user_id=user.id, email=user.email, kind=kind, payload=payload))
 
 
@@ -49,8 +88,25 @@ def enqueue_admins(session: Session, kind: EventKind, payload: dict[str, Any]) -
     if not admins:
         logger.warning("notification %s skipped: no admin accounts", kind)
         return
+    muted: set[str] = set()
+    if kind not in MUST_SEND:
+        muted = set(
+            session.scalars(
+                select(NotificationMute.user_id).where(
+                    NotificationMute.kind == kind,
+                    NotificationMute.user_id.in_([a.id for a in admins]),
+                )
+            ).all()
+        )
+    sent_any = False
     for admin in admins:
+        if admin.id in muted:
+            logger.debug("notification %s muted by admin %s", kind, admin.id)
+            continue
         session.add(Notification(user_id=admin.id, email=admin.email, kind=kind, payload=payload))
+        sent_any = True
+    if not sent_any and kind not in MUST_SEND:
+        logger.warning("notification %s skipped: all admin recipients muted", kind)
 
 
 # ---------- Renderers: pure payload -> (subject, body) ----------

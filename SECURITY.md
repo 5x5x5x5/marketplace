@@ -1,13 +1,14 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Five
+hardening** closed the exploitable findings (status table below). Six
 updates followed, in order: the **template build** (moved state to Postgres),
 **payments** (added an escrow provider), **real-user auth** (replaced the
 pilot HMAC tokens with DB-backed sessions), **disputes** (added arbitration
-over the escrow — partial refunds/clawbacks and chargeback recording), and
+over the escrow — partial refunds/clawbacks and chargeback recording),
 **moderation** (suspension, comment takedown, and counterparty abuse
-reports) — see the update notes below.
+reports), and **notification preferences** (per-kind mutes with a
+server-side money floor) — see the update notes below.
 
 ## Update — template build
 
@@ -217,6 +218,17 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   review(s) (id, kind, rating, comment, created_at) — no party ids, and a
   hidden comment reads as `null` even to the job's own parties — giving the
   subject of an abusive review the id it needs to file a report against it.
+
+## Update — notification preferences
+
+- **Mutes are per-kind, with a server-side money floor that no path can
+  bypass.** `refund_issued_buyer`, `dispute_resolved_buyer`,
+  `dispute_resolved_seller`, and `payout_failed_admin` can never be muted —
+  not via `PUT /v1/notification-preferences` (422), and not via a direct
+  `NotificationMute` row inserted straight into the database, because the
+  floor is enforced at `enqueue` (`notifications.MUST_SEND`), not at the API
+  boundary. The outbox is what will actually send, so that is where the
+  floor has to hold.
 
 ## Threat model (pilot)
 

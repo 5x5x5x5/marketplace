@@ -296,6 +296,16 @@ class AdminReportOut(ReportOut):
     resolved_at: datetime | None
 
 
+class NotificationPreferenceOut(BaseModel):
+    kind: EventKind
+    muted: bool
+    locked: bool  # must-send: always sent, cannot be muted
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    muted: list[EventKind]
+
+
 class ResolveReportRequest(BaseModel):
     status: Literal[ReportStatus.ACTIONED, ReportStatus.DISMISSED]
     note: str | None = Field(default=None, max_length=2000)

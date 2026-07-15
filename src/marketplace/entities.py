@@ -424,6 +424,19 @@ class Notification(Base):
     last_error: Mapped[str | None] = mapped_column(String(512), default=None)
 
 
+class NotificationMute(Base):
+    """Sparse per-user opt-out: a row means muted, absence means subscribed.
+    Money kinds (MUST_SEND in notifications.py) never consult this table."""
+
+    __tablename__ = "notification_mutes"
+    __table_args__ = (UniqueConstraint("user_id", "kind"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[EventKind] = mapped_column(_enum(EventKind))
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+
+
 class Dispute(Base):
     """One per job. Buyer-opened arbitration or a provider chargeback; the
     money outcome lives in `adjustments`, never by editing booked rows."""
