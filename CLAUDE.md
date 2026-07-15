@@ -147,4 +147,7 @@ Moderation ships (migration #7): verb-gated suspension (acquisition verbs
 403; login/GETs/complete/decline/cancel stay open; matching drops suspended
 sellers), hide-not-delete comment takedown plus display-name reset, and
 counterparty-only abuse reports whose admin resolution is terminal and
-takes no automatic action — see `ROADMAP.md`.
+takes no automatic action. Notification preferences ship (migration #8,
+8 total): per-kind mutes via role-scoped, replace-set
+`GET/PUT /v1/notification-preferences`, enforced at `enqueue` with a
+server-side money floor no path can bypass — see `ROADMAP.md`.

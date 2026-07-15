@@ -65,6 +65,14 @@ users, then gets forked and specialized per market vertical. The differentiator
   counterparty-only (a shared job, or a party to the review), one per
   reporter per target ever, and resolving is terminal with no automatic
   action taken. See `SECURITY.md`.
+- **Notification preferences (done):** fourth and final T&S sub-phase —
+  per-kind mutes (migration #8). `GET/PUT /v1/notification-preferences` is
+  role-scoped (a buyer only sees/sets buyer kinds, same for seller/admin) and
+  replace-set (PUT sends the full muted list, race-safe via a row lock on the
+  user). Enforcement is at `enqueue`, not at send, so a smuggled DB row can
+  never resurrect muted mail. A server-side money floor
+  (`REFUND_ISSUED_BUYER`, `DISPUTE_RESOLVED_BUYER`, `DISPUTE_RESOLVED_SELLER`,
+  `PAYOUT_FAILED_ADMIN`) can never be muted, by any path. See `SECURITY.md`.
 
 ## Done ✓
 
@@ -102,18 +110,23 @@ buyer→seller direction, no double-blind; see `SECURITY.md`) ·
 **moderation** (verb-gated suspension excluding suspended sellers from
 matching; hide-not-delete takedown of review comments plus display-name
 reset; counterparty-only abuse reports with a terminal admin resolve and no
-automatic action; migration #7; see `SECURITY.md`).
+automatic action; migration #7; see `SECURITY.md`) · **notification
+preferences** (role-scoped, replace-set `GET/PUT
+/v1/notification-preferences`; per-kind mutes enforced at enqueue; a
+server-side money floor that can't be muted by any path, including a
+smuggled DB row; migration #8; see `SECURITY.md`).
 
 ## What's still ahead
 
 Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
 
-1. **Trust & safety** — disputes/chargebacks, partial refunds, seller→buyer
-   reviews, and moderation (suspension/takedown/reports) are done (see
-   "Done" above). Remaining sub-phase: notification preferences (everything
-   sent today is transactional). Deferred, not scheduled: automatic abuse
-   signals/limits (report-count thresholds, auto-suspend) — the counters and
-   cutoffs are fork-specific heuristics, not a generic default.
+1. **Trust & safety — COMPLETE.** All four sub-phases are done (see "Done"
+   above): disputes/chargebacks + partial refunds, seller→buyer reviews,
+   moderation (suspension/takedown/reports), and notification preferences
+   (per-kind mutes with a server-side money floor). Deferred, not scheduled:
+   automatic abuse signals/limits (report-count thresholds, auto-suspend) —
+   the counters and cutoffs are fork-specific heuristics, not a generic
+   default.
 2. **Processing fees in the margin math** — the `Transaction` ledger records
    margin gross of provider fees (Stripe: ~2.9% + 30¢ per charge, and the fee
    is kept on refunds — a refunded job costs the platform the fee with no

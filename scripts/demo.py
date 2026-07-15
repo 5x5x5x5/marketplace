@@ -251,9 +251,33 @@ def _run(c: TestClient) -> None:
     print(f"   report -> {resolved_report['status']}")
     assert resolved_report["status"] == "actioned"
 
+    # --- Act 6: notification preferences (mute the nudge, money mail stays) ---
+    print("19. Carol mutes offer_received — a new job matches silently")
+    c.put("/v1/notification-preferences", json={"muted": ["offer_received"]}, headers=carol)
+
+    def offer_mail_count() -> int:
+        rows = c.get("/v1/admin/notifications", headers=admin).json()
+        return len([n for n in rows if n["kind"] == "offer_received"])
+
+    before = offer_mail_count()
+    q = c.post("/v1/quotes", json={"service_type_id": sid}, headers=alice).json()
+    c.post("/v1/jobs", json={"quote_id": q["id"]}, headers=alice)
+    assert offer_mail_count() == before, "muted offer still mailed"
+    offers = c.get("/v1/seller/offers", headers=carol).json()
+    print(f"   offer mails unchanged ({before}); in-app offers visible: {len(offers)}")
+    assert offers, "offer should still exist in-app"
+
+    print("20. Carol unmutes — the next offer mails again")
+    c.put("/v1/notification-preferences", json={"muted": []}, headers=carol)
+    q = c.post("/v1/quotes", json={"service_type_id": sid}, headers=alice).json()
+    c.post("/v1/jobs", json={"quote_id": q["id"]}, headers=alice)
+    assert offer_mail_count() == before + 1
+    print("   offer mail queued after unmute")
+
     print(
         "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
-        "payout paid, offer email loop-delivered, moderation loop closed."
+        "payout paid, offer email loop-delivered, moderation loop closed, "
+        "notification mute/unmute enforced at enqueue."
     )
 
 
