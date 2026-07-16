@@ -130,7 +130,7 @@ class SellerProfile(Base):
     rating_count: Mapped[int] = mapped_column(default=0)
     rating_sum: Mapped[int] = mapped_column(default=0)
     completed_jobs: Mapped[int] = mapped_column(default=0)
-    provider_account_id: Mapped[str | None] = mapped_column(String(256), default=None)
+    provider_account_id: Mapped[str | None] = mapped_column(String(256), default=None, index=True)
     payments_ready: Mapped[bool] = mapped_column(default=False)  # set by account webhook
 
     @property
@@ -322,7 +322,7 @@ class Payout(Base):
     status: Mapped[PayoutStatus] = mapped_column(
         _enum(PayoutStatus), default=PayoutStatus.PENDING, index=True
     )
-    provider_transfer_id: Mapped[str | None] = mapped_column(String(256), default=None)
+    provider_transfer_id: Mapped[str | None] = mapped_column(String(256), default=None, index=True)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
     updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
 

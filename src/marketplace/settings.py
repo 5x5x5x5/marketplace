@@ -61,5 +61,11 @@ class Settings(BaseSettings):
     dispute_window_days: int = 7
     chargeback_fee_usd: Decimal = Decimal("15.00")  # provider fee on a lost chargeback
 
+    # API hardening. trusted_hosts/* and empty cors_origins = open (dev);
+    # narrow both in production. Bodies over max_body_bytes get a 413.
+    trusted_hosts: list[str] = ["*"]
+    cors_origins: list[str] = []
+    max_body_bytes: int = 1_048_576
+
 
 settings = Settings()

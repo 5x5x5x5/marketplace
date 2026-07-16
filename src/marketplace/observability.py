@@ -157,3 +157,52 @@ class RequestIdMiddleware:
                         "duration_ms": round((time.monotonic() - start) * 1000, 1),
                     },
                 )
+
+
+class _BodyTooLarge(Exception):  # noqa: N818 -- internal control-flow signal, not an API error
+    pass
+
+
+class BodySizeLimitMiddleware:
+    """413 oversized requests: declared Content-Length up front, and a
+    counted cap on chunked bodies. Mount OUTSIDE IdempotencyMiddleware so an
+    oversized 413 is never stored for replay."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = settings.max_body_bytes
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > limit:
+            await self._reject(scope, receive, send)
+            return
+        seen = 0
+
+        async def receive_capped() -> Message:
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    raise _BodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, receive_capped, send)
+        except _BodyTooLarge:
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        # ponytail: a chunked-body 413 after the response has already
+        # started streaming can't be delivered (same limitation Starlette's
+        # own error middleware has) — the declared-length branch above
+        # covers the common case (TestClient and most real clients send
+        # Content-Length); this counted branch only matters for genuinely
+        # chunked/streamed request bodies.
+        response = JSONResponse({"detail": "request body too large"}, status_code=413)
+        await response(scope, receive, send)

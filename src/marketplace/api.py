@@ -25,9 +25,11 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import notifications, repo
 from .auth import (
@@ -130,7 +132,7 @@ from .models import (
     UserStatus,
     to_money,
 )
-from .observability import RequestIdMiddleware, configure_logging
+from .observability import BodySizeLimitMiddleware, RequestIdMiddleware, configure_logging
 from .payments import get_provider
 from .payments.port import PaymentError, PaymentEvent, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY, PricingContext, run_pipeline
@@ -1382,11 +1384,15 @@ def _admin_review_out(row: Review | SellerReview) -> AdminReviewOut:
 
 @admin_router.get("/reviews/{kind}", response_model=list[AdminReviewOut])
 def admin_list_reviews(
-    kind: Literal["buyer", "seller"], session: SessionDep, admin_id: AdminId
+    kind: Literal["buyer", "seller"],
+    session: SessionDep,
+    admin_id: AdminId,
+    limit: Limit = 100,
+    offset: Offset = 0,
 ) -> list[AdminReviewOut]:
     model = Review if kind == "buyer" else SellerReview
     rows = session.scalars(select(model).order_by(model.created_at.desc())).all()
-    return [_admin_review_out(r) for r in rows]
+    return [_admin_review_out(r) for r in _paginate(rows, limit, offset)]
 
 
 def _set_comment_hidden(
@@ -1441,12 +1447,16 @@ def admin_reset_display_name(user_id: str, session: SessionDep, admin_id: AdminI
 
 @admin_router.get("/reports", response_model=list[AdminReportOut])
 def admin_list_reports(
-    session: SessionDep, admin_id: AdminId, status: ReportStatus | None = None
+    session: SessionDep,
+    admin_id: AdminId,
+    status: ReportStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
 ) -> list[Report]:
     q = select(Report).order_by(Report.created_at.desc())
     if status is not None:
         q = q.where(Report.status == status)
-    return list(session.scalars(q).all())
+    return _paginate(session.scalars(q).all(), limit, offset)
 
 
 @admin_router.post("/reports/{report_id}/resolve", response_model=AdminReportOut)
@@ -1473,8 +1483,11 @@ def resolve_report(
 
 
 @admin_router.get("/buyers", response_model=list[BuyerProfileOut])
-def admin_list_buyers(session: SessionDep, admin_id: AdminId) -> list[BuyerProfile]:
-    return list(session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all())
+def admin_list_buyers(
+    session: SessionDep, admin_id: AdminId, limit: Limit = 100, offset: Offset = 0
+) -> list[BuyerProfile]:
+    rows = session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all()
+    return _paginate(rows, limit, offset)
 
 
 @admin_router.get("/transactions", response_model=list[TransactionOut])
@@ -2072,10 +2085,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await maintenance
 
 
+def _add_hardening_middleware(app: FastAPI) -> None:
+    """Settings-driven: CORS only when origins are configured; TrustedHost
+    defaults open (*) until narrowed; body cap always on."""
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
+    app.add_middleware(BodySizeLimitMiddleware)
+
+
 configure_logging()
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(IdempotencyMiddleware)
-app.add_middleware(RequestIdMiddleware)  # added last = outermost; Task 4 inserts between
+_add_hardening_middleware(app)
+app.add_middleware(RequestIdMiddleware)  # outermost, unchanged
 
 
 @app.get("/healthz")
