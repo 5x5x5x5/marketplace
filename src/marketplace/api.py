@@ -289,11 +289,34 @@ def _sweep_expired_auth(session: Session) -> None:
     session.execute(delete(EmailToken).where(EmailToken.expires_at < _now()))
 
 
+def _sweep_retention(session: Session) -> None:
+    """Bounded tables: reap replay/dedup rows and delivered mail past their
+    windows. PENDING outbox rows are immortal — the outbox contract holds."""
+    now = _now()
+    session.execute(
+        delete(IdempotencyRecord).where(
+            IdempotencyRecord.created_at < now - timedelta(days=settings.retention_idempotency_days)
+        )
+    )
+    session.execute(
+        delete(WebhookEvent).where(
+            WebhookEvent.received_at < now - timedelta(days=settings.retention_webhooks_days)
+        )
+    )
+    session.execute(
+        delete(Notification).where(
+            Notification.status.in_((NotificationStatus.SENT, NotificationStatus.FAILED)),
+            Notification.created_at < now - timedelta(days=settings.retention_notifications_days),
+        )
+    )
+
+
 def _sweep(session: Session, provider: PaymentProvider) -> None:
     """Everything lazy maintenance does on reads: offers, payments, auth."""
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
     _sweep_expired_auth(session)
+    _sweep_retention(session)
 
 
 def _run_drain_once() -> None:
@@ -1992,10 +2015,22 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
 
 
+def _process_webhook(event: PaymentEvent) -> dict[str, str]:
+    """Dedup + apply on a worker thread — sync Session stays off the loop."""
+    with SessionLocal() as session:
+        duplicate = session.scalar(
+            select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
+        )
+        if duplicate is not None:
+            return {"status": "duplicate"}
+        session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
+        _apply_payment_event(session, event)
+        session.commit()
+    return {"status": "ok"}
+
+
 @payments_router.post("/webhook")
-async def payments_webhook(
-    request: Request, session: SessionDep, provider: ProviderDep
-) -> dict[str, str]:
+async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str, str]:
     """Provider event sink. Unauthenticated by design — authenticity comes from
     the provider's signature, verified in parse_webhook. Duplicates no-op."""
     payload = await request.body()
@@ -2005,14 +2040,7 @@ async def payments_webhook(
         raise HTTPException(status_code=400, detail="invalid webhook signature") from None
     except (PaymentError, ValueError, KeyError):
         raise HTTPException(status_code=400, detail="malformed webhook payload") from None
-    duplicate = session.scalar(
-        select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
-    )
-    if duplicate is not None:
-        return {"status": "duplicate"}
-    session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
-    _apply_payment_event(session, event)
-    return {"status": "ok"}
+    return await asyncio.to_thread(_process_webhook, event)
 
 
 # ---------- App assembly ----------

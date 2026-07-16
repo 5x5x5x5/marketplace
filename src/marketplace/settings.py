@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # Observability. JSON logs by default; LOG_FORMAT=plain for dev readability.
     log_format: str = "json"
 
+    # Retention (days): swept tables stay bounded. PENDING outbox rows are
+    # never reaped regardless of age.
+    retention_idempotency_days: int = 7
+    retention_webhooks_days: int = 30
+    retention_notifications_days: int = 30
+
     # Disputes: buyer-opened arbitration on completed jobs.
     dispute_window_days: int = 7
     chargeback_fee_usd: Decimal = Decimal("15.00")  # provider fee on a lost chargeback

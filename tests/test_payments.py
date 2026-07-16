@@ -1,16 +1,21 @@
 """Payment flows against the fake provider: onboarding, gating."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from marketplace import api
 from marketplace.db import SessionLocal
 from marketplace.entities import Job, Payment, SellerProfile
-from marketplace.models import PaymentStatus, PayoutStatus
+from marketplace.models import JobStatus, PaymentStatus, PayoutStatus
+from marketplace.payments import fake_provider
 from marketplace.payments.fake import FakeProvider
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 
 
 def onboard_and_avail(client: TestClient, auth: AuthFactory, sid: str, seller: str) -> None:
@@ -461,3 +466,55 @@ def test_buyer_still_cannot_cancel_accepted(
     accept_first_offer(client, auth("seller", "s1"))
     r = client.post(f"/v1/jobs/{job['id']}/cancel", headers=auth("buyer", "alice"))
     assert r.status_code == 409  # paid + committed: only an admin unwinds this
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel writes are only real on Postgres")
+def test_cancel_vs_webhook_race(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Admin cancel of an AWAITING_PAYMENT job races the payment_succeeded
+    webhook. Exactly one side wins; the pair (job.status, payment.status) must
+    land consistent: (cancelled, FAILED) — cancel won, charge voided;
+    (accepted, SUCCEEDED) — webhook won, cancel lost/409d; or
+    (cancelled, REFUNDED) — webhook won, then cancel refunded the paid charge.
+    NEVER (accepted, FAILED) or (cancelled, SUCCEEDED)."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    fake_provider.next_charge_status = PaymentStatus.PENDING
+    job = new_job(client, auth, basic_service, "alice")
+    offer = client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()[0]
+    client.post(f"/v1/seller/offers/{offer['id']}/accept", headers=auth("seller", "s1"))
+    with SessionLocal() as s:
+        ppid = s.scalar(
+            select(Payment.provider_payment_id).where(Payment.job_id == UUID(str(job["id"])))
+        )
+
+    barrier = threading.Barrier(2)
+
+    def do_cancel() -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return c.post(f"/v1/admin/jobs/{job['id']}/cancel", headers=admin).status_code
+
+    def do_webhook() -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return c.post(
+            "/v1/payments/webhook",
+            json={"event_id": "evt-race-1", "kind": "payment_succeeded", "object_id": ppid},
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1, f2 = pool.submit(do_cancel), pool.submit(do_webhook)
+        codes = (f1.result(), f2.result())
+    assert all(code in (200, 409) for code in codes), codes
+
+    with SessionLocal() as s:
+        final_job = s.get(Job, UUID(str(job["id"])))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(str(job["id"]))))
+        assert final_job is not None and payment is not None
+        pair = (final_job.status, payment.status)
+    assert pair in (
+        (JobStatus.CANCELLED, PaymentStatus.FAILED),
+        (JobStatus.ACCEPTED, PaymentStatus.SUCCEEDED),
+        (JobStatus.CANCELLED, PaymentStatus.REFUNDED),
+    ), pair
