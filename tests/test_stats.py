@@ -3,7 +3,40 @@
 from fastapi.testclient import TestClient
 
 from tests.conftest import AuthFactory, Header
+from tests.test_disputes import (
+    _completed_job,  # pyright: ignore[reportPrivateUsage]
+    _open_dispute,  # pyright: ignore[reportPrivateUsage]
+    _resolve,  # pyright: ignore[reportPrivateUsage]
+)
+from tests.test_moderation import _report, _reviewed_job  # pyright: ignore[reportPrivateUsage]
 from tests.test_payments import new_job, onboard_and_avail
+
+
+def test_disputes_open_and_reports_open_counts(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """One open + one resolved of each; only the open ones should count."""
+    job1 = _completed_job(client, auth, basic_service)
+    _open_dispute(client, auth, job1)  # left open
+
+    job2 = _completed_job(client, auth, basic_service)
+    resolved_dispute = _open_dispute(client, auth, job2)
+    _resolve(client, admin, str(resolved_dispute["id"]), "0.00", "0.00")  # terminal: resolved
+
+    _reviewed_job(client, basic_service, auth)  # alice <-> s1 share a job
+    seller = auth("seller", "s1")
+    buyer = auth("buyer", "alice")
+    _report(client, seller, "user", "alice")  # left open
+    resolved_report = _report(client, buyer, "user", "s1").json()
+    client.post(
+        f"/v1/admin/reports/{resolved_report['id']}/resolve",
+        json={"status": "dismissed", "note": "no action"},
+        headers=admin,
+    )
+
+    s = client.get("/v1/admin/stats", headers=admin).json()
+    assert s["disputes_open"] == 1
+    assert s["reports_open"] == 1
 
 
 def test_stats_empty_db_full_enum_keys(client: TestClient, admin: Header) -> None:

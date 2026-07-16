@@ -48,6 +48,40 @@ def test_oversized_413_not_stored_for_replay(client: TestClient, auth: AuthFacto
         )
 
 
+def test_chunked_oversized_body_413_not_stored(client: TestClient, auth: AuthFactory) -> None:
+    """A chunked request (no Content-Length) that busts the cap must still
+    413, not slip through as FastAPI's generic "error parsing the body" 400 —
+    a 400 is < 500, so IdempotencyMiddleware would store it and poison the
+    client's key forever. Sent via an iterator body so httpx uses
+    Transfer-Encoding: chunked, exercising the counted (not declared-length)
+    branch of BodySizeLimitMiddleware."""
+    chunk = b"x" * 65536
+    n_chunks = (settings.max_body_bytes // len(chunk)) + 2  # comfortably over the cap
+    headers = {
+        **auth("buyer", "alice"),
+        "Idempotency-Key": "chunk-key-1",
+        "Content-Type": "application/json",
+    }
+    request = client.build_request(
+        "POST", "/v1/quotes", content=iter([chunk] * n_chunks), headers=headers
+    )
+    assert "content-length" not in request.headers  # genuinely chunked, not declared-length
+    r = client.send(request)
+    assert r.status_code == 413
+    assert r.json() == {"detail": "request body too large"}
+
+    from sqlalchemy import select
+
+    from marketplace.db import SessionLocal
+    from marketplace.entities import IdempotencyRecord
+
+    with SessionLocal() as s:
+        assert (
+            s.scalars(select(IdempotencyRecord).where(IdempotencyRecord.key == "chunk-key-1")).all()
+            == []
+        )
+
+
 def test_default_host_and_cors_are_open_and_absent(client: TestClient) -> None:
     r = client.get("/healthz", headers={"Host": "anything.example"})
     assert r.status_code == 200  # trusted_hosts defaults to *

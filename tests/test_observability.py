@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from marketplace import api
-from marketplace.observability import JsonFormatter, request_id_var
+from marketplace.observability import JsonFormatter, RequestIdFilter, request_id_var
 from tests.conftest import AuthFactory
 
 
@@ -44,6 +44,25 @@ def test_access_log_line_shape_and_redaction(
     assert rec.duration_ms >= 0
     assert request_id_var.get() != ""  # contextvar machinery alive
     assert "topsecret" not in rec.getMessage()
+
+
+def test_encoded_newline_in_path_stays_one_line_in_plain_format(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A %0A in the path decodes to a real newline in scope["path"]; the
+    plain formatter must not let it forge a second attacker-controlled log
+    line (JSON mode is already safe — json.dumps escapes it)."""
+    with caplog.at_level(logging.INFO, logger="marketplace.access"):
+        client.get("/v1/nope%0Ainjected-fake-line")
+    records = [r for r in caplog.records if r.name == "marketplace.access"]
+    assert len(records) == 1
+    rec = records[0]
+    RequestIdFilter().filter(rec)  # stamps request_id if the real pipeline hasn't already
+    plain = logging.Formatter("%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s")
+    rendered = plain.format(rec)
+    assert len(rendered.splitlines()) == 1
+    assert "\n" not in rendered
+    assert "\\ninjected-fake-line" in rendered  # escaped, not a raw newline
 
 
 def test_healthz_not_access_logged(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:

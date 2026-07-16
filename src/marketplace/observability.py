@@ -104,6 +104,14 @@ def _clean_request_id(raw: str | None) -> str:
     return uuid.uuid4().hex
 
 
+def _log_safe(s: str) -> str:
+    """Escape CR/LF so an attacker-controlled path (e.g. a URL-encoded %0A)
+    can't forge a second line in the plain-text log formatter. JSON mode is
+    already safe (json.dumps escapes control characters); this is belt and
+    suspenders there, load-bearing for plain."""
+    return s.replace("\r", "\\r").replace("\n", "\\n")
+
+
 class RequestIdMiddleware:
     """Request id + access log + error envelope. Mount OUTERMOST (add last)."""
 
@@ -116,8 +124,8 @@ class RequestIdMiddleware:
             return
         rid = _clean_request_id(Headers(scope=scope).get("x-request-id"))
         request_id_var.set(rid)
-        method = str(scope.get("method", "-"))
-        path = str(scope["path"])
+        method = _log_safe(str(scope.get("method", "-")))
+        path = _log_safe(str(scope["path"]))
         start = time.monotonic()
         status = 0
         started = False
@@ -159,8 +167,16 @@ class RequestIdMiddleware:
                 )
 
 
-class _BodyTooLarge(Exception):  # noqa: N818 -- internal control-flow signal, not an API error
-    pass
+class _BodyTooLarge(BaseException):
+    """Deliberately BaseException, not Exception: for body-modeled endpoints
+    FastAPI's own body-parsing code wraps `except Exception` around
+    `await request.body()` and turns anything it catches into a generic
+    HTTPException(400, "There was an error parsing the body") — which
+    IdempotencyMiddleware would then happily store (400 < 500), poisoning
+    the client's Idempotency-Key forever on a chunked oversized POST.
+    Subclassing BaseException escapes that `except Exception`, so this still
+    propagates up to BodySizeLimitMiddleware's own `except _BodyTooLarge`
+    below and comes back as a clean, never-stored 413."""
 
 
 class BodySizeLimitMiddleware:

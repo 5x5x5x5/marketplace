@@ -293,6 +293,15 @@ counted on chunked bodies; `TRUSTED_HOSTS` and `CORS_ORIGINS` back
 default for dev, narrow them for production). Admin list endpoints take
 `limit`/`offset` query params (capped) for pagination.
 
+Both `TRUSTED_HOSTS` and `CORS_ORIGINS` are `pydantic-settings` list fields,
+so the env var must be a **JSON array**, not a bare comma-separated string —
+`TRUSTED_HOSTS=api.example.com` fails at boot; the working form is:
+
+```bash
+TRUSTED_HOSTS='["api.example.com"]'
+CORS_ORIGINS='["https://app.example.com"]'
+```
+
 ## Out of scope / next
 
 Trust & safety (disputes/chargebacks and partial refunds, seller→buyer

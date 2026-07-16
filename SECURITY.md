@@ -308,7 +308,15 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   "late success must never resurrect"), and a `payment_failed` replay
   never downgrades an already-`SUCCEEDED` payment. The dedup table is a
   fast-path optimization against duplicate provider retries, not the only
-  thing standing between a replay and a double-apply.
+  thing standing between a replay and a double-apply. The analogous gap
+  exists on the client side: an `Idempotency-Key` replayed after its own
+  `RETENTION_IDEMPOTENCY_DAYS` window re-executes the request rather than
+  replaying the cached response — but the money paths stay safe regardless,
+  the same way: the offer/job state machine 409s a repeat accept/decline
+  against an already-resolved offer, a consumed quote 404s or 410s on a
+  second `POST /jobs`, and the actual charge carries its own
+  provider-side idempotency key (`charge:{job_id}`, independent of the
+  client's header) that de-dupes the money movement itself.
 - **Body cap default is 1 MiB (`MAX_BODY_BYTES=1_048_576`).** Checked
   against a declared `Content-Length` up front (fast rejection, no body
   read) and independently counted on chunked/streamed bodies so a caller
