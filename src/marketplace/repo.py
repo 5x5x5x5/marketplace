@@ -13,7 +13,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .config import Candidate, MarginFloor, PricingConfig, ServiceSpec
+from .config import Candidate, FeeConfig, MarginFloor, PricingConfig, ServiceSpec
 from .entities import (
     AuditLog,
     Availability,
@@ -56,6 +56,11 @@ def get_platform_config(session: Session) -> PlatformConfig:
     return cfg
 
 
+def fee_config(session: Session) -> FeeConfig:
+    pc = get_platform_config(session)
+    return FeeConfig(pct=pc.fee_pct, fixed=pc.fee_fixed)
+
+
 def load_pricing_config(session: Session, service_type_id: str) -> PricingConfig | None:
     st = session.get(ServiceType, service_type_id)
     if st is None:
@@ -77,6 +82,7 @@ def load_pricing_config(session: Session, service_type_id: str) -> PricingConfig
             ceiling_multiplier=pc.ceiling_multiplier,
         ),
         matching_strategy=pc.matching_strategy,
+        fees=FeeConfig(pct=pc.fee_pct, fixed=pc.fee_fixed),
     )
 
 

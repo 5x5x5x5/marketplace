@@ -435,6 +435,8 @@ class MarginSummaryOut(BaseModel):
     take_rate: float
     adjustments_net: Decimal
     platform_margin_net: Decimal
+    fees_estimated: Decimal
+    platform_margin_net_of_fees: Decimal
 
 
 class UserOut(BaseModel):
@@ -546,6 +548,15 @@ class MarginFloorBody(BaseModel):
     )
     ceiling_multiplier: Decimal = Field(
         default=Decimal(3), gt=0, allow_inf_nan=False, max_digits=6, decimal_places=2
+    )
+
+
+class FeesBody(BaseModel):
+    pct: Decimal = Field(
+        default=Decimal("0.029"), ge=0, lt=1, allow_inf_nan=False, max_digits=5, decimal_places=4
+    )
+    fixed: Decimal = Field(
+        default=Decimal("0.30"), ge=0, allow_inf_nan=False, max_digits=12, decimal_places=2
     )
 
 

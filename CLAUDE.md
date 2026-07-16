@@ -36,6 +36,11 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 - **Money is `Decimal`.** Quantize with `models.to_money` (2 dp, half-up),
   compare the margin floor on quantized values, serialize as JSON strings. The
   pricing pipeline stays pure `float` (ratios); quantize at the money boundary.
+- **The margin floor check is net-of-fees.** Both enforcement sites compare
+  against `matching.required_spread(buyer_price, margin_floor, fees)` —
+  never the gross spread. `Payment.fee_estimate` is a stamp-time snapshot
+  (computed from the platform fee config once, at charge time); it is never
+  recomputed later, even if the fee config subsequently changes.
 - **The pricing/matching core is pure.** `pricing.py` and `matching.py` operate
   on the snapshots in `config.py` (`PricingConfig`, `Candidate`), never on the DB
   session or ORM rows. `repo.py` loads those snapshots. Keep it that way.
@@ -147,7 +152,12 @@ Moderation ships (migration #7): verb-gated suspension (acquisition verbs
 403; login/GETs/complete/decline/cancel stay open; matching drops suspended
 sellers), hide-not-delete comment takedown plus display-name reset, and
 counterparty-only abuse reports whose admin resolution is terminal and
-takes no automatic action. Notification preferences ship (migration #8,
-8 total): per-kind mutes via role-scoped, replace-set
+takes no automatic action. Notification preferences ship (migration #8):
+per-kind mutes via role-scoped, replace-set
 `GET/PUT /v1/notification-preferences`, enforced at `enqueue` with a
-server-side money floor no path can bypass — see `ROADMAP.md`.
+server-side money floor no path can bypass. Fee-aware margin ships
+(migration #9, 9 total): admin-tunable `pct`/`fixed` fee config, a
+`fee_estimate` stamped on every charge at charge time, the margin floor
+enforced net of that estimate at both enforcement sites, and
+`fees_estimated`/`platform_margin_net_of_fees` on the margin summary — see
+`ROADMAP.md`.

@@ -73,6 +73,21 @@ users, then gets forked and specialized per market vertical. The differentiator
   never resurrect muted mail. A server-side money floor
   (`REFUND_ISSUED_BUYER`, `DISPUTE_RESOLVED_BUYER`, `DISPUTE_RESOLVED_SELLER`,
   `PAYOUT_FAILED_ADMIN`) can never be muted, by any path. See `SECURITY.md`.
+- **Fee-aware margin (done):** the `Transaction` ledger recorded margin gross
+  of the payment provider's cut, so a refunded job cost the platform its fee
+  with no ledger entry (verified on the test account: $50.00 ledger margin
+  landed as $42.14 cash after $7.86 in fees). Admin-tunable platform config
+  (`pct`/`fixed`, defaulting to Stripe's 2.9% + 30¢, `PUT
+  /v1/admin/config/fees`, migration #9) now backs a `fee_estimate` snapshot
+  stamped onto every charge at charge time (never recomputed later), and the
+  margin floor is enforced net of that estimate at both quote time and
+  match-time candidate filtering so a floor-priced job can't be signed at a
+  loss for the fee config in force at quote/match time — a fee-config change
+  between quote and accept is applied at the stamp, the same
+  eventual-consistency stance as the margin floor itself.
+  `GET /v1/admin/margins/summary` adds `fees_estimated` and
+  `platform_margin_net_of_fees` — a cash view over SUCCEEDED/REFUNDED charges
+  that matches what actually lands in the bank account. See `SECURITY.md`.
 
 ## Done ✓
 
@@ -114,7 +129,12 @@ automatic action; migration #7; see `SECURITY.md`) · **notification
 preferences** (role-scoped, replace-set `GET/PUT
 /v1/notification-preferences`; per-kind mutes enforced at enqueue; a
 server-side money floor that can't be muted by any path, including a
-smuggled DB row; migration #8; see `SECURITY.md`).
+smuggled DB row; migration #8; see `SECURITY.md`) · **fee-aware margin**
+(admin-tunable `pct`/`fixed` fee config defaulting to Stripe's 2.9% + 30¢;
+`fee_estimate` stamped on every charge at charge time; margin floor enforced
+net-of-fees at both the quote path and match-time filtering; `fees_estimated`
+/`platform_margin_net_of_fees` cash-view fields on the margin summary;
+migration #9; see `SECURITY.md`).
 
 ## What's still ahead
 
@@ -127,13 +147,7 @@ Rough priority. Each is fork-agnostic — build generic here, specialize after f
    automatic abuse signals/limits (report-count thresholds, auto-suspend) —
    the counters and cutoffs are fork-specific heuristics, not a generic
    default.
-2. **Processing fees in the margin math** — the `Transaction` ledger records
-   margin gross of provider fees (Stripe: ~2.9% + 30¢ per charge, and the fee
-   is kept on refunds — a refunded job costs the platform the fee with no
-   ledger entry). Verified on the test account: $50.00 ledger margin landed as
-   $42.14 cash after $7.86 in fees. Either absorb expected fees in the margin
-   floor or record a per-transaction fee estimate alongside the margin.
-3. **Observability & ops** — metrics, structured request logging, an error
+2. **Observability & ops** — metrics, structured request logging, an error
    envelope so a crafted body never surfaces a 500. Payments hardening
    follow-ups: the webhook handler is async-over-sync-`Session` (move DB work
    off the event loop under load); a TTL sweep for the `idempotency_keys` /
@@ -142,10 +156,10 @@ Rough priority. Each is fork-agnostic — build generic here, specialize after f
    should echo a secret into a stored idempotency response (auth paths are
    now excluded; audit future secret-returning POSTs). A TTL sweep for old
    SENT/FAILED `notifications` rows joins the same bucket.
-4. **Admin RBAC** — beyond the single shared admin role; every admin account
+3. **Admin RBAC** — beyond the single shared admin role; every admin account
    currently has identical, full authority.
-5. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
-6. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
+4. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
+5. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
    Fork-time item: real-user auth (password signup/login, sessions, argon2,
    verification/reset) already shipped — see "Done" above and `SECURITY.md`.
    This is additive, not a replacement.

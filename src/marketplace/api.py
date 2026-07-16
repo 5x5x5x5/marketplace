@@ -67,7 +67,7 @@ from .entities import (
 )
 from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
-from .matching import STRATEGIES, effective_floor, seller_payout_for
+from .matching import STRATEGIES, estimated_fee, required_spread, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
@@ -83,6 +83,7 @@ from .models import (
     DisputeSource,
     DisputeStatus,
     EventKind,
+    FeesBody,
     JobCreateRequest,
     JobReviewOut,
     JobStatus,
@@ -540,12 +541,19 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
     ]
     probe = min(payouts) if payouts else None
     if probe is not None:
-        floor = effective_floor(buyer_price, cfg.margin_floor)
-        if buyer_price - probe < floor:
+        required = required_spread(buyer_price, cfg.margin_floor, cfg.fees)
+        if buyer_price - probe < required:
             # Round the corrected price UP to a whole unit so it isn't pinned to
-            # exactly probe + floor (which would leak the seller's payout).
-            target = to_money(math.ceil(probe + floor))
+            # exactly probe + required (which would leak the seller's payout).
+            # Both the pct floor and the fee grow with the bumped price, so one
+            # ceil can undershoot — walk whole units until the invariant holds,
+            # bounded by the ceiling.
             ceiling = to_money(cfg.service.base_buyer_price * cfg.margin_floor.ceiling_multiplier)
+            target = to_money(math.ceil(probe + required))
+            while target <= ceiling and target - probe < required_spread(
+                target, cfg.margin_floor, cfg.fees
+            ):
+                target += 1
             if target > ceiling:
                 raise HTTPException(
                     status_code=422,
@@ -1023,6 +1031,7 @@ def accept_offer(
             provider=provider.name,
             provider_payment_id=charge.provider_payment_id,
             client_secret=charge.client_secret,
+            fee_estimate=estimated_fee(job.buyer_price, repo.fee_config(session)),
         )
     )
 
@@ -1171,6 +1180,7 @@ def get_config(session: SessionDep) -> dict[str, Any]:
             "pct": str(pc.margin_pct),
             "ceiling_multiplier": str(pc.ceiling_multiplier),
         },
+        "fees": {"pct": str(pc.fee_pct), "fixed": str(pc.fee_fixed)},
         "matching_strategy": pc.matching_strategy,
         "adjuster_params": pc.adjuster_params,
     }
@@ -1224,6 +1234,15 @@ def update_margin_floor(
         "pct": str(pc.margin_pct),
         "ceiling_multiplier": str(pc.ceiling_multiplier),
     }
+
+
+@admin_router.put("/config/fees")
+def update_fees(body: FeesBody, session: SessionDep, admin_id: AdminId) -> dict[str, str]:
+    pc = repo.get_platform_config(session)
+    pc.fee_pct = body.pct
+    pc.fee_fixed = body.fixed
+    audit(session, admin_id, "update_fees", "platform", body.model_dump(mode="json"))
+    return {"pct": str(pc.fee_pct), "fixed": str(pc.fee_fixed)}
 
 
 @admin_router.put("/config/matching_strategy")
@@ -1691,6 +1710,9 @@ def resolve_dispute(
 
 @admin_router.get("/margins/summary", response_model=MarginSummaryOut)
 def margins_summary(session: SessionDep) -> MarginSummaryOut:
+    """Margin summary. Fee fields are a CASH view: a fee is sunk the moment a
+    charge captures, so refunded jobs' fees show as losses and charged-but-in-
+    flight jobs dip net until their margin books at completion."""
     txs = session.scalars(select(Transaction)).all()
     revenue = sum((t.buyer_price for t in txs), to_money(0))
     payouts = sum((t.seller_payout for t in txs), to_money(0))
@@ -1704,6 +1726,17 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
         AdjustmentKind.CHARGEBACK_FEE: -1,
     }
     adjustments_net = sum((a.amount * signs[a.kind] for a in adjustments), to_money(0))
+    fees = sum(
+        (
+            p_fee
+            for p_fee in session.scalars(
+                select(Payment.fee_estimate).where(
+                    Payment.status.in_((PaymentStatus.SUCCEEDED, PaymentStatus.REFUNDED))
+                )
+            ).all()
+        ),
+        to_money(0),
+    )
     return MarginSummaryOut(
         transactions=len(txs),
         gross_revenue=revenue,
@@ -1712,6 +1745,8 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
         take_rate=round(take_rate, 4),
         adjustments_net=to_money(adjustments_net),
         platform_margin_net=to_money(margin + adjustments_net),
+        fees_estimated=to_money(fees),
+        platform_margin_net_of_fees=to_money(margin + adjustments_net - fees),
     )
 
 

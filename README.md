@@ -126,6 +126,7 @@ reports; shared with seller, see Seller list)
 **Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·
 `PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
 `PUT /config/matching_strategy` · `PUT /config/adjuster_params/{name}` ·
+`PUT /config/fees` (pct/fixed provider-fee estimate) ·
 `PUT /sellers/{id}` (tier/capacity) · `GET /buyers` (rating aggregates) ·
 `GET /transactions` · `GET /payouts` ·
 `POST /payouts/{id}/retry` · `GET /notifications` ·
@@ -219,7 +220,10 @@ edited, and `Payment.status` is never touched by a partial refund (the charge
 stays `SUCCEEDED`; `REFUNDED` remains reserved for the cancel path's full
 refund). `GET /v1/admin/margins/summary` reports both the gross margin and
 `platform_margin_net` (gross plus clawbacks, minus refunds/chargeback
-losses/fees).
+losses/fees). It also reports `fees_estimated` (the sum of each charge's
+stamped `fee_estimate`) and `platform_margin_net_of_fees` (gross margin plus
+adjustments, minus estimated fees) — a cash view over SUCCEEDED/REFUNDED
+charges that matches what actually lands in the bank account.
 
 Stripe chargebacks (`charge.dispute.created`/`closed`) ride the same
 `POST /v1/payments/webhook` into the same `disputes` table
@@ -263,5 +267,5 @@ Trust & safety (disputes/chargebacks and partial refunds, seller→buyer
 reviews, moderation — suspension, comment takedown, and counterparty
 abuse reports — and notification preferences now all ship; see Disputes
 above, the Buyer/Seller/Admin endpoints, and Notification preferences
-below), push/SMS channels, fee-aware margin math, admin RBAC, and
-OAuth/social login. See `ROADMAP.md`.
+below; fee-aware margin math ships too — see the margins summary),
+push/SMS channels, admin RBAC, and OAuth/social login. See `ROADMAP.md`.

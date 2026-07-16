@@ -6,7 +6,7 @@ layer loads a `PricingConfig` and a list of `Candidate`s from the database (see
 `repo.py`) and hands them to the pure core.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -27,6 +27,18 @@ class MarginFloor:
 
 
 @dataclass
+class FeeConfig:
+    """Provider's estimated cut per captured charge: pct * amount + fixed.
+
+    Zero defaults keep the pure core fee-free unless configured; the running
+    system's defaults (Stripe's 2.9% + 30c) live on the platform_config row.
+    """
+
+    pct: Decimal = Decimal(0)
+    fixed: Decimal = Decimal(0)
+
+
+@dataclass
 class ServiceSpec:
     id: str
     base_buyer_price: Decimal
@@ -41,6 +53,7 @@ class PricingConfig:
     adjuster_params: dict[str, dict[str, Any]]
     margin_floor: MarginFloor
     matching_strategy: str
+    fees: FeeConfig = field(default_factory=FeeConfig)
 
 
 @dataclass
