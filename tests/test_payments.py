@@ -1,5 +1,6 @@
 """Payment flows against the fake provider: onboarding, gating."""
 
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -518,3 +519,52 @@ def test_cancel_vs_webhook_race(
         (JobStatus.ACCEPTED, PaymentStatus.SUCCEEDED),
         (JobStatus.CANCELLED, PaymentStatus.REFUNDED),
     ), pair
+
+
+def test_late_success_never_resurrects_a_voided_cancel(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Admin-cancel of an AWAITING_PAYMENT job voids the pending charge:
+    payment -> FAILED, job -> CANCELLED. A late payment_succeeded for that
+    same provider_payment_id (a delayed/replayed event, or the losing side
+    of a cancel-vs-webhook race) must never resurrect the payment — the
+    forbidden pair is (CANCELLED, SUCCEEDED): buyer charged for a cancelled
+    job, no refund booked."""
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
+
+    r = client.post(f"/v1/admin/jobs/{job_id}/cancel", headers=admin)
+    assert r.status_code == 200
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert job.status == JobStatus.CANCELLED
+        assert payment.status == PaymentStatus.FAILED
+
+    with caplog.at_level(logging.WARNING, logger="marketplace"):
+        r = client.post(
+            "/v1/payments/webhook",
+            json={
+                "event_id": "evt_late_success_voided",
+                "kind": "payment_succeeded",
+                "object_id": pid,
+            },
+        )
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}  # event consumed/deduped; state change refused
+
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert job.status == JobStatus.CANCELLED  # NOT resurrected
+        assert payment.status == PaymentStatus.FAILED  # NOT resurrected
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "voided payment" in warnings[0].getMessage()
