@@ -288,10 +288,27 @@ def _run(c: TestClient) -> None:
     assert net == Decimal(s3["platform_margin"]) + Decimal(s3["adjustments_net"]) - fees, s3
     print(f"   fees_estimated={fees}  margin gross={s3['platform_margin']}  net_of_fees={net}")
 
+    # --- Act 8: observability (the operator's view of everything above) ---
+    print("22. Ops: admin stats snapshot + request-id round-trip")
+    r = c.get("/v1/admin/stats", headers={**admin, "X-Request-ID": "demo-run-123"})
+    assert r.status_code == 200, r.text
+    assert r.headers["x-request-id"] == "demo-run-123"
+    stats = r.json()
+    assert stats["jobs"]["completed"] >= 2, stats["jobs"]
+    assert stats["payments"]["succeeded"] >= 1, stats["payments"]
+    assert stats["notifications"]["pending"] >= 0
+    assert stats["uptime_seconds"] >= 0
+    print(
+        f"   jobs={stats['jobs']}  payments={stats['payments']}\n"
+        f"   outbox pending={stats['notifications']['pending']}  "
+        f"retention rows={stats['retention']}"
+    )
+
     print(
         "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
         "payout paid, offer email loop-delivered, moderation loop closed, "
-        "notification mute/unmute enforced at enqueue, margin reported net of provider fees."
+        "notification mute/unmute enforced at enqueue, margin reported net of provider fees, "
+        "ops snapshot live with request-id tracing."
     )
 
 

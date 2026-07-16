@@ -1,16 +1,19 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Seven
+hardening** closed the exploitable findings (status table below). Eight
 updates followed, in order: the **template build** (moved state to Postgres),
 **payments** (added an escrow provider), **real-user auth** (replaced the
 pilot HMAC tokens with DB-backed sessions), **disputes** (added arbitration
 over the escrow — partial refunds/clawbacks and chargeback recording),
 **moderation** (suspension, comment takedown, and counterparty abuse
 reports), **notification preferences** (per-kind mutes with a
-server-side money floor), and **fee-aware margin** (admin-tunable
-provider-fee estimate stamped onto every charge, floor enforced net of it) —
-see the update notes below.
+server-side money floor), **fee-aware margin** (admin-tunable
+provider-fee estimate stamped onto every charge, floor enforced net of it),
+and **observability & ops** (request-id tracing, a global 500 envelope, an
+admin stats endpoint, retention sweeps, webhook DB work off the event loop,
+and API hardening — body cap, TrustedHost, CORS) — see the update notes
+below.
 
 ## Update — template build
 
@@ -27,10 +30,12 @@ see the update notes below.
   exceed their configured concurrent-job limit even under racing accepts.
 - **Money is `Decimal`** end-to-end; the margin floor is enforced on quantized
   values, removing the float sub-floor-leakage drift (old M3).
-- **Residual (Low, unchanged):** a hand-crafted non-compliant JSON body
-  (`NaN`/`Infinity`) is rejected (never stored) but currently surfaces as a 500
-  during error serialization rather than a clean 422. Needs a global error
-  envelope — a roadmap item.
+- **Residual (Low, mitigated):** a hand-crafted non-compliant JSON body
+  (`NaN`/`Infinity`) is rejected (never stored) but still surfaces as a 500
+  rather than a clean 422. The global error envelope shipped (see "Update —
+  observability & ops" below) means that 500 is now a clean
+  `{"detail": "internal error", "request_id"}` body with the crash confined
+  to the log, not a raw traceback — see finding **N1**.
 
 ## Update — payments
 
@@ -252,6 +257,86 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   `matching.required_spread(buyer_price, margin_floor, fees)`, never the
   gross spread; see the "Money is `Decimal`" bullet above.
 
+## Update — observability & ops
+
+- **The envelope guarantee: unhandled errors never leak internals.** A
+  single request-boundary middleware (`RequestIdMiddleware`) wraps every
+  route; any exception that escapes an endpoint becomes a clean
+  `{"detail": "internal error", "request_id": "<id>"}` 500 with no
+  traceback, no exception message, and no stack frame in the response
+  body — the traceback goes to the application log only, keyed by the
+  same request id. This is deliberately middleware, not
+  `@app.exception_handler` — a FastAPI/Starlette exception handler runs
+  *outside* user middleware (inside `ServerErrorMiddleware`), which would
+  lose both the `X-Request-ID` response header and the request-id
+  contextvar on exactly the requests where they matter most. `404`/`422`s
+  keep their normal FastAPI shapes; only truly unhandled exceptions are
+  enveloped (`tests/test_observability.py::test_envelope_hides_internals`,
+  `::test_http_exceptions_not_enveloped`). This also closes finding **N1**
+  below: a hand-crafted non-compliant JSON body (`NaN`/`Infinity`) that
+  crashes error serialization no longer leaks a raw traceback — it still
+  surfaces as a 500 (not a clean 422; a stricter transport-level JSON
+  parser would be needed for that), but now as the same clean envelope
+  as every other unhandled error, with the crash detail confined to the
+  log.
+- **Access logs never carry headers, bodies, or query strings — only
+  method, path, status, duration, and request id.** Bearer tokens ride in
+  the `Authorization` header, and reset/verification tokens ride in
+  request bodies or (if a fork ever GETs them) query strings; logging any
+  of the three would put a live credential in a log aggregator most
+  incident responders don't treat as a secrets store. `path` is logged
+  without its query component for the same reason
+  (`tests/test_observability.py::test_access_log_line_shape_and_redaction`
+  asserts a `?secret=…` query string never reaches the log line).
+  `GET /healthz` is excluded from the access log entirely (liveness-probe
+  noise).
+- **Retention sweeps keep three tables bounded; the outbox itself is
+  exempt.** `idempotency_keys` (`RETENTION_IDEMPOTENCY_DAYS`, default 7),
+  `webhook_events` (`RETENTION_WEBHOOKS_DAYS`, default 30), and terminal
+  SENT/FAILED `notifications` (`RETENTION_NOTIFICATIONS_DAYS`, default
+  30) age out on the maintenance loop's clock. PENDING `notifications`
+  rows are never reaped regardless of age — sweeping a row that still
+  needs to send would silently drop a buyer/seller/admin notification,
+  which is worse than an unbounded table. **Stale-webhook-replay note:**
+  once a `webhook_events` row ages past the retention window, a
+  redelivered event for it no longer dedups against that row — but
+  `_apply_payment_event` re-applying the same event is still safe,
+  because the state transitions it drives are themselves terminal-guarded
+  independent of the dedup table: a `payment_succeeded` replay against an
+  already-`REFUNDED` or non-`AWAITING_PAYMENT` job no-ops
+  (`api.py::_apply_payment_event`, "refunded is terminal" /
+  "late success must never resurrect"), and a `payment_failed` replay
+  never downgrades an already-`SUCCEEDED` payment. The dedup table is a
+  fast-path optimization against duplicate provider retries, not the only
+  thing standing between a replay and a double-apply.
+- **Body cap default is 1 MiB (`MAX_BODY_BYTES=1_048_576`).** Checked
+  against a declared `Content-Length` up front (fast rejection, no body
+  read) and independently counted on chunked/streamed bodies so a caller
+  can't dodge the cap by omitting `Content-Length`; either path returns a
+  413 before the oversized body reaches an endpoint or the idempotency
+  store (`BodySizeLimitMiddleware` mounts outside `IdempotencyMiddleware`
+  so a 413 is never itself cached for replay).
+- **`TrustedHostMiddleware`/`CORSMiddleware` ship open by default, narrow
+  in production.** `TRUSTED_HOSTS=["*"]` and `CORS_ORIGINS=[]` (no CORS
+  headers at all) are the out-of-the-box dev posture — a fork deploying
+  behind a real domain sets both explicitly (`TRUSTED_HOSTS` to its
+  hostname(s), `CORS_ORIGINS` to its frontend origin(s)) before going to
+  production; neither is enforced by this template, by design (it's a
+  generic starting point, not a specific deployment).
+- **The idempotency secret-echo standing rule holds, and is tested.**
+  `IdempotencyMiddleware` never stores a `401`/`403` response for replay
+  (`idempotency.py`; `tests/test_idempotency.py::test_no_auth_passes_through_to_401`),
+  so an auth failure can never be cached and replayed as if it had
+  succeeded. Separately, `client_secret` appearing in a buyer's own
+  `GET /v1/jobs/{id}`/accept-path response while `AWAITING_PAYMENT` is not
+  a leak: it's buyer-facing by design (the client needs it to confirm the
+  charge), scoped to the owning buyer only (see the payments update
+  above), and it isn't a case of an idempotency response echoing a
+  *different* principal's secret. The standing rule going forward: no
+  endpoint should echo a secret belonging to a **different** principal
+  into a stored idempotency response; audit any future secret-returning
+  POST against that bar, not against "does it return a secret at all."
+
 ## Threat model (pilot)
 
 Identity comes from an authenticated principal, never from a request body or
@@ -299,11 +384,18 @@ hardening branch with a regression test in `tests/test_auth_and_hardening.py`.
 ### Low / deferred
 - **L1** ID-length caps — **Fixed** (`max_length` on body/id fields).
 - **L2** `POST /jobs` bound no buyer — **Fixed** (quote ownership checked).
-- **L3** No CORS/TrustedHost/security-header middleware — **Deferred** to deploy time.
-- **N1 (new, Low)** A hand-crafted non-compliant JSON body (`NaN`/`Infinity`) is
-  correctly rejected (value never stored) but currently surfaces as a 500 during
-  error serialization rather than a clean 422. Requires a non-standard client.
-  Fold into the "errors never 500" roadmap item.
+- **L3** No CORS/TrustedHost/security-header middleware — **Fixed** —
+  `TrustedHostMiddleware`/`CORSMiddleware` wired, open by default
+  (`TRUSTED_HOSTS=["*"]`, `CORS_ORIGINS=[]`), narrowed via env vars in
+  production. See "Update — observability & ops".
+- **N1** A hand-crafted non-compliant JSON body (`NaN`/`Infinity`) is
+  correctly rejected (value never stored) but still surfaces as a 500 rather
+  than a clean 422 — **Mitigated**: the global error envelope (see "Update —
+  observability & ops") means that 500 is now a clean, request-id-bearing
+  body with no traceback leak, not a raw crash. A non-standard client is
+  still required to trigger it, and closing the gap to a clean 422 would
+  need transport-level JSON strictness, not app-level validation — left
+  open, low severity.
 
 ## Confirmed sound (not re-touched)
 uuid4 IDs (unguessable) · no dynamic code execution from config (pure dict
