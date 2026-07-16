@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -48,6 +49,7 @@ from .entities import (
     BuyerProfile,
     Dispute,
     EmailToken,
+    IdempotencyRecord,
     Job,
     Notification,
     NotificationMute,
@@ -93,6 +95,7 @@ from .models import (
     NotificationOut,
     NotificationPreferenceOut,
     NotificationPreferencesUpdate,
+    NotificationStats,
     NotificationStatus,
     OfferStatus,
     OnboardingOut,
@@ -119,6 +122,7 @@ from .models import (
     ServiceTypeBody,
     ServiceTypeOut,
     Side,
+    StatsOut,
     SuspendRequest,
     TransactionOut,
     UserModerationOut,
@@ -149,6 +153,9 @@ ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+_STARTED_AT = _now()
 
 
 def _require_active(session: Session, user_id: str) -> None:
@@ -322,6 +329,14 @@ async def _maintenance_loop() -> None:
 
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
     return list(rows[offset : offset + limit])
+
+
+def _count_by(session: Session, column: Any, enum: type[StrEnum]) -> dict[str, int]:
+    """Group-count a status column; every enum member present, absent = 0."""
+    rows: dict[Any, int] = {}
+    for value, count in session.execute(select(column, func.count()).group_by(column)).all():
+        rows[value] = count
+    return {m.value: int(rows.get(m, 0)) for m in enum}
 
 
 # ---------- Reports router ----------
@@ -1748,6 +1763,58 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
         platform_margin_net=to_money(margin + adjustments_net),
         fees_estimated=to_money(fees),
         platform_margin_net_of_fees=to_money(margin + adjustments_net - fees),
+    )
+
+
+@admin_router.get("/stats", response_model=StatsOut)
+def admin_stats(session: SessionDep, admin_id: AdminId) -> StatsOut:
+    """Operator snapshot: counts only, one session, curl-able."""
+    oldest_pending = session.scalar(
+        select(func.min(Notification.created_at)).where(
+            Notification.status == NotificationStatus.PENDING
+        )
+    )
+    users = _count_by(session, User.role, UserRole)
+    users["suspended"] = (
+        session.scalar(
+            select(func.count()).select_from(User).where(User.status == UserStatus.SUSPENDED)
+        )
+        or 0
+    )
+    notification_counts = _count_by(session, Notification.status, NotificationStatus)
+    return StatsOut(
+        jobs=_count_by(session, Job.status, JobStatus),
+        payments=_count_by(session, Payment.status, PaymentStatus),
+        payouts=_count_by(session, Payout.status, PayoutStatus),
+        notifications=NotificationStats(
+            pending=notification_counts["pending"],
+            sent=notification_counts["sent"],
+            failed=notification_counts["failed"],
+            oldest_pending_age_seconds=(
+                (_now() - oldest_pending).total_seconds() if oldest_pending else None
+            ),
+        ),
+        disputes_open=session.scalar(
+            select(func.count()).select_from(Dispute).where(Dispute.status == DisputeStatus.OPEN)
+        )
+        or 0,
+        reports_open=session.scalar(
+            select(func.count()).select_from(Report).where(Report.status == ReportStatus.OPEN)
+        )
+        or 0,
+        users=users,
+        quotes_live=session.scalar(
+            select(func.count()).select_from(Quote).where(Quote.expires_at > _now())
+        )
+        or 0,
+        retention={
+            "idempotency_keys": session.scalar(select(func.count()).select_from(IdempotencyRecord))
+            or 0,
+            "webhook_events": session.scalar(select(func.count()).select_from(WebhookEvent)) or 0,
+            "notifications_total": session.scalar(select(func.count()).select_from(Notification))
+            or 0,
+        },
+        uptime_seconds=int((_now() - _STARTED_AT).total_seconds()),
     )
 
 
