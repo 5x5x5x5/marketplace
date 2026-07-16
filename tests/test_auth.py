@@ -283,3 +283,24 @@ def test_sweep_deletes_expired_sessions(client: TestClient, auth: AuthFactory) -
     client.get("/v1/seller/offers", headers=live)  # list_offers calls _sweep
     with SessionLocal() as s:
         assert s.scalar(select(func.count()).select_from(AuthSession)) == 1  # only the live one
+
+
+def test_openapi_declares_bearer_security_scheme(client: TestClient) -> None:
+    """Swagger's Authorize button needs a real HTTPBearer scheme, not a plain
+    header param — /docs is the template's try-it-out surface."""
+    spec = client.get("/openapi.json").json()
+    schemes = spec.get("components", {}).get("securitySchemes", {})
+    bearer = [s for s in schemes.values() if s.get("scheme") == "bearer"]
+    assert bearer, f"no bearer securityScheme in openapi: {schemes}"
+    # a protected endpoint references it; the open webhook does not
+    me_security = spec["paths"]["/v1/auth/me"]["get"].get("security", [])
+    assert me_security, "GET /v1/auth/me carries no security requirement"
+    webhook_security = spec["paths"]["/v1/payments/webhook"]["post"].get("security", [])
+    assert not webhook_security
+
+
+def test_wrong_scheme_still_401s(client: TestClient, auth: AuthFactory) -> None:
+    token = auth("buyer", "schemey")["Authorization"].removeprefix("Bearer ")
+    for header in (f"Token {token}", f"Basic {token}", token):
+        r = client.get("/v1/auth/me", headers={"Authorization": header})
+        assert r.status_code == 401, header

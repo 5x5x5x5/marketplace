@@ -12,6 +12,7 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 - `uv sync` — install
 - `uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest`
 - `uv run python scripts/demo.py` — full lifecycle, headless (SQLite)
+- `uv run python scripts/seed.py` — seed service types + demo users, print bearer tokens for /docs
 - `uv run uvicorn marketplace.api:app --reload` — API (SQLite by default)
 - Postgres: `docker compose up -d db && uv run alembic upgrade head` (see `.env.example`)
 
