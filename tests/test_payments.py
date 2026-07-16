@@ -568,3 +568,44 @@ def test_late_success_never_resurrects_a_voided_cancel(
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) == 1
     assert "voided payment" in warnings[0].getMessage()
+
+
+def test_decline_then_retry_on_same_pi_recovers(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    fake_payments: FakeProvider,
+) -> None:
+    """The legitimate recovery path: a card decline fails the pending charge
+    but leaves the job AWAITING_PAYMENT (buyer can retry confirmation on the
+    SAME PaymentIntent). A later payment_succeeded for that same
+    provider_payment_id must be applied — the resurrection guard's
+    job-status check exists precisely so this recovery is not mistaken for
+    a voided-cancel/sweep resurrection."""
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
+
+    r = client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_decline", "kind": "payment_failed", "object_id": pid},
+    )
+    assert r.status_code == 200
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert payment.status == PaymentStatus.FAILED
+        assert job.status == JobStatus.AWAITING_PAYMENT  # buyer can still retry confirmation
+
+    r = client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_retry_success", "kind": "payment_succeeded", "object_id": pid},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert payment.status == PaymentStatus.SUCCEEDED
+        assert job.status == JobStatus.ACCEPTED
