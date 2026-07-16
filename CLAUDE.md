@@ -51,6 +51,16 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
 - **Concurrency is the DB's job.** Quote consumption, job/offer status
   transitions, and capacity checks use `session.get(..., with_for_update=True)`.
   There is no process-level lock; don't add one.
+- **Commits happen in `db.CommitRoute`, before the response is sent — never in
+  `get_session` teardown.** Teardown (`session.close()`) runs after the
+  response is already on the wire, which is finding F2 (read-your-writes race
+  on every chained write); never re-add a commit there. Every router sets
+  `route_class=CommitRoute` (`api.py`, `auth.py`); the import-time
+  `_assert_commit_routes` invariant fails fast if a router is added without
+  it. The commit itself stays on `run_in_threadpool` — a sync commit on the
+  event loop would stall every in-flight request. Streaming responses would
+  need a rethink of both `CommitRoute` and the idempotency buffer
+  (`idempotency.py`); the app has none today.
 - **Pyright strict** across `src/` and `tests/`. Do not drop to basic mode.
 - **Providers are only reached through `payments/port.py`.** `fake.py` and
   `stripe_provider.py` are the only two implementations; never `import stripe`

@@ -177,7 +177,7 @@ disputes/reports/users/quotes/retention counts, uptime) ·
 signature-verified)
 
 **Disputes** — Buyer: `POST /jobs/{id}/dispute` · `GET /jobs/{id}/dispute`.
-Seller: `GET /jobs/{id}/dispute`. Admin: `GET /disputes` ·
+Seller: `GET /v1/seller/jobs/{id}/dispute`. Admin: `GET /disputes` ·
 `POST /disputes/{id}/resolve`
 
 **Notification preferences** (`/v1/notification-preferences`, all roles) —
