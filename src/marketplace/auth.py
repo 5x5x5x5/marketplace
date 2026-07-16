@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import repo
-from .db import SessionLocal, get_session
+from .db import CommitRoute, SessionLocal, get_session
 from .entities import AuthSession, EmailToken, User
 from .mail import EmailSender, get_mail_sender
 from .models import (
@@ -151,7 +151,7 @@ def peek_principal(db: Session, authorization: str | None) -> str | None:
 
 logger = logging.getLogger("marketplace.auth")
 
-auth_router = APIRouter(prefix="/v1/auth", tags=["auth"])
+auth_router = APIRouter(prefix="/v1/auth", tags=["auth"], route_class=CommitRoute)
 
 
 def _session_out(db: Session, user: User) -> SessionOut:

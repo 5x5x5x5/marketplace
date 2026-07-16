@@ -1,14 +1,23 @@
 """Database engine + session dependency.
 
 `get_session` is the FastAPI dependency every endpoint uses: one session per
-request, committed on success and rolled back on any exception (including
-HTTPException, so a 4xx never persists partial work).
+request. Unlike a plain `APIRoute`, `CommitRoute` (below) commits the session
+*before* the response is handed back to the sender — never in dependency
+teardown, which FastAPI runs after the response is already on the wire
+(finding F2). A 4xx/5xx never persists partial work: `CommitRoute` only
+commits on responses under 400, and `get_session`'s teardown always closes
+the session, which discards (rolls back) anything left uncommitted.
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Coroutine, Iterator
+from typing import Any
 
+from fastapi import Request
+from fastapi.routing import APIRoute
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import Response
 
 from .entities import Base
 from .settings import settings
@@ -27,16 +36,34 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
-def get_session() -> Iterator[Session]:
+def get_session(request: Request) -> Iterator[Session]:
     session = SessionLocal()
+    request.state.db_session = session
     try:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
     finally:
-        session.close()
+        session.close()  # close() discards (rolls back) anything uncommitted
+
+
+class CommitRoute(APIRoute):
+    """Commits the request's DB session BEFORE the response object reaches
+    the sender — never in dependency teardown, which runs after the response
+    is on the wire (finding F2). Streaming responses would need a rethink;
+    the app has none."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def commit_then_respond(request: Request) -> Response:
+            response = await original(request)
+            session: Session | None = getattr(request.state, "db_session", None)
+            if session is not None and response.status_code < 400:
+                # threadpool: a sync commit on the event loop would stall
+                # every in-flight request (same class as the webhook offload)
+                await run_in_threadpool(session.commit)
+            return response
+
+        return commit_then_respond
 
 
 def init_db() -> None:
