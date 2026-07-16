@@ -194,12 +194,26 @@ class SellerOfferView(BaseModel):
 
 
 class TransactionOut(BaseModel):
+    """Admin-only ledger view — carries both sides and the platform margin.
+    Never returned from a buyer or seller route (the spread stays invisible)."""
+
     model_config = ConfigDict(from_attributes=True)
 
     job_id: UUID
     buyer_price: Decimal
     seller_payout: Decimal
     margin: Decimal
+    completed_at: datetime
+
+
+class SellerCompletionOut(BaseModel):
+    """The seller's completion receipt: their own payout only, never the buyer
+    price or the platform margin."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    job_id: UUID
+    seller_payout: Decimal
     completed_at: datetime
 
 
