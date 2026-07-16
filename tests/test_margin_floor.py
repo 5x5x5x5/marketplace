@@ -19,7 +19,7 @@ def _available(client: TestClient, auth: AuthFactory, sid: str, seller: str = "s
 
 def _quote_price(client: TestClient, sid: str, auth: AuthFactory, buyer: str = "alice") -> str:
     r = client.post("/v1/quotes", json={"service_type_id": sid}, headers=auth("buyer", buyer))
-    assert r.status_code == 200, r.json()
+    assert r.status_code == 201, r.json()
     return r.json()["buyer_price"]
 
 

@@ -120,7 +120,7 @@ r = httpx.post(f"{BASE}/v1/auth/signup", json={
 headers = {"Authorization": f"Bearer {r.json()['token']}"}
 ```
 
-**`/v1/auth`** — `POST /signup` (201, returns a session) · `POST /login` ·
+**`/v1/auth`** — `POST /signup` (returns a session) · `POST /login` ·
 `POST /logout` · `GET /me` · `POST /verify` (email verification token) ·
 `POST /password-reset/request` · `POST /password-reset/confirm` (revokes every
 session on that account).
@@ -139,6 +139,11 @@ verification requirement meaningful. A fork wires that gate in alongside its
 mail adapter.
 
 ## Endpoints (all under `/v1`)
+
+Convention: POSTs that create a durable resource (signup, quotes, jobs,
+reviews, disputes, reports) return 201; POSTs that act on an existing
+resource (accept, decline, complete, cancel, login, logout, verify, resolve,
+suspend, reinstate, hide, unhide, etc.) return 200.
 
 **Auth** (`/v1/auth/…`) — see the Auth section above.
 

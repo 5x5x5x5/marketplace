@@ -21,12 +21,12 @@ def test_full_flow_books_correct_margin(
     _available(client, auth, basic_service, "carol")
 
     r = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer)
-    assert r.status_code == 200
+    assert r.status_code == 201
     quote = r.json()
     assert quote["buyer_price"] == "20.00"
 
     r = client.post("/v1/jobs", json={"quote_id": quote["id"]}, headers=buyer)
-    assert r.status_code == 200
+    assert r.status_code == 201
     job = r.json()
     job_id = job["id"]
     assert job["status"] == "pending"
@@ -53,7 +53,7 @@ def test_full_flow_books_correct_margin(
     assert set(receipt) == {"job_id", "seller_payout", "completed_at"}
 
     r = client.post(f"/v1/jobs/{job_id}/review", json={"rating": 5}, headers=buyer)
-    assert r.status_code == 200
+    assert r.status_code == 201
 
     r = client.get("/v1/admin/margins/summary", headers=admin)
     summary = r.json()
@@ -100,5 +100,5 @@ def test_quote_is_single_use(client: TestClient, basic_service: str, auth: AuthF
     qid = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer).json()[
         "id"
     ]
-    assert client.post("/v1/jobs", json={"quote_id": qid}, headers=buyer).status_code == 200
+    assert client.post("/v1/jobs", json={"quote_id": qid}, headers=buyer).status_code == 201
     assert client.post("/v1/jobs", json={"quote_id": qid}, headers=buyer).status_code == 404

@@ -37,7 +37,7 @@ def test_same_key_different_path_conflicts(
 ) -> None:
     buyer = _idem(auth("buyer", "alice"), "one-key")
     r1 = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer)
-    assert r1.status_code == 200
+    assert r1.status_code == 201
     r2 = client.post("/v1/jobs", json={"quote_id": r1.json()["id"]}, headers=buyer)
     assert r2.status_code == 409
 
@@ -55,7 +55,7 @@ def test_keys_are_scoped_per_principal(
         json={"service_type_id": basic_service},
         headers=_idem(auth("buyer", "bob"), "k"),
     )
-    assert a.status_code == b.status_code == 200
+    assert a.status_code == b.status_code == 201
     assert a.json()["id"] != b.json()["id"]  # not a replay across principals
 
 
@@ -155,5 +155,5 @@ def test_store_failure_never_fails_a_committed_operation(
             json={"quote_id": q.json()["id"]},
             headers=buyer | {"Idempotency-Key": "boom-key"},
         )
-    assert r.status_code == 200, r.text  # the job was created and committed
+    assert r.status_code == 201, r.text  # the job was created and committed
     assert any("idempotency store failed" in rec.getMessage() for rec in caplog.records)
