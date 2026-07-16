@@ -62,3 +62,20 @@ def test_admin_transaction_includes_both(
     assert tx["buyer_price"] == "20.00"
     assert tx["seller_payout"] == "14.00"
     assert tx["margin"] == "6.00"
+
+
+def test_completion_receipt_is_seller_scoped(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """The seller's completion response must never carry buyer_price or
+    margin — the platform's spread is invisible to both sides by design
+    (tryout finding F1: it used to return the full admin TransactionOut)."""
+    seller = auth("seller", "s1")
+    job_id, offer_id = _offer(client, basic_service, auth)
+    client.post(f"/v1/seller/offers/{offer_id}/accept", headers=seller)
+    r = client.post(f"/v1/seller/jobs/{job_id}/complete", headers=seller)
+    assert r.status_code == 200
+    receipt = r.json()
+    assert "buyer_price" not in receipt
+    assert "margin" not in receipt
+    assert set(receipt) == {"job_id", "seller_payout", "completed_at"}

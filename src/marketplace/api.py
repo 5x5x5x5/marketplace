@@ -115,6 +115,7 @@ from .models import (
     ResolveReportRequest,
     ReviewOut,
     ReviewRequest,
+    SellerCompletionOut,
     SellerDisputeOut,
     SellerJobView,
     SellerOfferView,
@@ -255,7 +256,10 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
         # and re-check: a concurrent payment_succeeded webhook may have accepted
         # this job between the unlocked select above and now. Never expire a paid job.
         payment = session.scalar(select(Payment).where(Payment.job_id == job.id).with_for_update())
-        locked_job = session.get(Job, job.id, with_for_update=True)
+        # populate_existing: the unlocked select() above cached this Job; the
+        # locked re-get must return the row's CURRENT status, not the cached
+        # one, or the "never expire a paid job" guard reads stale state (F5).
+        locked_job = session.get(Job, job.id, with_for_update=True, populate_existing=True)
         if locked_job is None or locked_job.status != JobStatus.AWAITING_PAYMENT:
             continue
         if payment is not None:
@@ -673,7 +677,10 @@ def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: P
     # a racing webhook on Postgres; _release_payment re-selects this same locked
     # Payment row inside the same transaction, which is fine.
     session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
-    job = session.get(Job, job_id, with_for_update=True)
+    # populate_existing: discard the cached attributes from the unlocked
+    # ownership peek above, so the status guard reads the row as it is UNDER
+    # the lock, not as it was before a racing accept/complete (finding F5).
+    job = session.get(Job, job_id, with_for_update=True, populate_existing=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status not in (JobStatus.PENDING, JobStatus.AWAITING_PAYMENT):
@@ -1116,7 +1123,7 @@ def decline_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> d
     return {"status": "ok"}
 
 
-@seller_router.post("/jobs/{job_id}/complete", response_model=TransactionOut)
+@seller_router.post("/jobs/{job_id}/complete", response_model=SellerCompletionOut)
 def complete_job(
     job_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
 ) -> Transaction:
@@ -1880,7 +1887,11 @@ def admin_cancel_job(
         raise HTTPException(status_code=404, detail="job not found")
     # Canonical lock order is Payment → Job (see cancel_job) — never Job first.
     session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
-    job = session.get(Job, job_id, with_for_update=True)
+    # populate_existing: the unlocked existence get() above cached this Job in
+    # the identity map; without it the locked re-get returns the STALE cached
+    # attributes (expire_on_commit=False), so a status guard racing a complete
+    # reads pre-race state and cancels an already-COMPLETED job (finding F5).
+    job = session.get(Job, job_id, with_for_update=True, populate_existing=True)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.EXPIRED):

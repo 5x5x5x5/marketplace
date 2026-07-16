@@ -46,10 +46,11 @@ def test_full_flow_books_correct_margin(
 
     r = client.post(f"/v1/seller/jobs/{job_id}/complete", headers=seller)
     assert r.status_code == 200
-    tx = r.json()
-    assert tx["buyer_price"] == "20.00"
-    assert tx["seller_payout"] == "14.00"
-    assert tx["margin"] == "6.00"
+    receipt = r.json()
+    # The completion receipt is the SELLER's view: their payout, never the
+    # buyer price or the platform margin (the spread stays invisible).
+    assert receipt["seller_payout"] == "14.00"
+    assert set(receipt) == {"job_id", "seller_payout", "completed_at"}
 
     r = client.post(f"/v1/jobs/{job_id}/review", json={"rating": 5}, headers=buyer)
     assert r.status_code == 200

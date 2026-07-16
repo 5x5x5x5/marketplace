@@ -121,8 +121,12 @@ def _run(c: TestClient) -> None:
     print(f"   job status = {accepted['status']}  (fake provider charges instantly)")
 
     print("6. Carol completes the job — transaction booked, payout transferred")
-    tx = c.post(f"/v1/seller/jobs/{job_id}/complete", headers=carol).json()
-    print(f"   margin (platform spread) = {tx['margin']}")
+    receipt = c.post(f"/v1/seller/jobs/{job_id}/complete", headers=carol).json()
+    # The seller's receipt shows only their payout — the platform spread stays
+    # invisible to the seller; margin is an admin-only figure.
+    print(f"   seller payout = {receipt['seller_payout']}")
+    margin = c.get("/v1/admin/margins/summary", headers=admin).json()["platform_margin"]
+    print(f"   platform margin (admin view) = {margin}")
 
     print("7. Alice reviews Carol")
     c.post(f"/v1/jobs/{job_id}/review", json={"rating": 5, "comment": "great"}, headers=alice)

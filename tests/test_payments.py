@@ -8,11 +8,11 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from marketplace import api
 from marketplace.db import SessionLocal
-from marketplace.entities import Job, Payment, SellerProfile
+from marketplace.entities import Job, Payment, SellerProfile, Transaction
 from marketplace.models import JobStatus, PaymentStatus, PayoutStatus
 from marketplace.payments import fake_provider
 from marketplace.payments.fake import FakeProvider
@@ -609,3 +609,66 @@ def test_decline_then_retry_on_same_pi_recovers(
         assert job is not None and payment is not None
         assert payment.status == PaymentStatus.SUCCEEDED
         assert job.status == JobStatus.ACCEPTED
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel writes are only real on Postgres")
+def test_cancel_vs_complete_race(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Admin cancel races seller complete on an ACCEPTED job (tryout finding
+    F5). The loser must 409: exactly one side wins, and the money must match
+    the winner — never a refunded buyer AND a booked transaction/paid payout.
+    The bug class is the stale-relock trap: cancel's unlocked existence peek
+    caches the Job, so its post-lock status guard read pre-race state."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    seller = auth("seller", "s1")
+    codes: dict[str, int] = {}
+    barrier = threading.Barrier(2)
+
+    def do_cancel(jid: str) -> None:
+        barrier.wait()
+        codes["cancel"] = (
+            TestClient(api.app).post(f"/v1/admin/jobs/{jid}/cancel", headers=admin).status_code
+        )
+
+    def do_complete(jid: str) -> None:
+        barrier.wait()
+        codes["complete"] = (
+            TestClient(api.app).post(f"/v1/seller/jobs/{jid}/complete", headers=seller).status_code
+        )
+
+    for attempt in range(5):
+        job_id = str(new_job(client, auth, basic_service, "alice")["id"])
+        offer = client.get("/v1/seller/offers", headers=seller).json()[0]
+        client.post(f"/v1/seller/offers/{offer['id']}/accept", headers=seller)
+
+        codes.clear()
+        barrier.reset()
+        threads = [
+            threading.Thread(target=do_cancel, args=(job_id,)),
+            threading.Thread(target=do_complete, args=(job_id,)),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        wins = [k for k, v in codes.items() if v == 200]
+        assert len(wins) == 1, f"attempt {attempt}: both sides returned {codes}"
+        with SessionLocal() as s:
+            final_job = s.get(Job, UUID(job_id))
+            payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+            tx_count = s.scalar(
+                select(func.count())
+                .select_from(Transaction)
+                .where(Transaction.job_id == UUID(job_id))
+            )
+            assert final_job is not None and payment is not None
+            if wins == ["complete"]:
+                assert final_job.status == JobStatus.COMPLETED
+                assert payment.status == PaymentStatus.SUCCEEDED
+                assert tx_count == 1
+            else:
+                assert final_job.status == JobStatus.CANCELLED
+                assert payment.status == PaymentStatus.REFUNDED
+                assert tx_count == 0, "cancelled job must not keep a booked transaction"
