@@ -1,16 +1,22 @@
 """Payment flows against the fake provider: onboarding, gating."""
 
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from marketplace import api
 from marketplace.db import SessionLocal
 from marketplace.entities import Job, Payment, SellerProfile
-from marketplace.models import PaymentStatus, PayoutStatus
+from marketplace.models import JobStatus, PaymentStatus, PayoutStatus
+from marketplace.payments import fake_provider
 from marketplace.payments.fake import FakeProvider
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 
 
 def onboard_and_avail(client: TestClient, auth: AuthFactory, sid: str, seller: str) -> None:
@@ -461,3 +467,145 @@ def test_buyer_still_cannot_cancel_accepted(
     accept_first_offer(client, auth("seller", "s1"))
     r = client.post(f"/v1/jobs/{job['id']}/cancel", headers=auth("buyer", "alice"))
     assert r.status_code == 409  # paid + committed: only an admin unwinds this
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel writes are only real on Postgres")
+def test_cancel_vs_webhook_race(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Admin cancel of an AWAITING_PAYMENT job races the payment_succeeded
+    webhook. Exactly one side wins; the pair (job.status, payment.status) must
+    land consistent: (cancelled, FAILED) — cancel won, charge voided;
+    (accepted, SUCCEEDED) — webhook won, cancel lost/409d; or
+    (cancelled, REFUNDED) — webhook won, then cancel refunded the paid charge.
+    NEVER (accepted, FAILED) or (cancelled, SUCCEEDED)."""
+    onboard_and_avail(client, auth, basic_service, "s1")
+    fake_provider.next_charge_status = PaymentStatus.PENDING
+    job = new_job(client, auth, basic_service, "alice")
+    offer = client.get("/v1/seller/offers", headers=auth("seller", "s1")).json()[0]
+    client.post(f"/v1/seller/offers/{offer['id']}/accept", headers=auth("seller", "s1"))
+    with SessionLocal() as s:
+        ppid = s.scalar(
+            select(Payment.provider_payment_id).where(Payment.job_id == UUID(str(job["id"])))
+        )
+
+    barrier = threading.Barrier(2)
+
+    def do_cancel() -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return c.post(f"/v1/admin/jobs/{job['id']}/cancel", headers=admin).status_code
+
+    def do_webhook() -> int:
+        c = TestClient(api.app)
+        barrier.wait()
+        return c.post(
+            "/v1/payments/webhook",
+            json={"event_id": "evt-race-1", "kind": "payment_succeeded", "object_id": ppid},
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f1, f2 = pool.submit(do_cancel), pool.submit(do_webhook)
+        codes = (f1.result(), f2.result())
+    assert all(code in (200, 409) for code in codes), codes
+
+    with SessionLocal() as s:
+        final_job = s.get(Job, UUID(str(job["id"])))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(str(job["id"]))))
+        assert final_job is not None and payment is not None
+        pair = (final_job.status, payment.status)
+    assert pair in (
+        (JobStatus.CANCELLED, PaymentStatus.FAILED),
+        (JobStatus.ACCEPTED, PaymentStatus.SUCCEEDED),
+        (JobStatus.CANCELLED, PaymentStatus.REFUNDED),
+    ), pair
+
+
+def test_late_success_never_resurrects_a_voided_cancel(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    admin: Header,
+    fake_payments: FakeProvider,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Admin-cancel of an AWAITING_PAYMENT job voids the pending charge:
+    payment -> FAILED, job -> CANCELLED. A late payment_succeeded for that
+    same provider_payment_id (a delayed/replayed event, or the losing side
+    of a cancel-vs-webhook race) must never resurrect the payment — the
+    forbidden pair is (CANCELLED, SUCCEEDED): buyer charged for a cancelled
+    job, no refund booked."""
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
+
+    r = client.post(f"/v1/admin/jobs/{job_id}/cancel", headers=admin)
+    assert r.status_code == 200
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert job.status == JobStatus.CANCELLED
+        assert payment.status == PaymentStatus.FAILED
+
+    with caplog.at_level(logging.WARNING, logger="marketplace"):
+        r = client.post(
+            "/v1/payments/webhook",
+            json={
+                "event_id": "evt_late_success_voided",
+                "kind": "payment_succeeded",
+                "object_id": pid,
+            },
+        )
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}  # event consumed/deduped; state change refused
+
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert job.status == JobStatus.CANCELLED  # NOT resurrected
+        assert payment.status == PaymentStatus.FAILED  # NOT resurrected
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "voided payment" in warnings[0].getMessage()
+
+
+def test_decline_then_retry_on_same_pi_recovers(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    fake_payments: FakeProvider,
+) -> None:
+    """The legitimate recovery path: a card decline fails the pending charge
+    but leaves the job AWAITING_PAYMENT (buyer can retry confirmation on the
+    SAME PaymentIntent). A later payment_succeeded for that same
+    provider_payment_id must be applied — the resurrection guard's
+    job-status check exists precisely so this recovery is not mistaken for
+    a voided-cancel/sweep resurrection."""
+    job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
+
+    r = client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_decline", "kind": "payment_failed", "object_id": pid},
+    )
+    assert r.status_code == 200
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert payment.status == PaymentStatus.FAILED
+        assert job.status == JobStatus.AWAITING_PAYMENT  # buyer can still retry confirmation
+
+    r = client.post(
+        "/v1/payments/webhook",
+        json={"event_id": "evt_retry_success", "kind": "payment_succeeded", "object_id": pid},
+    )
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+    with SessionLocal() as s:
+        job = s.get(Job, UUID(job_id))
+        payment = s.scalar(select(Payment).where(Payment.job_id == UUID(job_id)))
+        assert job is not None and payment is not None
+        assert payment.status == PaymentStatus.SUCCEEDED
+        assert job.status == JobStatus.ACCEPTED

@@ -88,6 +88,29 @@ users, then gets forked and specialized per market vertical. The differentiator
   `GET /v1/admin/margins/summary` adds `fees_estimated` and
   `platform_margin_net_of_fees` — a cash view over SUCCEEDED/REFUNDED charges
   that matches what actually lands in the bank account. See `SECURITY.md`.
+- **Observability & ops (done):** the fifth and final generic bucket.
+  Every request carries a request id (`X-Request-ID` honored if present,
+  always echoed) threaded through a contextvar so every log line — access
+  and application — carries it; JSON logs by default, `LOG_FORMAT=plain`
+  for local reading. A single request-boundary middleware turns any
+  unhandled exception into a clean `{"detail": "internal error",
+  "request_id": …}` 500 — traceback only in the log, never the response
+  body. `GET /v1/admin/stats` gives an operator a one-call snapshot
+  (jobs/payments/payouts/notifications/disputes/reports/users/quotes/
+  retention counts, uptime). Retention sweeps age out `idempotency_keys`
+  (7d), `webhook_events` (30d), and terminal SENT/FAILED `notifications`
+  (30d) on the maintenance loop's own clock — PENDING outbox rows are
+  never reaped, by design (they still need to send). The webhook
+  handler's DB work moved off the event loop (`asyncio.to_thread`),
+  closing the async-over-sync-`Session` gap, alongside a
+  resurrection-guard fix (a late-arriving webhook success can never
+  resurrect a voided/cancelled payment) and a PG-gated
+  cancel-vs-webhook race test. API hardening adds a body-size cap
+  (`MAX_BODY_BYTES`, default 1 MiB), `TrustedHostMiddleware` and
+  `CORSMiddleware` (both open by default; narrow via `TRUSTED_HOSTS`/
+  `CORS_ORIGINS` in production), and `limit`/`offset` pagination on the
+  admin list endpoints, plus indexes on the hot query paths. Migration
+  #10 (10 total). See `SECURITY.md`.
 
 ## Done ✓
 
@@ -134,35 +157,39 @@ smuggled DB row; migration #8; see `SECURITY.md`) · **fee-aware margin**
 `fee_estimate` stamped on every charge at charge time; margin floor enforced
 net-of-fees at both the quote path and match-time filtering; `fees_estimated`
 /`platform_margin_net_of_fees` cash-view fields on the margin summary;
-migration #9; see `SECURITY.md`).
+migration #9; see `SECURITY.md`) · **observability & ops** (request-id
+propagation and JSON access logging with a `plain` toggle; a single
+request-boundary middleware giving a clean 500 envelope; `GET
+/v1/admin/stats` operator snapshot; 7/30/30 retention sweeps over
+idempotency keys/webhook events/terminal notifications with PENDING rows
+never reaped; webhook DB work moved off the event loop plus a
+resurrection-guard money fix and a PG-gated race test; body-size cap,
+`TrustedHostMiddleware`/`CORSMiddleware`, admin-list pagination, and
+hot-path indexes; migration #10; see `SECURITY.md`).
 
 ## What's still ahead
 
-Rough priority. Each is fork-agnostic — build generic here, specialize after forking.
+**The template is feature-complete.** Trust & safety (four sub-phases) and
+observability & ops are both done — see "Where we are" and "Done ✓" above.
+What remains below is fork work by decision (Danny, 2026-07-15): genuinely
+fork-specific, not a generic default this template should carry, so it
+stays unscheduled rather than rough-prioritized.
 
-1. **Trust & safety — COMPLETE.** All four sub-phases are done (see "Done"
-   above): disputes/chargebacks + partial refunds, seller→buyer reviews,
-   moderation (suspension/takedown/reports), and notification preferences
-   (per-kind mutes with a server-side money floor). Deferred, not scheduled:
-   automatic abuse signals/limits (report-count thresholds, auto-suspend) —
-   the counters and cutoffs are fork-specific heuristics, not a generic
-   default.
-2. **Observability & ops** — metrics, structured request logging, an error
-   envelope so a crafted body never surfaces a 500. Payments hardening
-   follow-ups: the webhook handler is async-over-sync-`Session` (move DB work
-   off the event loop under load); a TTL sweep for the `idempotency_keys` /
-   `webhook_events` tables; a PG-gated cancel-vs-webhook race test; indexes on
-   `provider_account_id`/`provider_transfer_id`. Standing rule: no endpoint
-   should echo a secret into a stored idempotency response (auth paths are
-   now excluded; audit future secret-returning POSTs). A TTL sweep for old
-   SENT/FAILED `notifications` rows joins the same bucket.
-3. **Admin RBAC** — beyond the single shared admin role; every admin account
+1. **Admin RBAC** — beyond the single shared admin role; every admin account
    currently has identical, full authority.
-4. **API hardening** — CORS/TrustedHost, gateway rate-limiting, request-size limits.
-5. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
-   Fork-time item: real-user auth (password signup/login, sessions, argon2,
-   verification/reset) already shipped — see "Done" above and `SECURITY.md`.
-   This is additive, not a replacement.
+2. **Gateway rate-limiting / API extras** — login/endpoint throttling, API
+   keys, quotas: deliberately left to the gateway/edge layer rather than the
+   app (see `SECURITY.md`'s no-rate-limiting residuals). Body-size caps,
+   `TrustedHostMiddleware`, and `CORSMiddleware` are already in the app —
+   see "Done ✓" above.
+3. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
+   Additive, not a replacement — real-user auth (password signup/login,
+   sessions, argon2, verification/reset) already shipped; see "Done ✓" above
+   and `SECURITY.md`.
+
+Automatic abuse signals/limits (report-count thresholds, auto-suspend)
+remain a deliberate non-goal — fork-specific heuristics, not a generic
+default (see `CLAUDE.md`'s non-goals).
 
 ## Build vs template: build
 

@@ -48,9 +48,24 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     mail_from: str = "marketplace@localhost"
 
+    # Observability. JSON logs by default; LOG_FORMAT=plain for dev readability.
+    log_format: str = "json"
+
+    # Retention (days): swept tables stay bounded. PENDING outbox rows are
+    # never reaped regardless of age.
+    retention_idempotency_days: int = 7
+    retention_webhooks_days: int = 30
+    retention_notifications_days: int = 30
+
     # Disputes: buyer-opened arbitration on completed jobs.
     dispute_window_days: int = 7
     chargeback_fee_usd: Decimal = Decimal("15.00")  # provider fee on a lost chargeback
+
+    # API hardening. trusted_hosts/* and empty cors_origins = open (dev);
+    # narrow both in production. Bodies over max_body_bytes get a 413.
+    trusted_hosts: list[str] = ["*"]
+    cors_origins: list[str] = []
+    max_body_bytes: int = 1_048_576
 
 
 settings = Settings()

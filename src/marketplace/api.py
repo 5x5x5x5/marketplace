@@ -20,13 +20,16 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import notifications, repo
 from .auth import (
@@ -48,6 +51,7 @@ from .entities import (
     BuyerProfile,
     Dispute,
     EmailToken,
+    IdempotencyRecord,
     Job,
     Notification,
     NotificationMute,
@@ -93,6 +97,7 @@ from .models import (
     NotificationOut,
     NotificationPreferenceOut,
     NotificationPreferencesUpdate,
+    NotificationStats,
     NotificationStatus,
     OfferStatus,
     OnboardingOut,
@@ -119,6 +124,7 @@ from .models import (
     ServiceTypeBody,
     ServiceTypeOut,
     Side,
+    StatsOut,
     SuspendRequest,
     TransactionOut,
     UserModerationOut,
@@ -126,6 +132,7 @@ from .models import (
     UserStatus,
     to_money,
 )
+from .observability import BodySizeLimitMiddleware, RequestIdMiddleware, configure_logging
 from .payments import get_provider
 from .payments.port import PaymentError, PaymentEvent, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY, PricingContext, run_pipeline
@@ -148,6 +155,9 @@ ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+_STARTED_AT = _now()
 
 
 def _require_active(session: Session, user_id: str) -> None:
@@ -281,11 +291,34 @@ def _sweep_expired_auth(session: Session) -> None:
     session.execute(delete(EmailToken).where(EmailToken.expires_at < _now()))
 
 
+def _sweep_retention(session: Session) -> None:
+    """Bounded tables: reap replay/dedup rows and delivered mail past their
+    windows. PENDING outbox rows are immortal — the outbox contract holds."""
+    now = _now()
+    session.execute(
+        delete(IdempotencyRecord).where(
+            IdempotencyRecord.created_at < now - timedelta(days=settings.retention_idempotency_days)
+        )
+    )
+    session.execute(
+        delete(WebhookEvent).where(
+            WebhookEvent.received_at < now - timedelta(days=settings.retention_webhooks_days)
+        )
+    )
+    session.execute(
+        delete(Notification).where(
+            Notification.status.in_((NotificationStatus.SENT, NotificationStatus.FAILED)),
+            Notification.created_at < now - timedelta(days=settings.retention_notifications_days),
+        )
+    )
+
+
 def _sweep(session: Session, provider: PaymentProvider) -> None:
     """Everything lazy maintenance does on reads: offers, payments, auth."""
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
     _sweep_expired_auth(session)
+    _sweep_retention(session)
 
 
 def _run_drain_once() -> None:
@@ -321,6 +354,14 @@ async def _maintenance_loop() -> None:
 
 def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
     return list(rows[offset : offset + limit])
+
+
+def _count_by(session: Session, column: Any, enum: type[StrEnum]) -> dict[str, int]:
+    """Group-count a status column; every enum member present, absent = 0."""
+    rows: dict[Any, int] = {}
+    for value, count in session.execute(select(column, func.count()).group_by(column)).all():
+        rows[value] = count
+    return {m.value: int(rows.get(m, 0)) for m in enum}
 
 
 # ---------- Reports router ----------
@@ -1343,11 +1384,15 @@ def _admin_review_out(row: Review | SellerReview) -> AdminReviewOut:
 
 @admin_router.get("/reviews/{kind}", response_model=list[AdminReviewOut])
 def admin_list_reviews(
-    kind: Literal["buyer", "seller"], session: SessionDep, admin_id: AdminId
+    kind: Literal["buyer", "seller"],
+    session: SessionDep,
+    admin_id: AdminId,
+    limit: Limit = 100,
+    offset: Offset = 0,
 ) -> list[AdminReviewOut]:
     model = Review if kind == "buyer" else SellerReview
     rows = session.scalars(select(model).order_by(model.created_at.desc())).all()
-    return [_admin_review_out(r) for r in rows]
+    return [_admin_review_out(r) for r in _paginate(rows, limit, offset)]
 
 
 def _set_comment_hidden(
@@ -1402,12 +1447,16 @@ def admin_reset_display_name(user_id: str, session: SessionDep, admin_id: AdminI
 
 @admin_router.get("/reports", response_model=list[AdminReportOut])
 def admin_list_reports(
-    session: SessionDep, admin_id: AdminId, status: ReportStatus | None = None
+    session: SessionDep,
+    admin_id: AdminId,
+    status: ReportStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
 ) -> list[Report]:
     q = select(Report).order_by(Report.created_at.desc())
     if status is not None:
         q = q.where(Report.status == status)
-    return list(session.scalars(q).all())
+    return _paginate(session.scalars(q).all(), limit, offset)
 
 
 @admin_router.post("/reports/{report_id}/resolve", response_model=AdminReportOut)
@@ -1434,8 +1483,11 @@ def resolve_report(
 
 
 @admin_router.get("/buyers", response_model=list[BuyerProfileOut])
-def admin_list_buyers(session: SessionDep, admin_id: AdminId) -> list[BuyerProfile]:
-    return list(session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all())
+def admin_list_buyers(
+    session: SessionDep, admin_id: AdminId, limit: Limit = 100, offset: Offset = 0
+) -> list[BuyerProfile]:
+    rows = session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all()
+    return _paginate(rows, limit, offset)
 
 
 @admin_router.get("/transactions", response_model=list[TransactionOut])
@@ -1750,6 +1802,58 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
     )
 
 
+@admin_router.get("/stats", response_model=StatsOut)
+def admin_stats(session: SessionDep, admin_id: AdminId) -> StatsOut:
+    """Operator snapshot: counts only, one session, curl-able."""
+    oldest_pending = session.scalar(
+        select(func.min(Notification.created_at)).where(
+            Notification.status == NotificationStatus.PENDING
+        )
+    )
+    users = _count_by(session, User.role, UserRole)
+    users["suspended"] = (
+        session.scalar(
+            select(func.count()).select_from(User).where(User.status == UserStatus.SUSPENDED)
+        )
+        or 0
+    )
+    notification_counts = _count_by(session, Notification.status, NotificationStatus)
+    return StatsOut(
+        jobs=_count_by(session, Job.status, JobStatus),
+        payments=_count_by(session, Payment.status, PaymentStatus),
+        payouts=_count_by(session, Payout.status, PayoutStatus),
+        notifications=NotificationStats(
+            pending=notification_counts["pending"],
+            sent=notification_counts["sent"],
+            failed=notification_counts["failed"],
+            oldest_pending_age_seconds=(
+                (_now() - oldest_pending).total_seconds() if oldest_pending else None
+            ),
+        ),
+        disputes_open=session.scalar(
+            select(func.count()).select_from(Dispute).where(Dispute.status == DisputeStatus.OPEN)
+        )
+        or 0,
+        reports_open=session.scalar(
+            select(func.count()).select_from(Report).where(Report.status == ReportStatus.OPEN)
+        )
+        or 0,
+        users=users,
+        quotes_live=session.scalar(
+            select(func.count()).select_from(Quote).where(Quote.expires_at > _now())
+        )
+        or 0,
+        retention={
+            "idempotency_keys": session.scalar(select(func.count()).select_from(IdempotencyRecord))
+            or 0,
+            "webhook_events": session.scalar(select(func.count()).select_from(WebhookEvent)) or 0,
+            "notifications_total": session.scalar(select(func.count()).select_from(Notification))
+            or 0,
+        },
+        uptime_seconds=int((_now() - _STARTED_AT).total_seconds()),
+    )
+
+
 @admin_router.get("/audit", response_model=list[AuditOut])
 def list_audit(session: SessionDep, limit: Limit = 100, offset: Offset = 0) -> list[AuditLog]:
     rows = session.scalars(select(AuditLog).order_by(AuditLog.created_at.desc())).all()
@@ -1817,8 +1921,20 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         if payment is None or payment.status is PaymentStatus.REFUNDED:
             return  # refunded is terminal — late events never resurrect the charge
         if event.kind == "payment_succeeded":
-            payment.status = PaymentStatus.SUCCEEDED
             job = session.get(Job, payment.job_id, with_for_update=True)
+            if payment.status is PaymentStatus.FAILED and (
+                job is None or job.status != JobStatus.AWAITING_PAYMENT
+            ):
+                # The charge was voided (cancel/sweep) and the job is dead — a late
+                # success must never resurrect it. Real providers don't emit success
+                # for a voided PI; races and replays can.
+                logger.warning(
+                    "ignoring late payment_succeeded for voided payment %s (job %s)",
+                    payment.id,
+                    payment.job_id,
+                )
+                return
+            payment.status = PaymentStatus.SUCCEEDED
             if job is not None and job.status == JobStatus.AWAITING_PAYMENT:
                 job.status = JobStatus.ACCEPTED
         elif payment.status is not PaymentStatus.SUCCEEDED:
@@ -1924,10 +2040,22 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
 
 
+def _process_webhook(event: PaymentEvent) -> dict[str, str]:
+    """Dedup + apply on a worker thread — sync Session stays off the loop."""
+    with SessionLocal() as session:
+        duplicate = session.scalar(
+            select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
+        )
+        if duplicate is not None:
+            return {"status": "duplicate"}
+        session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
+        _apply_payment_event(session, event)
+        session.commit()
+    return {"status": "ok"}
+
+
 @payments_router.post("/webhook")
-async def payments_webhook(
-    request: Request, session: SessionDep, provider: ProviderDep
-) -> dict[str, str]:
+async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str, str]:
     """Provider event sink. Unauthenticated by design — authenticity comes from
     the provider's signature, verified in parse_webhook. Duplicates no-op."""
     payload = await request.body()
@@ -1937,14 +2065,7 @@ async def payments_webhook(
         raise HTTPException(status_code=400, detail="invalid webhook signature") from None
     except (PaymentError, ValueError, KeyError):
         raise HTTPException(status_code=400, detail="malformed webhook payload") from None
-    duplicate = session.scalar(
-        select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
-    )
-    if duplicate is not None:
-        return {"status": "duplicate"}
-    session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
-    _apply_payment_event(session, event)
-    return {"status": "ok"}
+    return await asyncio.to_thread(_process_webhook, event)
 
 
 # ---------- App assembly ----------
@@ -1964,8 +2085,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await maintenance
 
 
+def _add_hardening_middleware(app: FastAPI) -> None:
+    """Settings-driven: CORS only when origins are configured; TrustedHost
+    defaults open (*) until narrowed; body cap always on."""
+    if settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.trusted_hosts)
+    app.add_middleware(BodySizeLimitMiddleware)
+
+
+configure_logging()
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(IdempotencyMiddleware)
+_add_hardening_middleware(app)
+app.add_middleware(RequestIdMiddleware)  # outermost, unchanged
 
 
 @app.get("/healthz")

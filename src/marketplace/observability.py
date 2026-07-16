@@ -1,0 +1,224 @@
+"""Request-boundary observability: logging config, request ids, access log,
+error envelope.
+
+One middleware owns the whole boundary: it stamps a request id into a
+contextvar (so every app log line carries it), emits exactly one access-log
+line per request, and converts any escaped exception into a clean 500
+envelope — traceback to the log, never the response. A separate
+@app.exception_handler would run OUTSIDE user middleware (Starlette's
+ServerErrorMiddleware), losing the header and the contextvar: keeping the
+envelope here is load-bearing, not style.
+
+Access lines never carry headers, bodies, or query strings — tokens ride in
+headers and reset tokens in bodies. Method, path, status, duration, id. Only.
+"""
+
+import json
+import logging
+import logging.config
+import time
+import uuid
+from contextvars import ContextVar
+from datetime import UTC, datetime
+from typing import Any
+
+from starlette.datastructures import Headers
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from .settings import settings
+
+request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
+
+_MAX_REQUEST_ID = 64
+_ACCESS_FIELDS = ("method", "path", "status", "duration_ms")
+
+access_logger = logging.getLogger("marketplace.access")
+error_logger = logging.getLogger("marketplace")
+
+
+class RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "request_id"):
+            record.request_id = request_id_var.get()
+        return True
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        line: dict[str, Any] = {
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+            "request_id": getattr(record, "request_id", request_id_var.get()),
+        }
+        for key in _ACCESS_FIELDS:
+            value = record.__dict__.get(key)
+            if value is not None:
+                line[key] = value
+        if record.exc_info:
+            line["exc"] = self.formatException(record.exc_info)
+        return json.dumps(line, default=str)
+
+
+def configure_logging() -> None:
+    """Process-wide logging: one handler, one format, uvicorn folded in.
+
+    Idempotent — dictConfig replaces handlers wholesale. App loggers keep
+    propagating to root (caplog and tests rely on it); only uvicorn's own
+    loggers are detached, and its access line is silenced in favor of ours.
+    """
+    plain = settings.log_format == "plain"
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "filters": {"request_id": {"()": RequestIdFilter}},
+            "formatters": {
+                "json": {"()": JsonFormatter},
+                "plain": {
+                    "format": "%(asctime)s %(levelname)s %(name)s [%(request_id)s] %(message)s"
+                },
+            },
+            "handlers": {
+                "stderr": {
+                    "class": "logging.StreamHandler",
+                    "formatter": "plain" if plain else "json",
+                    "filters": ["request_id"],
+                }
+            },
+            "root": {"handlers": ["stderr"], "level": "INFO"},
+            "loggers": {
+                "uvicorn": {"handlers": ["stderr"], "level": "INFO", "propagate": False},
+                "uvicorn.error": {"handlers": ["stderr"], "level": "INFO", "propagate": False},
+                "uvicorn.access": {"handlers": [], "level": "CRITICAL", "propagate": False},
+            },
+        }
+    )
+
+
+def _clean_request_id(raw: str | None) -> str:
+    if raw and len(raw) <= _MAX_REQUEST_ID and raw.isascii() and raw.isprintable():
+        return raw
+    return uuid.uuid4().hex
+
+
+def _log_safe(s: str) -> str:
+    """Escape CR/LF so an attacker-controlled path (e.g. a URL-encoded %0A)
+    can't forge a second line in the plain-text log formatter. JSON mode is
+    already safe (json.dumps escapes control characters); this is belt and
+    suspenders there, load-bearing for plain."""
+    return s.replace("\r", "\\r").replace("\n", "\\n")
+
+
+class RequestIdMiddleware:
+    """Request id + access log + error envelope. Mount OUTERMOST (add last)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        rid = _clean_request_id(Headers(scope=scope).get("x-request-id"))
+        request_id_var.set(rid)
+        method = _log_safe(str(scope.get("method", "-")))
+        path = _log_safe(str(scope["path"]))
+        start = time.monotonic()
+        status = 0
+        started = False
+
+        async def send_with_header(message: Message) -> None:
+            nonlocal status, started
+            if message["type"] == "http.response.start":
+                started = True
+                status = int(message["status"])
+                message.setdefault("headers", []).append((b"x-request-id", rid.encode("ascii")))
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_header)
+        except Exception:
+            error_logger.exception("unhandled error on %s %s", method, path)
+            status = 500
+            if not started:
+                response = JSONResponse(
+                    {"detail": "internal error", "request_id": rid},
+                    status_code=500,
+                    headers={"x-request-id": rid},
+                )
+                await response(scope, receive, send)
+            # response already streaming: nothing safe to send; the log has it
+        finally:
+            if path != "/healthz":
+                access_logger.info(
+                    "%s %s %s",
+                    method,
+                    path,
+                    status,
+                    extra={
+                        "method": method,
+                        "path": path,
+                        "status": status,
+                        "duration_ms": round((time.monotonic() - start) * 1000, 1),
+                    },
+                )
+
+
+class _BodyTooLarge(BaseException):
+    """Deliberately BaseException, not Exception: for body-modeled endpoints
+    FastAPI's own body-parsing code wraps `except Exception` around
+    `await request.body()` and turns anything it catches into a generic
+    HTTPException(400, "There was an error parsing the body") — which
+    IdempotencyMiddleware would then happily store (400 < 500), poisoning
+    the client's Idempotency-Key forever on a chunked oversized POST.
+    Subclassing BaseException escapes that `except Exception`, so this still
+    propagates up to BodySizeLimitMiddleware's own `except _BodyTooLarge`
+    below and comes back as a clean, never-stored 413."""
+
+
+class BodySizeLimitMiddleware:
+    """413 oversized requests: declared Content-Length up front, and a
+    counted cap on chunked bodies. Mount OUTSIDE IdempotencyMiddleware so an
+    oversized 413 is never stored for replay."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = settings.max_body_bytes
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > limit:
+            await self._reject(scope, receive, send)
+            return
+        seen = 0
+
+        async def receive_capped() -> Message:
+            nonlocal seen
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    raise _BodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, receive_capped, send)
+        except _BodyTooLarge:
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        # ponytail: a chunked-body 413 after the response has already
+        # started streaming can't be delivered (same limitation Starlette's
+        # own error middleware has) — the declared-length branch above
+        # covers the common case (TestClient and most real clients send
+        # Content-Length); this counted branch only matters for genuinely
+        # chunked/streamed request bodies.
+        response = JSONResponse({"detail": "request body too large"}, status_code=413)
+        await response(scope, receive, send)

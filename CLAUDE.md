@@ -80,6 +80,22 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   in `notifications.drain_once` (the maintenance loop / admin drain). Payloads
   are role-safe snapshots at enqueue time: seller payloads never carry
   `buyer_price`, buyer payloads never carry `seller_payout`.
+- **Access logs never carry headers, bodies, or query strings.** The access
+  logger (`observability.py`) logs method/path/status/duration/request-id
+  only; `path` is logged without its query component. Bearer tokens live in
+  headers, reset/verification tokens live in bodies (or a hypothetical
+  query string) — never add a field to the access log line without checking
+  it can't carry one of those.
+- **PENDING outbox rows are never reaped.** The retention sweep ages out
+  `idempotency_keys`/`webhook_events`/terminal SENT-or-FAILED
+  `notifications`, but a `PENDING` notification is exempt at every age —
+  it still needs to send. Don't widen the notifications retention delete
+  to include `PENDING`.
+- **Webhook DB work stays off the event loop.** `_process_webhook` runs
+  synchronous session work via `asyncio.to_thread` (`api.py`), not inline
+  in the async handler — a slow/blocked DB call must never stall the event
+  loop for every other in-flight request. Keep new webhook-handling code in
+  that thread-offloaded function, not back on the coroutine.
 
 ## Subtle bits
 
@@ -156,8 +172,14 @@ takes no automatic action. Notification preferences ship (migration #8):
 per-kind mutes via role-scoped, replace-set
 `GET/PUT /v1/notification-preferences`, enforced at `enqueue` with a
 server-side money floor no path can bypass. Fee-aware margin ships
-(migration #9, 9 total): admin-tunable `pct`/`fixed` fee config, a
+(migration #9): admin-tunable `pct`/`fixed` fee config, a
 `fee_estimate` stamped on every charge at charge time, the margin floor
 enforced net of that estimate at both enforcement sites, and
-`fees_estimated`/`platform_margin_net_of_fees` on the margin summary — see
-`ROADMAP.md`.
+`fees_estimated`/`platform_margin_net_of_fees` on the margin summary.
+Observability & ops ships (migration #10, 10 total): request-id
+propagation + JSON access logging, a single-middleware 500 envelope,
+`GET /v1/admin/stats`, 7/30/30 retention sweeps (PENDING outbox rows
+exempt), webhook DB work off the event loop, and API hardening (body
+cap, TrustedHost, CORS, admin-list pagination) — the template is
+feature-complete; RBAC/gateway-rate-limiting/OAuth are fork work by
+decision (Danny, 2026-07-15) — see `ROADMAP.md`.

@@ -439,6 +439,26 @@ class MarginSummaryOut(BaseModel):
     platform_margin_net_of_fees: Decimal
 
 
+class NotificationStats(BaseModel):
+    pending: int
+    sent: int
+    failed: int
+    oldest_pending_age_seconds: float | None
+
+
+class StatsOut(BaseModel):
+    jobs: dict[str, int]
+    payments: dict[str, int]
+    payouts: dict[str, int]
+    notifications: NotificationStats
+    disputes_open: int
+    reports_open: int
+    users: dict[str, int]
+    quotes_live: int
+    retention: dict[str, int]
+    uptime_seconds: int
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

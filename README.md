@@ -131,6 +131,8 @@ reports; shared with seller, see Seller list)
 `GET /transactions` · `GET /payouts` ·
 `POST /payouts/{id}/retry` · `GET /notifications` ·
 `POST /notifications/drain` · `GET /margins/summary` · `GET /audit` ·
+`GET /stats` (operator snapshot — jobs/payments/payouts/notifications/
+disputes/reports/users/quotes/retention counts, uptime) ·
 `GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep` ·
 `POST /users/{id}/suspend` · `POST /users/{id}/reinstate` ·
 `POST /users/{id}/reset_display_name` · `GET /reviews/{kind}` (`buyer`|`seller`) ·
@@ -261,6 +263,45 @@ Params are clamped at read time, so an out-of-range value is bounded, not truste
 `cheapest_payout` (default) · `fifo` · `highest_rated` — all subject to the margin
 floor and seller capacity. Register new ones with `@register_strategy("name")`.
 
+## Observability & ops
+
+Every request gets a request id: an inbound `X-Request-ID` header is honored
+(validated — hostile or oversized values are replaced), otherwise one is
+generated; it's echoed on the response and threaded through every log line
+for that request, access and application both. Logs are JSON by default
+(`LOG_FORMAT=plain` switches to a one-line human format for local reading);
+the access log never carries headers, bodies, or query strings. A single
+request-boundary middleware turns any unhandled exception into a clean
+`{"detail": "internal error", "request_id": …}` 500 — the traceback goes to
+the log, never the response.
+
+`GET /v1/admin/stats` is the one-call operator snapshot: job/payment/payout/
+notification/dispute/report/user/quote counts, retention-table row counts,
+and process uptime — no need to piece it together from several endpoints.
+
+Three tables age out on the maintenance loop's own clock rather than
+growing forever: `idempotency_keys` (`RETENTION_IDEMPOTENCY_DAYS`, default
+7), `webhook_events` (`RETENTION_WEBHOOKS_DAYS`, default 30), and terminal
+SENT/FAILED `notifications` (`RETENTION_NOTIFICATIONS_DAYS`, default 30).
+PENDING notification rows are never swept, regardless of age — they still
+need to send.
+
+API hardening: `MAX_BODY_BYTES` (default 1 MiB, 1_048_576) caps request
+bodies with a 413, checked against a declared `Content-Length` up front and
+counted on chunked bodies; `TRUSTED_HOSTS` and `CORS_ORIGINS` back
+`TrustedHostMiddleware`/`CORSMiddleware` (both open — `["*"]`/`[]` — by
+default for dev, narrow them for production). Admin list endpoints take
+`limit`/`offset` query params (capped) for pagination.
+
+Both `TRUSTED_HOSTS` and `CORS_ORIGINS` are `pydantic-settings` list fields,
+so the env var must be a **JSON array**, not a bare comma-separated string —
+`TRUSTED_HOSTS=api.example.com` fails at boot; the working form is:
+
+```bash
+TRUSTED_HOSTS='["api.example.com"]'
+CORS_ORIGINS='["https://app.example.com"]'
+```
+
 ## Out of scope / next
 
 Trust & safety (disputes/chargebacks and partial refunds, seller→buyer
@@ -268,4 +309,9 @@ reviews, moderation — suspension, comment takedown, and counterparty
 abuse reports — and notification preferences now all ship; see Disputes
 above, the Buyer/Seller/Admin endpoints, and Notification preferences
 below; fee-aware margin math ships too — see the margins summary),
-push/SMS channels, admin RBAC, and OAuth/social login. See `ROADMAP.md`.
+and observability & ops ship too (request-id tracing, JSON access
+logging, a global error envelope, an admin stats snapshot, retention
+sweeps, and API hardening — body cap, TrustedHost, CORS, pagination —
+see the Observability & ops section above). Still out of scope:
+push/SMS channels, gateway rate-limiting, admin RBAC, and OAuth/social
+login. See `ROADMAP.md`.
