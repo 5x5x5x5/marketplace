@@ -17,13 +17,19 @@ os.environ.setdefault("STRIPE_SECRET_KEY", "")
 os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
 os.environ.setdefault("SMTP_HOST", "")  # the suite must never send real mail
 
+import socket
+import threading
+import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 
 import email_validator
+import httpx
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from marketplace import api
 from marketplace.auth import _hash_token, hash_password  # pyright: ignore[reportPrivateUsage]
@@ -171,3 +177,53 @@ def seed_rating() -> Callable[[str, int, int], None]:
             s.commit()
 
     return _seed
+
+
+@pytest.fixture(scope="session")
+def live_server() -> Iterator[str]:
+    """A real uvicorn on a socket. TestClient awaits the full app cycle —
+    dependency teardown included — so it is structurally blind to
+    response-vs-commit ordering (finding F2); only a network client can see it.
+    lifespan="off" is deliberate: the maintenance loop must not drain/sweep
+    the shared test DB underneath other tests."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    config = uvicorn.Config(
+        api.app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            if httpx.get(f"{base}/healthz", timeout=1).status_code == 200:
+                break
+        except httpx.HTTPError:
+            time.sleep(0.05)
+    else:
+        raise RuntimeError("live server failed to start")
+    yield base
+    server.should_exit = True
+    thread.join(timeout=5)
+
+
+@pytest.fixture
+def slow_commits(monkeypatch: pytest.MonkeyPatch) -> dict[str, float]:
+    """150ms Session.commit + a timestamp of the last completed commit.
+    Turns the response-vs-commit race into a deterministic assertion: pre-fix
+    the client holds the response while the commit is still sleeping; post-fix
+    responses are simply 150ms slower."""
+    box: dict[str, float] = {}
+    real_commit = Session.commit
+
+    def timed_commit(self: Session) -> None:
+        time.sleep(0.15)
+        real_commit(self)
+        box["last_commit_done"] = time.monotonic()
+
+    monkeypatch.setattr(Session, "commit", timed_commit)
+    return box

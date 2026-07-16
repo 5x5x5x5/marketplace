@@ -26,6 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.routing import APIRoute
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -42,7 +43,7 @@ from .auth import (
     current_seller,
     require_admin,
 )
-from .db import SessionLocal, get_session, init_db
+from .db import CommitRoute, SessionLocal, get_session, init_db
 from .entities import (
     Adjustment,
     AuditLog,
@@ -370,7 +371,7 @@ def _count_by(session: Session, column: Any, enum: type[StrEnum]) -> dict[str, i
 
 # ---------- Reports router ----------
 
-reports_router = APIRouter(prefix="/v1", tags=["reports"])
+reports_router = APIRouter(prefix="/v1", tags=["reports"], route_class=CommitRoute)
 ParticipantClaims = Annotated[Claims, Depends(current_participant)]
 
 
@@ -453,7 +454,7 @@ def my_reports(session: SessionDep, claims: ParticipantClaims) -> list[Report]:
 
 # ---------- Notification preferences router ----------
 
-prefs_router = APIRouter(prefix="/v1", tags=["preferences"])
+prefs_router = APIRouter(prefix="/v1", tags=["preferences"], route_class=CommitRoute)
 
 
 def _pref_rows(session: Session, claims: Claims) -> list[NotificationPreferenceOut]:
@@ -550,7 +551,7 @@ def _job_reviews(session: Session, job_id: UUID) -> list[JobReviewOut]:
     return out
 
 
-buyer_router = APIRouter(prefix="/v1", tags=["buyer"])
+buyer_router = APIRouter(prefix="/v1", tags=["buyer"], route_class=CommitRoute)
 
 
 @buyer_router.post("/quotes", response_model=QuoteOut)
@@ -826,7 +827,7 @@ def list_job_reviews_buyer(
 
 # ---------- Seller router ----------
 
-seller_router = APIRouter(prefix="/v1/seller", tags=["seller"])
+seller_router = APIRouter(prefix="/v1/seller", tags=["seller"], route_class=CommitRoute)
 
 
 def _expire_open_offers(session: Session, job_id: UUID) -> None:
@@ -1203,7 +1204,12 @@ def complete_job(
 
 # ---------- Admin router ----------
 
-admin_router = APIRouter(prefix="/v1/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+admin_router = APIRouter(
+    prefix="/v1/admin",
+    tags=["admin"],
+    dependencies=[Depends(require_admin)],
+    route_class=CommitRoute,
+)
 
 
 @admin_router.get("/config")
@@ -1917,7 +1923,7 @@ def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict
 
 # ---------- Payments router (webhooks) ----------
 
-payments_router = APIRouter(prefix="/v1/payments", tags=["payments"])
+payments_router = APIRouter(prefix="/v1/payments", tags=["payments"], route_class=CommitRoute)
 
 
 def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
@@ -2084,6 +2090,9 @@ async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str,
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Re-assert at startup too: the module-level check fails open for any
+    # router registered after it (e.g. a conditional include below it).
+    _assert_commit_routes(app)
     # Create tables for SQLite/dev. Production applies Alembic migrations instead.
     if settings.database_url.startswith("sqlite"):
         init_db()
@@ -2130,3 +2139,20 @@ app.include_router(admin_router)
 app.include_router(reports_router)
 app.include_router(prefs_router)
 app.include_router(payments_router)
+
+
+def _assert_commit_routes(app: FastAPI) -> None:
+    """Every /v1 route must commit-before-response (finding F2); a plain
+    APIRoute would silently regress to commit-in-teardown."""
+    rogue = [
+        route.path
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        and not isinstance(route, CommitRoute)
+        and route.path.startswith("/v1")
+    ]
+    if rogue:
+        raise RuntimeError(f"routes missing route_class=CommitRoute (finding F2): {rogue}")
+
+
+_assert_commit_routes(app)

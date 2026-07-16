@@ -224,6 +224,12 @@ Postgres behind adapters so none of these choices lock you in. When ready:
   Wired against `stripe` 15.3.0's `.v1` namespace; verified end-to-end on a
   real Stripe test account 2026-07-13 (onboarding, charge, signed webhooks,
   transfer). Going live is a dashboard activation + `sk_live` key swap, not code.
+- **Capacity coupling under load** — sync endpoints share one threadpool
+  with DB-connection waiters, so at saturation the pool (size 5 + overflow
+  10 by default) convoys into truthful 500 waves rather than queueing
+  gracefully. Scale `pool_size`/`max_overflow` with workers and put gateway
+  rate-limiting (fork work) in front; the app-side behavior is honest
+  backpressure, not data loss.
 - **Lock-in traps** — hosted Sharetribe (can't take the backend), Supabase
   auth+DB coupling, Auth0/Clerk cliffs, RDS proprietary features.
 

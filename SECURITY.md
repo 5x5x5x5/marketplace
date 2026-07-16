@@ -65,10 +65,12 @@ below.
   env-driven (`STRIPE_SECRET_KEY`) with no runtime override, so this is a
   deployment-configuration risk, not a code path an attacker can toggle.
 - **Residual:** a DB commit failure after a successful provider mutation leaves
-  the provider briefly ahead of the database — charge and refund self-heal on
-  retry via idempotency-key replay, void self-heals via the idempotent cancel
-  (already-canceled counts as success), and a transactional outbox is the
-  eventual upgrade path.
+  the provider briefly ahead of the database — the client receives a truthful
+  500 envelope (not a false 200; `db.CommitRoute` commits before the response
+  is sent, so a commit failure is reported, never silently swallowed), and the
+  provider-ahead-of-DB window self-heals as before: charge and refund via
+  idempotency-key replay, void via the idempotent cancel (already-canceled
+  counts as success). A transactional outbox is the eventual upgrade path.
 
 ## Update — real-user auth
 
@@ -346,6 +348,23 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   endpoint should echo a secret belonging to a **different** principal
   into a stored idempotency response; audit any future secret-returning
   POST against that bar, not against "does it return a secret at all."
+- **The replay record is durable before the response is sent (finding
+  F2b).** `IdempotencyMiddleware` buffers the downstream app's response,
+  commits the `IdempotencyRecord`, and only then forwards the buffered
+  response to the client — never the reverse — so a sequential same-key
+  retry always replays byte-identical rather than racing an in-flight
+  commit and re-executing the operation
+  (`tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical`).
+  A failure storing the record is deliberately non-fatal: it's logged and
+  swallowed rather than raised, because the domain work already committed
+  (`CommitRoute` ran inside the buffered call) — turning a successful
+  operation into a 500 over a missed replay row would be strictly worse
+  (`tests/test_idempotency.py::test_store_failure_never_fails_a_committed_operation`).
+  This doesn't change the documented concurrent-duplicate posture above:
+  two truly simultaneous requests with the same key can still both
+  execute (the unique constraint drops one stored record; the DB row
+  locks downstream keep the duplicate call safe) — this is ordering for
+  the sequential-retry case, not a new exactly-once guarantee.
 
 ## Threat model (pilot)
 

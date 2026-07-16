@@ -51,7 +51,15 @@ severity, status.
   committing after the handler, before response construction. Plus a
   regression test that talks to a REAL uvicorn over a socket (the only
   honest harness for this class).
-- **Status:** OPEN.
+- **Status:** FIXED (branch fix-commit-ordering). `CommitRoute` (`db.py`)
+  commits the session on `run_in_threadpool` after the handler returns but
+  before the response reaches the sender, never in `get_session` teardown;
+  every router sets `route_class=CommitRoute`, enforced at import time by
+  `_assert_commit_routes`. Regression tests:
+  `test_commit_lands_before_client_has_response`,
+  `test_read_your_writes_over_socket`,
+  `test_failed_commit_returns_500_envelope_and_persists_nothing`,
+  `test_commit_route_invariant_catches_rogue_router`.
 
 ### F2 addenda (from the 30-transaction gauntlet)
 
@@ -65,6 +73,17 @@ severity, status.
   (got 404 where the first call got the job — the row locks kept it SAFE,
   but the idempotency contract didn't hold). Fix rides with F2: buffer,
   store, then send (responses are small JSON; streaming isn't used here).
+  **Status:** FIXED (branch fix-commit-ordering). `IdempotencyMiddleware`
+  (`idempotency.py`) now buffers the downstream response, commits the
+  `IdempotencyRecord`, and only then sends the buffered response —
+  never the reverse; a record-store failure is logged and swallowed
+  rather than raised, since the domain work already committed and a
+  missed replay row beats failing a successful operation. Regression
+  test: `test_same_key_immediate_retry_replays_byte_identical` (a
+  sequential same-key retry against a single worker can't even race the
+  ordering, so the test uses a second uvicorn instance to reproduce the
+  topology the field observation actually hit); store-failure trade
+  covered by `test_store_failure_never_fails_a_committed_operation`.
 
 ## F3 — README dispute-endpoint line omits the /seller prefix (doc nit)
 
@@ -72,7 +91,8 @@ severity, status.
   route is `GET /v1/seller/jobs/{id}/dispute` (api.py:965). The unprefixed
   path 403s a seller ("buyer credentials required") — misled the gauntlet,
   will mislead a fork developer. One-line doc fix.
-- **Status:** OPEN (trivial).
+- **Status:** FIXED (branch fix-commit-ordering). README's Disputes line's
+  seller entry now reads `GET /v1/seller/jobs/{id}/dispute`.
 
 ## F4 — Creation endpoints disagree on 200 vs 201 (consistency nit)
 
@@ -141,3 +161,20 @@ one job per quote) but the loser got a 404 instead of a replay — the
 idempotency middleware's admitted concurrent race, same family as F2b. The
 "52 offerless pending jobs" in the raw output were a script artifact (offers
 had gone to the seed seller the script didn't poll).
+
+## Load-probe notes (F2 final review, 2026-07-16) — pre-existing, riding
+
+Both reproduce identically on pre-fix code (A/B via dependency override);
+neither is a regression from the commit-ordering branch:
+
+- **Saturation convoy:** at ~80 concurrent writes with slow commits, the
+  connection pool (size 5 + overflow 10) and the shared threadpool couple
+  into 30s waves of truthful pool-timeout 500s. Architectural to sync-
+  endpoints-on-FastAPI; a dedicated commit limiter doesn't rescue it.
+  Fork-scale guidance: raise pool_size/max_overflow with worker count, put
+  gateway rate-limiting in front (already fork work). Note added to
+  ROADMAP's infra section.
+- **`repo.get_platform_config` cold-start get-or-create race:** concurrent
+  first writes can collide on the singleton PK insert; loser gets a truthful
+  500 and the next request self-heals. One-line future fix (catch
+  IntegrityError, or seed the row in init_db/migration #11 if ever touched).

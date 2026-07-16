@@ -6,11 +6,21 @@ outcomes — a suspended-then-reinstated principal must not replay a stale
 403 forever) and 5xx. The same key on a different path is a 409. Uses its
 own short-lived DB sessions, separate from the request's.
 
+The downstream app's response is buffered in memory and only forwarded to
+the client AFTER the IdempotencyRecord commit (finding F2b): the record must
+be durable before the client can possibly retry, or an immediate same-key
+retry can re-execute instead of replaying. A failure storing the record
+(anything short of the IntegrityError-duplicate case below) is logged and
+swallowed rather than raised: the domain work already committed, so a missed
+replay record beats turning a successful operation into a 500.
+
 ponytail: the store races on truly concurrent duplicates — both execute, the
 unique constraint drops one record, and the DB row locks downstream already
 make the duplicate call safe. A reserve-then-execute two-phase insert is the
 upgrade if exactly-once matters more than simplicity.
 """
+
+import logging
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +31,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .auth import peek_principal
 from .db import SessionLocal
 from .entities import IdempotencyRecord
+
+logger = logging.getLogger("marketplace.idempotency")
 
 MAX_KEY_LENGTH = 200
 
@@ -83,34 +95,47 @@ class IdempotencyMiddleware:
 
         captured_status = 500
         captured_body = b""
+        buffered: list[Message] = []
 
-        async def record_send(message: Message) -> None:
+        async def buffer_send(message: Message) -> None:
             nonlocal captured_status, captured_body
             if message["type"] == "http.response.start":
                 captured_status = int(message["status"])
             elif message["type"] == "http.response.body":
                 captured_body += bytes(message.get("body", b""))
-            await send(message)
+            buffered.append(message)
 
-        await self.app(scope, receive, record_send)
+        await self.app(scope, receive, buffer_send)
 
-        # int(...) re-widens the type: pyright can't see that record_send (an
+        # int(...) re-widens the type: pyright can't see that buffer_send (an
         # opaque callback passed to self.app) is what actually reassigns
         # captured_status, so without this it stays narrowed to Literal[500]
         # and flags the auth-status exclusion below as an always-true no-op.
         status = int(captured_status)
         if status < 500 and status != 401 and status != 403:
-            with SessionLocal() as session:
-                session.add(
-                    IdempotencyRecord(
-                        principal=principal,
-                        key=key,
-                        path=path,
-                        response_status=status,
-                        response_body=captured_body.decode("utf-8", errors="replace"),
+            try:
+                with SessionLocal() as session:
+                    session.add(
+                        IdempotencyRecord(
+                            principal=principal,
+                            key=key,
+                            path=path,
+                            response_status=status,
+                            response_body=captured_body.decode("utf-8", errors="replace"),
+                        )
                     )
+                    try:
+                        session.commit()
+                    except IntegrityError:
+                        session.rollback()  # concurrent duplicate won the insert; fine
+            except Exception:
+                # The domain work is already committed (CommitRoute ran inside
+                # self.app above) — a missed replay record beats failing a
+                # successful operation.
+                logger.warning(
+                    "idempotency store failed for %s %s; response sent without replay record",
+                    principal,
+                    path,
                 )
-                try:
-                    session.commit()
-                except IntegrityError:
-                    session.rollback()  # concurrent duplicate won the insert; fine
+        for message in buffered:
+            await send(message)

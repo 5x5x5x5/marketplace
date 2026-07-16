@@ -1,5 +1,8 @@
 """Client Idempotency-Key semantics on money-mutating POSTs."""
 
+import logging
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -122,3 +125,35 @@ def test_auth_paths_never_stored_even_with_key_and_bearer(client: TestClient) ->
     again = client.post("/v1/auth/login", json=creds, headers=stamped)
     assert again.status_code == 200
     assert again.json()["token"] != login_token
+
+
+def test_store_failure_never_fails_a_committed_operation(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The domain work commits before the record store; a store failure must
+    log and still send the success response — a missed replay record beats
+    500ing a successful operation.
+
+    Patches IdempotencyRecord.__init__ only, not the module symbol: the early
+    replay-lookup SELECT also references IdempotencyRecord and must survive
+    unchanged, so only the later store-side construction should explode."""
+    from marketplace.entities import IdempotencyRecord
+
+    def boom_init(self: object, **_: object) -> None:
+        raise RuntimeError("store exploded (induced)")
+
+    monkeypatch.setattr(IdempotencyRecord, "__init__", boom_init)
+    buyer = auth("buyer", "alice")
+    q = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer)
+    with caplog.at_level(logging.WARNING, logger="marketplace.idempotency"):
+        r = client.post(
+            "/v1/jobs",
+            json={"quote_id": q.json()["id"]},
+            headers=buyer | {"Idempotency-Key": "boom-key"},
+        )
+    assert r.status_code == 200, r.text  # the job was created and committed
+    assert any("idempotency store failed" in rec.getMessage() for rec in caplog.records)
