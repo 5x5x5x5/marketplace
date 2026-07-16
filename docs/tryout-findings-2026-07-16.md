@@ -161,3 +161,20 @@ one job per quote) but the loser got a 404 instead of a replay — the
 idempotency middleware's admitted concurrent race, same family as F2b. The
 "52 offerless pending jobs" in the raw output were a script artifact (offers
 had gone to the seed seller the script didn't poll).
+
+## Load-probe notes (F2 final review, 2026-07-16) — pre-existing, riding
+
+Both reproduce identically on pre-fix code (A/B via dependency override);
+neither is a regression from the commit-ordering branch:
+
+- **Saturation convoy:** at ~80 concurrent writes with slow commits, the
+  connection pool (size 5 + overflow 10) and the shared threadpool couple
+  into 30s waves of truthful pool-timeout 500s. Architectural to sync-
+  endpoints-on-FastAPI; a dedicated commit limiter doesn't rescue it.
+  Fork-scale guidance: raise pool_size/max_overflow with worker count, put
+  gateway rate-limiting in front (already fork work). Note added to
+  ROADMAP's infra section.
+- **`repo.get_platform_config` cold-start get-or-create race:** concurrent
+  first writes can collide on the singleton PK insert; loser gets a truthful
+  500 and the next request self-heals. One-line future fix (catch
+  IntegrityError, or seed the row in init_db/migration #11 if ever touched).

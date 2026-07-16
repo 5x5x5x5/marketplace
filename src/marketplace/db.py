@@ -4,9 +4,11 @@
 request. Unlike a plain `APIRoute`, `CommitRoute` (below) commits the session
 *before* the response is handed back to the sender — never in dependency
 teardown, which FastAPI runs after the response is already on the wire
-(finding F2). A 4xx/5xx never persists partial work: `CommitRoute` only
-commits on responses under 400, and `get_session`'s teardown always closes
-the session, which discards (rolls back) anything left uncommitted.
+(finding F2). A 4xx/5xx never persists work since the last handler-owned
+commit (the dispute-resolve pin deliberately commits mid-handler):
+`CommitRoute` only commits on responses under 400, and `get_session`'s
+teardown always closes the session, which discards (rolls back) anything
+left uncommitted.
 """
 
 from collections.abc import Callable, Coroutine, Iterator

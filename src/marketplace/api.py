@@ -2090,6 +2090,9 @@ async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str,
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Re-assert at startup too: the module-level check fails open for any
+    # router registered after it (e.g. a conditional include below it).
+    _assert_commit_routes(app)
     # Create tables for SQLite/dev. Production applies Alembic migrations instead.
     if settings.database_url.startswith("sqlite"):
         init_db()
