@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     smtp_starttls: bool = True
     mail_from: str = "marketplace@localhost"
 
+    # Observability. JSON logs by default; LOG_FORMAT=plain for dev readability.
+    log_format: str = "json"
+
     # Disputes: buyer-opened arbitration on completed jobs.
     dispute_window_days: int = 7
     chargeback_fee_usd: Decimal = Decimal("15.00")  # provider fee on a lost chargeback

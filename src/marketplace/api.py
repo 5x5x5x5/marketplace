@@ -126,6 +126,7 @@ from .models import (
     UserStatus,
     to_money,
 )
+from .observability import RequestIdMiddleware, configure_logging
 from .payments import get_provider
 from .payments.port import PaymentError, PaymentEvent, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY, PricingContext, run_pipeline
@@ -1964,8 +1965,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await maintenance
 
 
+configure_logging()
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(IdempotencyMiddleware)
+app.add_middleware(RequestIdMiddleware)  # added last = outermost; Task 4 inserts between
 
 
 @app.get("/healthz")
