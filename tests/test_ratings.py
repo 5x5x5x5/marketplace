@@ -30,7 +30,7 @@ def test_review_updates_seller_rating(
 ) -> None:
     job_id = _run_job_to_completion(client, auth, basic_service, "carol", "alice")
     r = client.post(f"/v1/jobs/{job_id}/review", json={"rating": 4}, headers=auth("buyer", "alice"))
-    assert r.status_code == 200
+    assert r.status_code == 201
 
     profile = client.get("/v1/seller/profile", headers=auth("seller", "carol")).json()
     assert profile["rating"] == 4.0
@@ -42,7 +42,7 @@ def test_cannot_review_twice(client: TestClient, basic_service: str, auth: AuthF
     buyer = auth("buyer", "alice")
     assert (
         client.post(f"/v1/jobs/{job_id}/review", json={"rating": 5}, headers=buyer).status_code
-        == 200
+        == 201
     )
     assert (
         client.post(f"/v1/jobs/{job_id}/review", json={"rating": 1}, headers=buyer).status_code

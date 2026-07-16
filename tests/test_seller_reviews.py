@@ -79,7 +79,7 @@ def test_seller_reviews_buyer_happy_path_and_aggregate(
         json={"rating": 4, "comment": "prompt payment"},
         headers=auth("seller", "s1"),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     body = r.json()
     assert "buyer_id" not in body  # asymmetry doctrine: sellers never see buyer identity
     assert body["rating"] == 4
@@ -92,7 +92,7 @@ def test_seller_reviews_buyer_happy_path_and_aggregate(
     r = client.post(
         f"/v1/seller/jobs/{job2['id']}/review", json={"rating": 1}, headers=auth("seller", "s1")
     )
-    assert r.status_code == 200
+    assert r.status_code == 201
 
     from marketplace.entities import BuyerProfile
 
@@ -138,7 +138,7 @@ def test_review_duplicate_409(client: TestClient, basic_service: str, auth: Auth
         client.post(
             f"/v1/seller/jobs/{job_id}/review", json={"rating": 5}, headers=seller
         ).status_code
-        == 200
+        == 201
     )
     r = client.post(f"/v1/seller/jobs/{job_id}/review", json={"rating": 1}, headers=seller)
     assert r.status_code == 409
@@ -171,7 +171,7 @@ def test_concurrent_duplicate_review_races_to_409(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         codes = sorted(pool.map(submit, range(2)))
-    assert codes == [200, 409], codes
+    assert codes == [201, 409], codes
 
     from marketplace.entities import SellerReview
 

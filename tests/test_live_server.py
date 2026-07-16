@@ -66,7 +66,7 @@ def test_commit_lands_before_client_has_response(
     with httpx.Client(base_url=live_server, timeout=10) as c:
         r = c.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer)
         received = time.monotonic()
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     assert "last_commit_done" in slow_commits, (
         "no commit was recorded for this request by the time the client received its "
         "response (F2): the response reached the client before the transaction committed"
@@ -86,9 +86,9 @@ def test_read_your_writes_over_socket(
     with httpx.Client(base_url=live_server, timeout=10) as c:
         for i in range(100):
             q = c.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer)
-            assert q.status_code == 200, q.text
+            assert q.status_code == 201, q.text
             j = c.post("/v1/jobs", json={"quote_id": q.json()["id"]}, headers=buyer)
-            assert j.status_code == 200, f"iteration {i}: fresh quote invisible: {j.text}"
+            assert j.status_code == 201, f"iteration {i}: fresh quote invisible: {j.text}"
             c.post(f"/v1/jobs/{j.json()['id']}/cancel", headers=buyer)
 
 
@@ -170,8 +170,8 @@ def test_same_key_immediate_retry_replays_byte_identical(
             key = {"Idempotency-Key": "f2b-retry-key"}
             first = c1.post("/v1/jobs", json={"quote_id": q.json()["id"]}, headers=buyer | key)
             second = c2.post("/v1/jobs", json={"quote_id": q.json()["id"]}, headers=buyer | key)
-        assert first.status_code == 200, first.text
-        assert second.status_code == 200, second.text
+        assert first.status_code == 201, first.text
+        assert second.status_code == 201, second.text
         assert second.text == first.text, "same-key retry did not replay byte-identical"
     finally:
         server2.should_exit = True

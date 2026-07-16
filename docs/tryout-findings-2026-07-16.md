@@ -99,7 +99,20 @@ severity, status.
 - `POST /v1/auth/signup` and `POST /v1/jobs/{id}/dispute` return 201;
   `POST /v1/quotes` and `POST /v1/jobs` return 200. Cosmetic API-design
   inconsistency; a fork building a client will trip on it once.
-- **Status:** OPEN (low; decide a convention and align, or document).
+- **Fix shape:** convention decided — POSTs that CREATE a durable resource
+  return 201; POSTs that act on an existing resource (accept/decline/
+  complete/cancel/login/logout/verify/resolve/suspend/reinstate/hide/unhide/
+  drain/retry/sweep/onboard/availability/webhook) stay 200. The seven
+  creation endpoints: `POST /v1/auth/signup`, `POST /v1/quotes`,
+  `POST /v1/jobs`, `POST /v1/jobs/{id}/review`,
+  `POST /v1/seller/jobs/{id}/review`, `POST /v1/jobs/{id}/dispute`,
+  `POST /v1/reports`.
+- **Status:** FIXED (branch f4-created-status). `api.py` now declares
+  `status_code=201` on `create_quote`, `create_job`, `review_job`, and
+  `review_buyer`, joining the pre-existing 201s on signup/dispute/reports.
+  Regression test `test_creation_posts_declare_201_action_posts_declare_200`
+  (`tests/test_hardening.py`) reads `GET /openapi.json` and pins all seven
+  creation paths to 201 and spot-checks two action endpoints stay 200.
 
 ## Verified-good under the gauntlet (30 transactions)
 

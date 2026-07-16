@@ -554,7 +554,7 @@ def _job_reviews(session: Session, job_id: UUID) -> list[JobReviewOut]:
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"], route_class=CommitRoute)
 
 
-@buyer_router.post("/quotes", response_model=QuoteOut)
+@buyer_router.post("/quotes", response_model=QuoteOut, status_code=201)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
     _require_active(session, buyer_id)
     cfg = repo.load_pricing_config(session, req.service_type_id)
@@ -618,7 +618,7 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
     return quote
 
 
-@buyer_router.post("/jobs", response_model=BuyerJobView)
+@buyer_router.post("/jobs", response_model=BuyerJobView, status_code=201)
 def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) -> Job:
     _require_active(session, buyer_id)
     quote = session.get(Quote, req.quote_id, with_for_update=True)
@@ -725,7 +725,7 @@ def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
     return repo.get_or_create_buyer(session, buyer_id)
 
 
-@buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut)
+@buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut, status_code=201)
 def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id: BuyerId) -> Review:
     _require_active(session, buyer_id)
     job = session.get(Job, job_id)
@@ -991,7 +991,7 @@ def list_job_reviews_seller(
     return _job_reviews(session, job_id)
 
 
-@seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut)
+@seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut, status_code=201)
 def review_buyer(
     job_id: UUID, body: ReviewRequest, session: SessionDep, seller_id: SellerId
 ) -> SellerReview:

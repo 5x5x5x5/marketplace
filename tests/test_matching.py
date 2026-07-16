@@ -25,7 +25,7 @@ def _make_job(client: TestClient, auth: AuthFactory, sid: str, buyer: str = "ali
         "/v1/quotes", json={"service_type_id": sid}, headers=auth("buyer", buyer)
     ).json()["id"]
     r = client.post("/v1/jobs", json={"quote_id": qid}, headers=auth("buyer", buyer))
-    assert r.status_code == 200, r.json()
+    assert r.status_code == 201, r.json()
 
 
 def _offered_to(client: TestClient, auth: AuthFactory, names: list[str]) -> str:

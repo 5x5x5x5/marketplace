@@ -211,7 +211,7 @@ def _reviewed_job(client: TestClient, basic_service: str, auth: AuthFactory) -> 
         json={"rating": 2, "comment": "rude and late"},
         headers=auth("buyer", "alice"),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     return str(job["id"])
 
 
@@ -410,7 +410,7 @@ def test_idempotency_does_not_replay_stale_suspension_403(
     client.post("/v1/admin/users/alice/reinstate", headers=admin)
 
     r2 = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=keyed)
-    assert r2.status_code == 200, r2.text
+    assert r2.status_code == 201, r2.text
 
 
 def test_idempotency_does_not_replay_stale_report_403(
@@ -458,7 +458,7 @@ def _double_reviewed_job(client: TestClient, basic_service: str, auth: AuthFacto
         json={"rating": 4, "comment": "prompt buyer"},
         headers=auth("seller", "s1"),
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 201, r.text
     return job_id
 
 

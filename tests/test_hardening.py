@@ -24,7 +24,7 @@ def test_normal_body_passes(client: TestClient, auth: AuthFactory, basic_service
     r = client.post(
         "/v1/quotes", json={"service_type_id": basic_service}, headers=auth("buyer", "alice")
     )
-    assert r.status_code == 200
+    assert r.status_code == 201
 
 
 def test_oversized_413_not_stored_for_replay(client: TestClient, auth: AuthFactory) -> None:
@@ -121,3 +121,29 @@ def test_admin_lists_paginate(client: TestClient, auth: AuthFactory, admin: Head
     # reviews + reports accept the params too (empty lists are fine)
     assert client.get("/v1/admin/reviews/buyer?limit=1", headers=admin).status_code == 200
     assert client.get("/v1/admin/reports?limit=1", headers=admin).status_code == 200
+
+
+def test_creation_posts_declare_201_action_posts_declare_200(client: TestClient) -> None:
+    """Convention (F4): POSTs that CREATE a durable resource return 201; POSTs
+    that act on an existing resource (accept/decline/complete/cancel/etc.)
+    return 200. Pinned against drift via the OpenAPI schema itself."""
+    spec = client.get("/openapi.json").json()
+    paths = spec["paths"]
+    creators = [
+        "/v1/auth/signup",
+        "/v1/quotes",
+        "/v1/jobs",
+        "/v1/jobs/{job_id}/review",
+        "/v1/seller/jobs/{job_id}/review",
+        "/v1/jobs/{job_id}/dispute",
+        "/v1/reports",
+    ]
+    for path in creators:
+        responses = paths[path]["post"]["responses"]
+        assert "201" in responses, f"{path} does not declare 201: {list(responses)}"
+
+    # Spot-check: action POSTs stay 200, not 201.
+    for path in ("/v1/seller/offers/{offer_id}/accept", "/v1/jobs/{job_id}/cancel"):
+        responses = paths[path]["post"]["responses"]
+        assert "200" in responses, f"{path} does not declare 200: {list(responses)}"
+        assert "201" not in responses, f"{path} unexpectedly declares 201"
