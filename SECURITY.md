@@ -314,9 +314,11 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   replaying the cached response — but the money paths stay safe regardless,
   the same way: the offer/job state machine 409s a repeat accept/decline
   against an already-resolved offer, a consumed quote 404s or 410s on a
-  second `POST /jobs`, and the actual charge carries its own
-  provider-side idempotency key (`charge:{job_id}`, independent of the
-  client's header) that de-dupes the money movement itself.
+  second `POST /jobs`, and the charge carries its own provider-side
+  idempotency key (`charge:{job_id}`, independent of the client's header)
+  as an extra short-horizon layer — providers retain such keys briefly
+  (Stripe: ~24h), so it's the state-machine guards, not the provider key,
+  that hold at any age.
 - **Body cap default is 1 MiB (`MAX_BODY_BYTES=1_048_576`).** Checked
   against a declared `Content-Length` up front (fast rejection, no body
   read) and independently counted on chunked/streamed bodies so a caller
@@ -353,8 +355,8 @@ query param. Three roles: `buyer`, `seller`, `admin`, each resolved from an
 secret, not a caller-supplied claim. This is enough to give real users
 distinct, unspoofable, revocable identities; the residuals above (no
 rate-limiting, the reset-timing delta, verification gating nothing) are
-named pilot-grade gaps, not silent ones. See `ROADMAP.md` for what's still
-ahead (admin RBAC, OAuth/social login).
+named pilot-grade gaps, not silent ones. See `ROADMAP.md` for what stays
+fork work (admin RBAC, gateway rate-limiting, OAuth/social login).
 
 ## Findings and status
 

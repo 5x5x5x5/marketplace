@@ -10,7 +10,7 @@ buyer's payment-due email (an unnoticed `AWAITING_PAYMENT` job dies by sweep
 in 30 minutes) — delivered reliably, without new dependencies, and closing the
 ROADMAP background-scheduler item along the way.
 
-## Decisions (confirmed with Danny)
+## Decisions (maintainer-confirmed)
 
 1. **Core lifecycle event set** — seven kinds (below); kitchen-sink extras
    (payout receipts, review nudges, digests) deferred.

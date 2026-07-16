@@ -11,7 +11,7 @@ users a way to surface abuse (reports). No automation: resolving a report
 never auto-suspends or auto-hides — admins wield the tools explicitly and the
 report is the paper trail. Everything is audited; nothing is ever deleted.
 
-## Decisions (Danny, 2026-07-14)
+## Decisions (maintainer, 2026-07-14)
 
 1. **Scope:** user suspension + content takedown + reporting pipeline.
    **Deferred to roadmap:** abuse signals/limits (automatic counters,

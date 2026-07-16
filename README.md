@@ -18,8 +18,8 @@ FastAPI · Pydantic v2 · SQLAlchemy 2.0 + Alembic · Postgres (SQLite for local
    jobs they can hold at once).
 2. Buyer requests a quote. The platform runs a buyer-side adjuster pipeline over a
    base price, and probes seller-side payouts; if the implied margin would fall
-   below the configured floor the buyer price is bumped up (or the quote is
-   rejected if the bump exceeds a ceiling).
+   below the configured floor *plus the estimated provider fee* the buyer price
+   is bumped up (or the quote is rejected if the bump exceeds a ceiling).
 3. Buyer creates a job from the quote. The matching strategy picks an eligible
    seller (spare capacity, clears the floor) and sends them an **offer**. If none
    fit, the job is returned `expired` — no silent dead-ends.
@@ -188,10 +188,14 @@ Configuring a real Stripe account: point its webhook at
 
 ## Notifications
 
-Seven lifecycle events email the right party: the seller's new-offer alert
+Fourteen lifecycle events email the right party: the seller's new-offer alert
 (the one that makes 2-minute offer TTLs livable), the buyer's
 accepted/payment-due, completed, expired, and refund notices, a cancel notice
-to a committed seller, and a payout-failure alert to every admin.
+to a committed seller, dispute outcomes to both sides, and report/payout-failure
+alerts to every admin. Recipients tune this per kind via
+`GET/PUT /v1/notification-preferences` (role-scoped mutes) — except four
+money-critical kinds (refunds, dispute outcomes, payout failures) that can
+never be muted by any path; see `SECURITY.md`.
 
 Delivery is a **transactional outbox**: the state transition and its
 `notifications` row commit in the same transaction (a rolled-back accept never
@@ -302,16 +306,12 @@ TRUSTED_HOSTS='["api.example.com"]'
 CORS_ORIGINS='["https://app.example.com"]'
 ```
 
-## Out of scope / next
+## Out of scope (fork work)
 
-Trust & safety (disputes/chargebacks and partial refunds, seller→buyer
-reviews, moderation — suspension, comment takedown, and counterparty
-abuse reports — and notification preferences now all ship; see Disputes
-above, the Buyer/Seller/Admin endpoints, and Notification preferences
-below; fee-aware margin math ships too — see the margins summary),
-and observability & ops ship too (request-id tracing, JSON access
-logging, a global error envelope, an admin stats snapshot, retention
-sweeps, and API hardening — body cap, TrustedHost, CORS, pagination —
-see the Observability & ops section above). Still out of scope:
-push/SMS channels, gateway rate-limiting, admin RBAC, and OAuth/social
-login. See `ROADMAP.md`.
+The template is feature-complete — the full record is in `ROADMAP.md`.
+What's deliberately left to a fork: push/SMS notification channels,
+notification digests, gateway rate-limiting, admin RBAC (one shared admin
+role here), OAuth/social login, automatic abuse signals/limits
+(report-count thresholds, auto-suspend — fork-specific heuristics, not a
+generic default), and seller bidding (this is a managed marketplace, not
+an auction).

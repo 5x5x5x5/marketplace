@@ -9,7 +9,7 @@ sessions, password reset, and email verification — so a fork can pilot with
 hundreds of self-service users instead of hand-minted tokens. This is the last
 gap that makes a pilot impossible.
 
-## Decisions (confirmed with Danny)
+## Decisions (maintainer-confirmed)
 
 1. **Separate buyer and seller accounts.** One account carries exactly one
    role; acting as both sides means two accounts. Tokens keep single-role

@@ -9,10 +9,10 @@
 Close the review loop: sellers rate buyers after a completed job, mirroring the
 existing buyer→seller review exactly. The buyer aggregate is **display-only** —
 it gates nothing (no matching changes, no offer surfacing, no thresholds).
-Danny's explicit calls: display-only; independent reviews (no double-blind —
+The maintainer's explicit calls: display-only; independent reviews (no double-blind —
 retaliation has no teeth while ratings gate nothing; revisit when they do).
 
-## Decisions (Danny, 2026-07-14)
+## Decisions (maintainer, 2026-07-14)
 
 1. **Effect of a buyer rating:** display only. Aggregate visible to the buyer
    (own profile) and admins. Not shown to sellers pre-accept; does not touch

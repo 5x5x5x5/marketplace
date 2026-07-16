@@ -130,8 +130,8 @@ pilot HMAC; separate buyer/seller/admin accounts; argon2 passwords; admin
 bootstrap from env; email verification + password reset over an `EmailSender`
 port — residuals: no login rate-limiting, a reset-timing delta, verification
 gates nothing yet; see `SECURITY.md`) · **notifications + background
-scheduler** (transactional outbox: seven lifecycle events enqueued inside the
-domain transaction with role-safe payload snapshots; drained with
+scheduler** (transactional outbox: lifecycle events — 14 kinds today —
+enqueued inside the domain transaction with role-safe payload snapshots; drained with
 retry/backoff by an in-process maintenance loop that also runs the sweeps on
 a clock — offers, stale payments, and sessions now expire without traffic;
 stdlib SMTP adapter behind `SMTP_HOST`, console adapter otherwise; admin
@@ -171,7 +171,7 @@ hot-path indexes; migration #10; see `SECURITY.md`).
 
 **The template is feature-complete.** Trust & safety (four sub-phases) and
 observability & ops are both done — see "Where we are" and "Done ✓" above.
-What remains below is fork work by decision (Danny, 2026-07-15): genuinely
+What remains below is fork work by maintainer decision (2026-07-15): genuinely
 fork-specific, not a generic default this template should carry, so it
 stays unscheduled rather than rough-prioritized.
 
@@ -187,9 +187,11 @@ stays unscheduled rather than rough-prioritized.
    sessions, argon2, verification/reset) already shipped; see "Done ✓" above
    and `SECURITY.md`.
 
-Automatic abuse signals/limits (report-count thresholds, auto-suspend)
-remain a deliberate non-goal — fork-specific heuristics, not a generic
-default (see `CLAUDE.md`'s non-goals).
+Also fork scope: push/SMS notification channels and digest emails (the
+`EmailSender` port and the transactional outbox are the extension points),
+and automatic abuse signals/limits (report-count thresholds, auto-suspend) —
+fork-specific heuristics, not a generic default (see `CLAUDE.md`'s
+non-goals).
 
 ## Build vs template: build
 

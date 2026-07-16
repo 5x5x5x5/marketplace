@@ -1,7 +1,7 @@
 # Notification Preferences — Design
 
 **Date:** 2026-07-14
-**Status:** Approved (Danny pre-approved spec + plan and the recommended
+**Status:** Approved (maintainer pre-approved spec + plan and the recommended
 option at each choice point, 2026-07-14, through to merge)
 **Scope:** Trust & safety sub-phase 4 of 4 — the last one (disputes ✓ →
 seller reviews ✓ → moderation ✓ → **notification preferences**).
@@ -13,7 +13,7 @@ mail that records money movement. Per-kind control with a hard must-send
 floor; enforcement at enqueue time so the notifications table remains "what
 will actually send."
 
-## Decisions (Danny, 2026-07-14)
+## Decisions (maintainer, 2026-07-14)
 
 1. **Granularity:** per-kind opt-out with a must-send set.
 2. **Must-send floor: money only** — `REFUND_ISSUED_BUYER`,

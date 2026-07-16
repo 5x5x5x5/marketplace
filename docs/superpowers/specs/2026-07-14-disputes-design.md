@@ -14,7 +14,7 @@ clawbacks; Stripe chargebacks are recorded truthfully. The escrow model means
 the platform holds the money in every disagreement — this phase is where the
 template's differentiator survives contact with conflict.
 
-## Decisions (confirmed with Danny)
+## Decisions (maintainer-confirmed)
 
 1. **Eligibility:** completed jobs only, within `DISPUTE_WINDOW_DAYS`
    (setting, default 7) of `completed_at`; one dispute per job. Pre-completion

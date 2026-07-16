@@ -9,7 +9,7 @@ seller payouts, refunds, and seller onboarding/KYC — while keeping the templat
 runnable with **no Stripe account** (fake provider for dev/tests) and keeping
 the spread model in our domain, not the provider's.
 
-## Decisions (confirmed with Danny)
+## Decisions (maintainer-confirmed)
 
 1. **Escrow model:** charge the buyer in full when a seller accepts; funds sit
    on the platform balance; transfer the seller payout on completion; refund on

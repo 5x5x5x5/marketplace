@@ -1,7 +1,7 @@
 # Observability & ops — design
 
 **Date:** 2026-07-15
-**Status:** Approved (Danny, 2026-07-15: admin stats endpoint; JSON logs w/ plain
+**Status:** Approved (maintainer, 2026-07-15: admin stats endpoint; JSON logs w/ plain
 toggle; 7/30/30-day retention, env-tunable; full ops bucket in one branch)
 
 ## Problem
@@ -25,7 +25,7 @@ The template is feature-complete for a pilot but not yet runnable-by-one-person:
    `payouts.provider_transfer_id` unindexed; the promised PG cancel-vs-webhook
    race test never landed.
 
-This is the LAST template feature (per Danny): after this, RBAC / OAuth /
+This is the LAST template feature (maintainer decision): after this, RBAC / OAuth /
 gateway rate-limiting are fork work.
 
 ## Design
@@ -174,7 +174,7 @@ added first, RequestId added last.)
   with the run so far and `X-Request-ID` is present on the response; send an
   inbound `X-Request-ID: demo-run-123` and assert it round-trips.
 - `ROADMAP.md`: observability item → done; remaining ahead-list shrinks to
-  RBAC / API-gateway extras / OAuth (fork work note per Danny's decision).
+  RBAC / API-gateway extras / OAuth (fork work note per maintainer decision).
 - `README.md`: stats endpoint, request-id behavior, log format toggle, new
   env vars table entries.
 - `SECURITY.md`: envelope guarantee, access-log redaction stance, retention
@@ -212,6 +212,6 @@ added first, RequestId added last.)
 - Prometheus/OpenTelemetry exporters, log shipping, alerting, tracing spans —
   fork layers them on (the stats endpoint and JSON logs are the hooks).
 - Per-endpoint latency histograms/metrics counters beyond the stats snapshot.
-- Gateway rate-limiting, admin RBAC, OAuth (fork work — Danny's decision).
+- Gateway rate-limiting, admin RBAC, OAuth (fork work — maintainer decision).
 - Log files/rotation (stderr only; the process manager owns files).
 - Backfilling request-ids into audit/idempotency tables.

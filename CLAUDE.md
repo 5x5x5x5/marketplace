@@ -149,37 +149,15 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   `api.py` because it ticks `_sweep`; putting it in `notifications.py` would
   create a cycle.
 
-## Explicit non-goals (roadmap, not now)
+## Explicit non-goals (fork work, not template)
 
-Notification digests, gateway rate-limiting, admin RBAC (single
-shared admin role for now), and OAuth/social login. Automatic abuse
-signals/limits (report-count thresholds, auto-suspend) are deferred
-indefinitely — fork-specific heuristics, not a generic default. Seller
-bidding is out (this is not an auction). Payments ship (Stripe Connect via
-`payments/port.py`, verified against a real Stripe test account). Auth ships
-(DB-backed sessions, real signup/login). Notifications + the background
-scheduler ship (transactional outbox + in-process maintenance loop;
-external-worker extraction needs no schema change). Disputes + partial
-refunds ship (buyer-initiated arbitration, admin resolution, Stripe
-chargebacks recorded through the same webhook). Seller→buyer reviews ship
-(display-only buyer rating aggregate — `POST /v1/seller/jobs/{id}/review`,
-`GET /v1/profile`, `GET /v1/admin/buyers`; gates nothing by design).
-Moderation ships (migration #7): verb-gated suspension (acquisition verbs
-403; login/GETs/complete/decline/cancel stay open; matching drops suspended
-sellers), hide-not-delete comment takedown plus display-name reset, and
-counterparty-only abuse reports whose admin resolution is terminal and
-takes no automatic action. Notification preferences ship (migration #8):
-per-kind mutes via role-scoped, replace-set
-`GET/PUT /v1/notification-preferences`, enforced at `enqueue` with a
-server-side money floor no path can bypass. Fee-aware margin ships
-(migration #9): admin-tunable `pct`/`fixed` fee config, a
-`fee_estimate` stamped on every charge at charge time, the margin floor
-enforced net of that estimate at both enforcement sites, and
-`fees_estimated`/`platform_margin_net_of_fees` on the margin summary.
-Observability & ops ships (migration #10, 10 total): request-id
-propagation + JSON access logging, a single-middleware 500 envelope,
-`GET /v1/admin/stats`, 7/30/30 retention sweeps (PENDING outbox rows
-exempt), webhook DB work off the event loop, and API hardening (body
-cap, TrustedHost, CORS, admin-list pagination) — the template is
-feature-complete; RBAC/gateway-rate-limiting/OAuth are fork work by
-decision (Danny, 2026-07-15) — see `ROADMAP.md`.
+The template is feature-complete (10 migrations; every phase — payments,
+real-user auth, notifications + scheduler, disputes/chargebacks,
+seller→buyer reviews, moderation, notification preferences, fee-aware
+margin, observability & ops — ships; the full record lives in `ROADMAP.md`
+and the invariants above). Deliberately left to a fork, by maintainer
+decision (2026-07-15): notification digests and push/SMS channels, gateway
+rate-limiting, admin RBAC (one shared admin role here), OAuth/social login,
+and automatic abuse signals/limits (report-count thresholds, auto-suspend —
+fork-specific heuristics, not a generic default). Seller bidding stays out
+entirely: this is a managed marketplace, not an auction.
