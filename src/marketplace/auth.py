@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pwdlib import PasswordHash
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -94,7 +95,17 @@ def _resolve_bearer(db: Session, authorization: str) -> Claims | None:
 _SessionDep = Annotated[Session, Depends(get_session)]
 
 
-def _principal(session: _SessionDep, authorization: Annotated[str, Header()] = "") -> Claims:
+_bearer_scheme = HTTPBearer(
+    auto_error=False,  # our own 401 shape, and /docs marks endpoints instead of erroring
+    description="Session token from POST /v1/auth/signup or /v1/auth/login",
+)
+
+
+def _principal(
+    session: _SessionDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+) -> Claims:
+    authorization = f"{credentials.scheme} {credentials.credentials}" if credentials else ""
     claims = _resolve_bearer(session, authorization)
     if claims is None:
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
@@ -224,9 +235,12 @@ def login(body: LoginRequest, db: _SessionDep) -> SessionOut:
 
 
 @auth_router.post("/logout")
-def logout(db: _SessionDep, authorization: Annotated[str, Header()] = "") -> dict[str, str]:
-    _, _, token = authorization.partition(" ")
-    # Deliberately hash-only (no expiry/scheme check): you can only delete the
+def logout(
+    db: _SessionDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+) -> dict[str, str]:
+    token = credentials.credentials if credentials else ""
+    # Deliberately hash-only (no expiry check): you can only delete the
     # session whose raw token you already hold, and deleting an expired row is harmless.
     row = db.scalar(select(AuthSession).where(AuthSession.token_hash == _hash_token(token)))
     if row is None:

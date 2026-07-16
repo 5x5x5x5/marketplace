@@ -58,6 +58,40 @@ uv run uvicorn marketplace.api:app --reload
 
 The test suite runs against whatever `DATABASE_URL` points at, so `DATABASE_URL=postgresql+psycopg://… uv run pytest` exercises the same suite on Postgres (where the `FOR UPDATE` locks are real).
 
+## Try it in 10 minutes
+
+The fastest tour is headless: `uv run python scripts/demo.py` runs the whole
+lifecycle (quote → match → escrow → complete → dispute → refund → moderation →
+stats) in-process and prints each step. To drive it yourself from Swagger:
+
+```bash
+# 1. Start the API (the admin account is seeded from these two vars)
+ADMIN_EMAIL=admin@marketplace-demo.dev ADMIN_PASSWORD=try-it-admin-password \
+    uv run uvicorn marketplace.api:app --reload
+
+# 2. In another terminal: seed service types, pipelines, a buyer, and a seller
+uv run python scripts/seed.py
+```
+
+`seed.py` prints three bearer tokens. Open <http://localhost:8000/docs>, click
+**Authorize**, and paste one in (token only — no `Bearer ` prefix). Then walk a
+job end to end:
+
+1. Authorize as the **buyer** → `POST /v1/quotes` with
+   `{"service_type_id": "rideshare"}` → `POST /v1/jobs` with the quote id.
+2. Re-Authorize as the **seller** → `GET /v1/seller/offers` →
+   `POST /v1/seller/offers/{id}/accept` (the fake provider charges instantly)
+   → `POST /v1/seller/jobs/{id}/complete`.
+3. Re-Authorize as the **admin** → `GET /v1/admin/stats` for the operator
+   snapshot and `GET /v1/admin/margins/summary` for the money — including
+   `platform_margin_net_of_fees`.
+
+Everything else in this README is reachable the same way: cancel a job and
+watch the refund, file a dispute as the buyer, mute a notification kind,
+suspend a user. Re-run `seed.py` any time for fresh tokens (sessions expire
+after `SESSION_TTL_HOURS`, default 72). No Stripe key is needed — the
+deterministic fake provider handles all money movement locally.
+
 ## Auth
 
 Real users, not minted tokens. Signup creates a password-holding `User` row and
