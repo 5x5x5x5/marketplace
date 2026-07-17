@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Cookie, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pwdlib import PasswordHash
 from sqlalchemy import delete, select
@@ -101,18 +101,42 @@ _bearer_scheme = HTTPBearer(
 )
 
 
+def _resolve_principal(
+    session: Session,
+    credentials: HTTPAuthorizationCredentials | None,
+    session_token: str | None,
+) -> Claims | None:
+    """Header-first, cookie-fallback resolution shared by `_principal` (401s)
+    and `optional_claims` (never 401s, for nav state on public pages)."""
+    authorization = f"{credentials.scheme} {credentials.credentials}" if credentials else ""
+    claims = _resolve_bearer(session, authorization)
+    if claims is None and session_token:
+        claims = _resolve_bearer(session, f"Bearer {session_token}")
+    return claims
+
+
 def _principal(
     session: _SessionDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+    session_token: Annotated[str | None, Cookie()] = None,
 ) -> Claims:
-    authorization = f"{credentials.scheme} {credentials.credentials}" if credentials else ""
-    claims = _resolve_bearer(session, authorization)
+    claims = _resolve_principal(session, credentials, session_token)
     if claims is None:
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
     return claims
 
 
 Principal = Annotated[Claims, Depends(_principal)]
+
+
+def optional_claims(
+    session: _SessionDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+    session_token: Annotated[str | None, Cookie()] = None,
+) -> Claims | None:
+    """Same header-then-cookie resolution as `_principal`, but never 401s —
+    public page handlers use this for logged-in-vs-anonymous nav state."""
+    return _resolve_principal(session, credentials, session_token)
 
 
 def require_admin(claims: Principal) -> str:

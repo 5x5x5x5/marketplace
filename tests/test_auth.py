@@ -1,5 +1,6 @@
 """Real-user auth: mail port, signup/login/sessions, verify + reset flows."""
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -304,3 +305,110 @@ def test_wrong_scheme_still_401s(client: TestClient, auth: AuthFactory) -> None:
     for header in (f"Token {token}", f"Basic {token}", token):
         r = client.get("/v1/auth/me", headers={"Authorization": header})
         assert r.status_code == 401, header
+
+
+# ---------- Cookie sessions (pages.py's POST /signup, /login, /logout) ----------
+
+
+def _signup_form(client: TestClient, role: str, email: str, name: str = "Kim") -> httpx.Response:
+    return client.post(
+        "/signup",
+        data={"email": email, "password": TEST_PASSWORD, "role": role, "display_name": name},
+        follow_redirects=False,
+    )
+
+
+def _login_form(client: TestClient, role: str, email: str) -> httpx.Response:
+    return client.post(
+        "/login",
+        data={"email": email, "password": TEST_PASSWORD, "role": role},
+        follow_redirects=False,
+    )
+
+
+def test_login_page_sets_cookie_with_expected_attributes(client: TestClient) -> None:
+    from marketplace.settings import settings as app_settings
+
+    _signup_form(client, "buyer", "cookie1@example.test")
+    r = _login_form(client, "buyer", "cookie1@example.test")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    set_cookie = r.headers["set-cookie"]
+    assert set_cookie.startswith("session_token=")
+    assert "HttpOnly" in set_cookie
+    assert "samesite=lax" in set_cookie.lower()  # case-insensitive per RFC 6265
+    assert "Path=/" in set_cookie
+    assert f"Max-Age={app_settings.session_ttl_hours * 3600}" in set_cookie
+    assert "Secure" not in set_cookie  # cookie_secure defaults False
+
+
+def test_login_page_cookie_secure_follows_settings(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from marketplace.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "cookie_secure", True)
+    _signup_form(client, "buyer", "cookie2@example.test")
+    r = _login_form(client, "buyer", "cookie2@example.test")
+    assert "Secure" in r.headers["set-cookie"]
+
+
+def test_cookie_only_request_reaches_auth_me(client: TestClient) -> None:
+    """The whole API surface, not just the pages — the fallback lives in
+    `_principal`, which every bearer-protected endpoint depends on."""
+    _signup_form(client, "buyer", "cookieme@example.test")
+    r = _login_form(client, "buyer", "cookieme@example.test")
+    token = r.cookies["session_token"]
+    me = client.get("/v1/auth/me", cookies={"session_token": token})
+    assert me.status_code == 200
+    assert me.json()["email"] == "cookieme@example.test"
+
+
+def test_header_beats_stale_cookie_of_different_user(client: TestClient, auth: AuthFactory) -> None:
+    _signup_form(client, "buyer", "cookiestale@example.test")
+    stale = _login_form(client, "buyer", "cookiestale@example.test").cookies["session_token"]
+    other = auth("seller", "other-seller")  # a different user's real bearer header
+    r = client.get("/v1/auth/me", cookies={"session_token": stale}, headers=other)
+    assert r.status_code == 200
+    assert r.json()["id"] == "other-seller"  # header identity wins, not the cookie's buyer
+
+
+def test_logout_page_deletes_row_and_clears_cookie(client: TestClient) -> None:
+    _signup_form(client, "buyer", "logoutme@example.test")
+    token = _login_form(client, "buyer", "logoutme@example.test").cookies["session_token"]
+    r = client.post("/logout", cookies={"session_token": token}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    set_cookie = r.headers["set-cookie"]
+    assert "session_token=" in set_cookie
+    assert "Max-Age=0" in set_cookie or 'session_token=""' in set_cookie
+    # The row is gone server-side, not just the client-side cookie: replay
+    # the (deleted) token explicitly rather than trusting the clear.
+    me = client.get("/v1/auth/me", cookies={"session_token": token})
+    assert me.status_code == 401
+
+
+def test_signup_page_creates_user_and_sets_cookie(client: TestClient) -> None:
+    r = _signup_form(client, "buyer", "newsignup@example.test", name="New User")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    token = r.cookies["session_token"]
+    me = client.get("/v1/auth/me", cookies={"session_token": token})
+    assert me.status_code == 200
+    assert me.json()["display_name"] == "New User"
+
+
+def test_login_page_generic_error_identical_wrong_password_vs_unknown_user(
+    client: TestClient,
+) -> None:
+    _signup_form(client, "buyer", "realuser@example.test")
+    wrong_password = client.post(
+        "/login",
+        data={"email": "realuser@example.test", "password": "totally-wrong-pw", "role": "buyer"},
+    )
+    unknown_user = client.post(
+        "/login",
+        data={"email": "ghost-nobody@example.test", "password": TEST_PASSWORD, "role": "buyer"},
+    )
+    assert wrong_password.status_code == unknown_user.status_code == 401
+    assert wrong_password.text == unknown_user.text

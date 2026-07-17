@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Sign up — Marketplace{% endblock %}
+
+{% block content %}
+<section class="auth-form">
+  <h1>Sign up</h1>
+  {% if error %}
+  <p class="form-error">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/signup">
+    <label>
+      Display name
+      <input type="text" name="display_name" required maxlength="128" />
+    </label>
+    <label>
+      Email
+      <input type="email" name="email" required />
+    </label>
+    <label>
+      Password
+      <input type="password" name="password" required minlength="8" maxlength="128" />
+    </label>
+    <fieldset>
+      <legend>I am a</legend>
+      <label><input type="radio" name="role" value="buyer" checked /> Buyer</label>
+      <label><input type="radio" name="role" value="seller" /> Seller</label>
+    </fieldset>
+    <button type="submit" class="button">Sign up</button>
+  </form>
+  <p>Already have an account? <a href="/login">Log in</a></p>
+</section>
+{% endblock %}

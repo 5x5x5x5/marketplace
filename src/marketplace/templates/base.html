@@ -12,8 +12,11 @@
       <div class="shell">
         <a class="brand" href="/">Marketplace</a>
         <nav>
-          {% if claims %}
-          <a href="/account">Account</a>
+          {% if claims and current_user %}
+          <span class="nav-user">{{ current_user.display_name }} ({{ claims.role }})</span>
+          <form class="nav-logout" method="post" action="/logout">
+            <button type="submit" class="link-button">Log out</button>
+          </form>
           {% else %}
           <a href="/login">Log in</a>
           <a class="button" href="/signup">Sign up</a>

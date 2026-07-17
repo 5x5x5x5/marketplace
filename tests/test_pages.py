@@ -201,6 +201,48 @@ def test_xss_listing_title_escaped_detail_and_seller(
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in img_tag
 
 
+def test_signup_page_renders_role_picker(client: TestClient) -> None:
+    html = client.get("/signup").text
+    assert 'name="role"' in html
+    assert 'value="buyer"' in html
+    assert 'value="seller"' in html
+    assert "<form" in html.lower()
+
+
+def test_login_page_renders(client: TestClient) -> None:
+    html = client.get("/login").text
+    assert 'action="/login"' in html
+    assert 'name="password"' in html
+
+
+def test_nav_shows_login_signup_links_when_anonymous(client: TestClient) -> None:
+    html = client.get("/").text
+    assert 'href="/login"' in html
+    assert 'href="/signup"' in html
+    assert "Log out" not in html
+
+
+def test_nav_shows_display_name_and_logout_when_cookied(client: TestClient) -> None:
+    from tests.conftest import TEST_PASSWORD
+
+    r = client.post(
+        "/signup",
+        data={
+            "email": "navuser@example.test",
+            "password": TEST_PASSWORD,
+            "role": "buyer",
+            "display_name": "Nav User",
+        },
+    )
+    assert r.status_code == 200  # followed the 303 redirect to "/"
+    html = r.text
+    assert "Nav User" in html
+    assert "buyer" in html
+    assert "Log out" in html
+    assert 'href="/signup"' not in html
+    assert 'href="/login"' not in html
+
+
 def test_commit_route_invariant_covers_pages() -> None:
     import pytest
     from fastapi import APIRouter, FastAPI
