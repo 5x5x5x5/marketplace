@@ -1,7 +1,7 @@
 # Security posture
 
 A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Eight
+hardening** closed the exploitable findings (status table below). Nine
 updates followed, in order: the **template build** (moved state to Postgres),
 **payments** (added an escrow provider), **real-user auth** (replaced the
 pilot HMAC tokens with DB-backed sessions), **disputes** (added arbitration
@@ -10,10 +10,12 @@ over the escrow — partial refunds/clawbacks and chargeback recording),
 reports), **notification preferences** (per-kind mutes with a
 server-side money floor), **fee-aware margin** (admin-tunable
 provider-fee estimate stamped onto every charge, floor enforced net of it),
-and **observability & ops** (request-id tracing, a global 500 envelope, an
+**observability & ops** (request-id tracing, a global 500 envelope, an
 admin stats endpoint, retention sweeps, webhook DB work off the event loop,
-and API hardening — body cap, TrustedHost, CORS) — see the update notes
-below.
+and API hardening — body cap, TrustedHost, CORS), and **pages foundation**
+(a server-rendered storefront and cookie-backed auth pages layered over the
+existing catalog and session machinery, with no new identity system) — see
+the update notes below.
 
 ## Update — template build
 
@@ -365,6 +367,85 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   execute (the unique constraint drops one stored record; the DB row
   locks downstream keep the duplicate call safe) — this is ordering for
   the sequential-retry case, not a new exactly-once guarantee.
+
+## Update — pages foundation
+
+- **Cookie posture.** `POST /signup` and `POST /login` (`pages.py`, distinct
+  from the JSON API's `/v1/auth/signup|login`) set the session token as a
+  cookie rather than returning it as JSON:
+  - `HttpOnly` — never readable from page JavaScript, closing the ordinary
+    XSS-steals-the-token path even though this template ships none of its
+    own client-side JS beyond vendored HTMX.
+  - `SameSite=Lax` — sent on top-level navigation but never on a cross-site
+    subrequest (an `<img>`/`<script>`/background `fetch` from another
+    origin, or a cross-site POST), which is this app's CSRF mitigation; see
+    the CSRF stance below.
+  - `Secure` gated on `settings.cookie_secure` (`False` by default, for
+    local HTTP dev) — a production deployment behind TLS must set it `True`
+    so the cookie is never sent in the clear.
+  - **The cookie carries the raw token, not a wrapped/opaque reference** —
+    by design, this is browser-held bearer-token equivalence, not a
+    separate lighter-weight session concept. That means: sha256-at-rest
+    storage is unchanged (`auth_sessions.token_hash` — the raw value the
+    cookie holds is never stored, only its hash, same as the bearer flow),
+    and **logout and password-reset revoke cookie sessions exactly like
+    bearer sessions, because they're the same `auth_sessions` rows** — there
+    is no separate cookie-session table, TTL, or revocation path to keep in
+    sync with the API's. `auth._resolve_principal` tries the
+    `Authorization` header first and falls back to the `session_token`
+    cookie only if the header resolved nothing — a request carrying both
+    always resolves via the header.
+- **CSRF stance.** `SameSite=Lax` plus a hard rule that every page mutation
+  is POST-only (never a state-changing `GET` — `GET /login`/`GET /signup`
+  only ever render a form) is the complete mitigation for this phase: a
+  forged cross-origin `<form>` POST doesn't carry the session cookie under
+  `Lax`, so it can't ride an authenticated session to signup/login/logout.
+  **No CSRF token exists yet** — deferred to phase 3's money-moving forms
+  (booking, payment confirmation), which need the stronger guarantee
+  regardless of `SameSite` (a same-site-hosted attacker page, or a future
+  relaxation of the `Lax` default, would still be able to forge a same-site
+  POST). Phase 2's forms (signup/login/logout) are judged low-enough stakes
+  — no money moves, no cross-account effect beyond the caller's own session
+  — that `Lax` + POST-only carries them without a token; that judgment does
+  not extend to phase 3.
+- **XSS boundary.** `Jinja2Templates` autoescapes by default; no template in
+  `src/marketplace/templates/` marks anything `|safe`, and none hand-builds
+  an HTML string from a `Listing`/`User` field. This matters specifically
+  because seller-supplied content (listing title, description, display
+  name) now renders on pages nobody has to authenticate to view — the
+  regression surface is public, not admin-only. Covered by
+  `tests/test_pages.py::test_xss_listing_title_escaped` and
+  `::test_xss_listing_title_escaped_detail_and_seller`, the latter of which
+  separately isolates the `<img alt=…>` attribute — an attribute-context
+  sink with different escaping rules than element content, exercised on its
+  own rather than assumed to be covered by the element-content check.
+- **The unauthenticated page surface grew.** Previously `GET /healthz`,
+  `POST /v1/payments/webhook`, and `/v1/catalog/*` were the unauthenticated
+  routes (the README's older "only unauthenticated routes" line undercounted
+  `/v1/catalog/*` itself — a pre-existing doc gap from the browse-core phase,
+  fixed alongside this update). This phase adds: `GET /`, `GET
+  /listings/{id}`, `GET /sellers/{id}`, `/static/*` (the `StaticFiles`
+  mount), `GET/POST /signup`, and `GET /login` (`POST /login` fails closed
+  to a generic 401 on bad credentials, same as the JSON API, but the *page*
+  itself renders without a session). None of these routes read or write
+  anything beyond what `/v1/catalog/*` and `/v1/auth/signup|login` already
+  exposed unauthenticated — the pages are a rendering of the same
+  role-scoped views (`catalog.py`), not a new data-exposure surface. Every
+  mutating page route (`POST /signup`, `POST /login`, `POST /logout`) still
+  runs under `route_class=CommitRoute`, now enforced for the whole app (see
+  `CLAUDE.md`).
+- **The page login path is narrower than the API's.** `POST /login`
+  (`pages.py`) rejects any `role` outside `{"buyer", "seller"}` *before*
+  calling `auth.login` — even a correct admin email/password submitted
+  through the page form 401s with the same generic "Invalid email or
+  password" copy as a wrong password, so the page surface can't be used to
+  reach an admin session, and the rejection carries no signal that `role`
+  specifically was the problem (enumeration-safe, same posture as the
+  uniform-401 login the JSON API already had). There is intentionally no
+  browser login path to admin — admin access stays JSON-API-only
+  (`POST /v1/auth/login` with `role: "admin"`), consistent with there being
+  no self-serve admin signup either. Regression:
+  `tests/test_pages.py::test_login_page_rejects_admin_role`.
 
 ## Threat model (pilot)
 

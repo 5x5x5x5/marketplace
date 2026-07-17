@@ -12,11 +12,12 @@ seller listings that buyers browse before booking, for a browse-family
 vertical with a few big sellers per market (the specific vertical is TBD —
 `rideshare`/`cleaning` in the seed/demo data are placeholders, not the
 committed vertical). Phase 1 (browse core: listings, public catalog, pinned
-chosen-seller booking — this branch, `browse-core`) is done; see
-`ROADMAP.md`'s fork section for phases 2-3. The template's own dispatch mode
-(quote → platform-matched offer, no listing) still works underneath and is
-exercised by demo acts 1-8; browse/pinned booking is additive, not a
-replacement.
+chosen-seller booking — branch `browse-core`) and Phase 2 (pages foundation:
+server-rendered catalog/listing/seller pages plus cookie-backed signup/login,
+this branch, `pages-foundation`) are both done; see `ROADMAP.md`'s fork
+section for phase 3. The template's own dispatch mode (quote →
+platform-matched offer, no listing) still works underneath and is exercised
+by demo acts 1-8; browse/pinned booking is additive, not a replacement.
 
 The pivot from `auction` → `marketplace` happened on 2026-04-23, upstream. The
 auction work is preserved at github.com/5x5x5x5/auction, untouched.
@@ -69,12 +70,67 @@ auction work is preserved at github.com/5x5x5x5/auction, untouched.
   `get_session` teardown.** Teardown (`session.close()`) runs after the
   response is already on the wire, which is finding F2 (read-your-writes race
   on every chained write); never re-add a commit there. Every router sets
-  `route_class=CommitRoute` (`api.py`, `auth.py`); the import-time
+  `route_class=CommitRoute` (`api.py`, `auth.py`, `pages.py`); the import-time
   `_assert_commit_routes` invariant fails fast if a router is added without
-  it. The commit itself stays on `run_in_threadpool` — a sync commit on the
-  event loop would stall every in-flight request. Streaming responses would
-  need a rethink of both `CommitRoute` and the idempotency buffer
-  (`idempotency.py`); the app has none today.
+  it — widened in the pages-foundation phase to cover *every* route in the
+  app, not just `/v1/*` (`_COMMIT_EXEMPT = {"/healthz"}` is the one deliberate
+  hole; a mount like `/static`'s `StaticFiles` app isn't an `APIRoute` so it
+  never trips the check). A page route that renders read-only HTML today
+  still needs `CommitRoute` — a future page/form route that writes must not
+  be the one that slips through. The commit itself stays on
+  `run_in_threadpool` — a sync commit on the event loop would stall every
+  in-flight request. Streaming responses would need a rethink of both
+  `CommitRoute` and the idempotency buffer (`idempotency.py`); the app has
+  none today.
+- **`pages.py` never imports `api.py`.** Import direction is one-way:
+  `pages -> (db, auth, catalog, entities, models)`. `api.py` imports and
+  mounts `pages_router` (`app.include_router(pages_router)`); the reverse
+  import would be a cycle. If a page ever needs API-layer logic, move the
+  shared piece into a module both can import (as `catalog.py` did for
+  catalog reads) — never import `api` from `pages`.
+- **`catalog.py` is the single source of catalog visibility/pricing truth.**
+  `visible_listings_stmt`, `listing_bookable`, `seller_publicly_visible`,
+  `indicative_buyer_price`, and the `catalog_listing_out`/`catalog_seller_out`
+  view builders live there once; both `/v1/catalog/*` (`api.py`) and the
+  storefront pages (`pages.py`) call into them — neither re-implements the
+  join, the filter, or the pricing call. This branch caught two double-
+  expression regressions from an earlier draft that hand-rolled the same
+  visibility check in two places and let them drift; don't reintroduce a
+  second copy for a new consumer (an admin page, a feed, a search index) —
+  extend `catalog.py` instead.
+- **Jinja autoescape is a security boundary, not a formatting default.**
+  Seller-supplied content (listing title/description, display name) renders
+  on pages nobody has to log in to see. Autoescape is on by default for
+  `.html` templates (`Jinja2Templates`) — never mark a template `|safe`, never
+  hand-build HTML strings for user data, and never disable autoescape on a
+  template that touches `Listing`/`User` fields. Covered by
+  `tests/test_pages.py::test_xss_listing_title_escaped*` (element-content
+  sink) and `::test_xss_listing_title_escaped_detail_and_seller`'s `<img
+  alt=…>` check (attribute-context sink — a different escaping rule than
+  element content, so it's tested separately).
+- **Public page source obeys the same asymmetry doctrine as the JSON catalog
+  views.** The rendered HTML of `/`, `/listings/{id}`, and `/sellers/{id}`
+  must never contain `seller_payout`, `margin`, `capacity`,
+  `payments_ready`, or a seller/buyer email — same forbidden set as
+  `CatalogListingOut`/`CatalogSellerOut`, because the pages are built from
+  those same view objects (see the `catalog.py` bullet above). Enforced by a
+  literal string scan over the rendered page,
+  `tests/test_pages.py::test_page_source_asymmetry*` — a future page adding a
+  new field to the template context is exactly the case that scan exists to
+  catch.
+- **Cookie sessions are the same `auth_sessions` rows as the API, not a
+  parallel identity system.** `POST /signup` and `POST /login` (`pages.py`)
+  call the identical `auth.signup`/`auth.login` the JSON API uses, then set
+  the *raw* session token as an `HttpOnly`+`SameSite=Lax` cookie (`Secure`
+  gated on `settings.cookie_secure`, off by default for local HTTP, on
+  behind TLS). `auth._resolve_principal` is header-first, cookie-fallback —
+  an `Authorization: Bearer` header always wins over the `session_token`
+  cookie when both are present — so API clients and browser pages share one
+  resolver with no special-casing per caller. Logout and password-reset
+  revoke the row, which revokes the cookie session identically to a bearer
+  session, because it *is* the same row; there is no separate cookie-session
+  TTL or revocation path to keep in sync. See `SECURITY.md`'s cookie-posture
+  section.
 - **Pyright strict** across `src/` and `tests/`. Do not drop to basic mode.
 - **Providers are only reached through `payments/port.py`.** `fake.py` and
   `stripe_provider.py` are the only two implementations; never `import stripe`
