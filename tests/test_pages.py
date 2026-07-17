@@ -243,6 +243,31 @@ def test_nav_shows_display_name_and_logout_when_cookied(client: TestClient) -> N
     assert 'href="/login"' not in html
 
 
+def test_login_page_rejects_admin_role(client: TestClient, monkeypatch: Any) -> None:
+    # The login FORM only offers buyer/seller, but the POST target must not
+    # forward a wider role to auth.login than the form advertises — even
+    # with the true admin password, role=admin must not reach an admin
+    # session through this page surface. Uses the real bootstrap_admin path
+    # (not the `admin` fixture) so this is unambiguously the true password.
+    from marketplace import auth as auth_module
+    from marketplace.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "admin_email", "root@example.test")
+    monkeypatch.setattr(app_settings, "admin_password", "bootstrap-password-1")
+    auth_module.bootstrap_admin()
+
+    r = client.post(
+        "/login",
+        data={"email": "root@example.test", "password": "bootstrap-password-1", "role": "admin"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 401
+    assert "session_token" not in r.cookies
+    # Same generic copy as a wrong-password attempt — no signal that "admin"
+    # was the problem (enumeration-safe).
+    assert "Invalid email or password." in r.text
+
+
 def test_commit_route_invariant_covers_pages() -> None:
     import pytest
     from fastapi import APIRouter, FastAPI

@@ -52,6 +52,11 @@ def _set_session_cookie(response: Response, token: str) -> None:
         path="/",
         secure=settings.cookie_secure,
         httponly=True,
+        # samesite="lax" is this app's CSRF mitigation: the cookie is never
+        # sent on a cross-site POST (only top-level navigations), and every
+        # page mutation here is POST-only, so a forged cross-origin form
+        # can't ride the session. No CSRF token yet — deferred to the
+        # phase-3 money forms (see spec), which will need one regardless.
         samesite="lax",
     )
 
@@ -62,6 +67,7 @@ def _clear_session_cookie(response: Response) -> None:
         path="/",
         secure=settings.cookie_secure,
         httponly=True,
+        # Same CSRF posture as _set_session_cookie — see comment there.
         samesite="lax",
     )
 
@@ -192,6 +198,17 @@ def signup_submit(
     return response
 
 
+def _login_failure(request: Request) -> HTMLResponse:
+    # Same generic copy for every failure mode (bad password, unknown
+    # account, disallowed role) — no signal about which one it was.
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"claims": None, "current_user": None, "error": _LOGIN_ERROR},
+        status_code=401,
+    )
+
+
 @pages_router.post("/login", response_class=HTMLResponse)
 def login_submit(
     request: Request,
@@ -200,6 +217,16 @@ def login_submit(
     password: Annotated[str, Form()],
     role: Annotated[str, Form()],
 ) -> Response:
+    # The login FORM only ever offers buyer/seller, so the POST target must
+    # not forward a wider role than that to auth.login — a raw POST with
+    # role=admin (+ the true admin password) must not reach an admin
+    # session through this page surface. Reject outside {buyer, seller}
+    # BEFORE calling auth.login, re-rendering with the SAME generic copy
+    # used for bad credentials (enumeration-safe: never reveal that admin
+    # exists or that role was the problem). Mirrors SignupRequest's
+    # Literal[BUYER, SELLER] narrowing of the same field.
+    if role not in ("buyer", "seller"):
+        return _login_failure(request)
     # Reuse the exact login logic the JSON API uses (uniform-401 lookup +
     # verify) so wrong-password and no-such-user stay indistinguishable here
     # too — same generic copy either way, no account-enumeration signal.
@@ -207,12 +234,7 @@ def login_submit(
         body = LoginRequest(email=email, password=password, role=role)  # pyright: ignore[reportArgumentType]
         result = auth.login(body, session)
     except (ValidationError, HTTPException):
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"claims": None, "current_user": None, "error": _LOGIN_ERROR},
-            status_code=401,
-        )
+        return _login_failure(request)
     response = RedirectResponse(url="/", status_code=303)
     _set_session_cookie(response, result.token)
     return response
