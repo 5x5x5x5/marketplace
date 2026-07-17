@@ -268,6 +268,52 @@ def test_login_page_rejects_admin_role(client: TestClient, monkeypatch: Any) -> 
     assert "Invalid email or password." in r.text
 
 
+def _signup_cookie(client: TestClient, email: str, name: str = "Nav User") -> dict[str, str]:
+    from tests.conftest import TEST_PASSWORD
+
+    r = client.post(
+        "/signup",
+        data={"email": email, "password": TEST_PASSWORD, "role": "buyer", "display_name": name},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    return {"session_token": r.cookies["session_token"]}
+
+
+def test_404_page_shows_logged_in_nav_when_cookied(client: TestClient) -> None:
+    """m3: pages.py:107 hardcoded claims=None on the 404 context — a
+    logged-in user hitting a dead listing/seller link would see logged-out
+    nav. The real nav context must come from the resolved cookie."""
+    cookies = _signup_cookie(client, "nav-404@example.test")
+    r = client.get(f"/listings/{uuid4()}", cookies=cookies)
+    assert r.status_code == 404
+    assert "Nav User" in r.text
+    assert "Log out" in r.text
+    assert 'href="/login"' not in r.text
+
+
+def test_signup_page_shows_logged_in_nav_when_cookied(client: TestClient) -> None:
+    """m3: pages.py:161 hardcoded claims=None on GET /signup. Logged-in-nav
+    while already logged in is correct; the form itself still renders."""
+    cookies = _signup_cookie(client, "nav-signup@example.test")
+    r = client.get("/signup", cookies=cookies)
+    assert r.status_code == 200
+    assert "Nav User" in r.text
+    assert "Log out" in r.text
+    assert "<form" in r.text.lower()  # the signup form still renders
+
+
+def test_login_page_shows_logged_in_nav_when_cookied(client: TestClient) -> None:
+    """m3: pages.py:168 hardcoded claims=None on GET /login. Logged-in-nav
+    while already logged in is correct; the form itself still renders."""
+    cookies = _signup_cookie(client, "nav-login@example.test")
+    r = client.get("/login", cookies=cookies)
+    assert r.status_code == 200
+    assert "Nav User" in r.text
+    assert "Log out" in r.text
+    assert "<form" in r.text.lower()  # the login form still renders
+
+
 def test_commit_route_invariant_covers_pages() -> None:
     import pytest
     from fastapi import APIRouter, FastAPI

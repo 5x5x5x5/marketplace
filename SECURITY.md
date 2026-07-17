@@ -420,20 +420,22 @@ deleted, not deprecated. Identity now resolves through DB-backed sessions:
   sink with different escaping rules than element content, exercised on its
   own rather than assumed to be covered by the element-content check.
 - **The unauthenticated page surface grew.** Previously `GET /healthz`,
-  `POST /v1/payments/webhook`, and `/v1/catalog/*` were the unauthenticated
-  routes (the README's older "only unauthenticated routes" line undercounted
-  `/v1/catalog/*` itself — a pre-existing doc gap from the browse-core phase,
-  fixed alongside this update). This phase adds: `GET /`, `GET
-  /listings/{id}`, `GET /sellers/{id}`, `/static/*` (the `StaticFiles`
-  mount), `GET/POST /signup`, and `GET /login` (`POST /login` fails closed
+  `POST /v1/payments/webhook`, `/v1/catalog/*`, and `/v1/auth/*` (always
+  unauthenticated — that's how a session is obtained) were the
+  unauthenticated routes (the README's older "only unauthenticated routes"
+  line undercounted `/v1/catalog/*` itself — a pre-existing doc gap from the
+  browse-core phase, fixed alongside this update). This phase adds: `GET /`,
+  `GET /listings/{id}`, `GET /sellers/{id}`, `/static/*` (the `StaticFiles`
+  mount), `GET/POST /signup`, `GET/POST /login` (`POST /login` fails closed
   to a generic 401 on bad credentials, same as the JSON API, but the *page*
-  itself renders without a session). None of these routes read or write
-  anything beyond what `/v1/catalog/*` and `/v1/auth/signup|login` already
-  exposed unauthenticated — the pages are a rendering of the same
-  role-scoped views (`catalog.py`), not a new data-exposure surface. Every
-  mutating page route (`POST /signup`, `POST /login`, `POST /logout`) still
-  runs under `route_class=CommitRoute`, now enforced for the whole app (see
-  `CLAUDE.md`).
+  itself renders without a session), and `POST /logout` (no session required
+  to hit it — a missing/stale cookie still redirects and no-ops). None of
+  these routes read or write anything beyond what `/v1/catalog/*` and
+  `/v1/auth/signup|login` already exposed unauthenticated — the pages are a
+  rendering of the same role-scoped views (`catalog.py`), not a new
+  data-exposure surface. Every mutating page route (`POST /signup`,
+  `POST /login`, `POST /logout`) still runs under `route_class=CommitRoute`,
+  now enforced for the whole app (see `CLAUDE.md`).
 - **The page login path is narrower than the API's.** `POST /login`
   (`pages.py`) rejects any `role` outside `{"buyer", "seller"}` *before*
   calling `auth.login` — even a correct admin email/password submitted

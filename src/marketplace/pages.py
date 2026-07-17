@@ -100,11 +100,13 @@ def landing(
     )
 
 
-def _not_found(request: Request, message: str) -> HTMLResponse:
+def _not_found(
+    request: Request, session: Session, claims: auth.Claims | None, message: str
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "error.html",
-        {"claims": None, "current_user": None, "status_code": 404, "message": message},
+        {**_nav_context(session, claims), "status_code": 404, "message": message},
         status_code=404,
     )
 
@@ -115,11 +117,11 @@ def listing_detail(
 ) -> HTMLResponse:
     row = session.execute(catalog.visible_listings_stmt().where(Listing.id == listing_id)).first()
     if row is None:
-        return _not_found(request, "This listing isn't available.")
+        return _not_found(request, session, claims, "This listing isn't available.")
     listing, user, seller = row
     price = catalog.indicative_buyer_price(session, listing.service_type_id)
     if price is None:
-        return _not_found(request, "This listing isn't available.")
+        return _not_found(request, session, claims, "This listing isn't available.")
     listing_out = catalog.catalog_listing_out(listing, user, seller, price)
     return templates.TemplateResponse(
         request,
@@ -135,7 +137,7 @@ def seller_profile(
     user = session.get(User, seller_id)
     seller = session.get(SellerProfile, seller_id)
     if not catalog.seller_publicly_visible(user, seller):
-        return _not_found(request, "This seller isn't available.")
+        return _not_found(request, session, claims, "This seller isn't available.")
     assert user is not None
     assert seller is not None
     rows = session.execute(
@@ -156,16 +158,20 @@ def seller_profile(
 
 
 @pages_router.get("/signup", response_class=HTMLResponse)
-def signup_form(request: Request) -> HTMLResponse:
+def signup_form(request: Request, session: _SessionDep, claims: _OptionalClaims) -> HTMLResponse:
+    # A logged-in user hitting GET /signup still sees the form — no redirect
+    # away; only the nav itself should reflect the real session instead of a
+    # hardcoded logged-out claims=None.
     return templates.TemplateResponse(
-        request, "signup.html", {"claims": None, "current_user": None, "error": None}
+        request, "signup.html", {**_nav_context(session, claims), "error": None}
     )
 
 
 @pages_router.get("/login", response_class=HTMLResponse)
-def login_form(request: Request) -> HTMLResponse:
+def login_form(request: Request, session: _SessionDep, claims: _OptionalClaims) -> HTMLResponse:
+    # Same posture as signup_form above: logged-in nav, form still renders.
     return templates.TemplateResponse(
-        request, "login.html", {"claims": None, "current_user": None, "error": None}
+        request, "login.html", {**_nav_context(session, claims), "error": None}
     )
 
 

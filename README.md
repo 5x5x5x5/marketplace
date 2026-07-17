@@ -194,10 +194,12 @@ Bearer <token>`, resolved to `(role, user_id)` by one indexed lookup against
 `auth_sessions`. Identity is taken from the resolved session, **never** from the
 request body. Sessions are revocable (logout, password reset, and a future ban
 path all just delete rows) and expire after `SESSION_TTL_HOURS` (default 72).
-`GET /healthz`, `POST /v1/payments/webhook`, `/v1/catalog/*`, and the whole
-storefront page surface (`/`, `/listings/*`, `/sellers/*`, `/static/*`,
-`/signup`, `GET /login` — see "The storefront" below) are unauthenticated;
-everything else requires a resolved session. See `SECURITY.md`.
+`GET /healthz`, `POST /v1/payments/webhook`, `/v1/catalog/*`, `/v1/auth/*`
+(always unauthenticated — that's how a session is obtained in the first
+place), and the whole storefront page surface (`/`, `/listings/*`,
+`/sellers/*`, `/static/*`, `GET/POST /signup`, `GET/POST /login`,
+`POST /logout` — see "The storefront" below) are unauthenticated; everything
+else requires a resolved session. See `SECURITY.md`.
 
 Browser pages resolve the same session a different way: `POST /signup` and
 `POST /login` on the page routes (not `/v1/auth/*`) set the session token as

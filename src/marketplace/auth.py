@@ -164,12 +164,18 @@ def current_participant(claims: Principal) -> Claims:
     return claims
 
 
-def peek_principal(db: Session, authorization: str | None) -> str | None:
-    """Best-effort principal ("role:sub") for middleware. None when absent or
-    invalid — the strict endpoint dependencies still produce the real 401."""
-    if not authorization:
-        return None
-    claims = _resolve_bearer(db, authorization)
+def peek_principal(
+    db: Session, authorization: str | None, session_token: str | None = None
+) -> str | None:
+    """Best-effort principal ("role:sub") for middleware. Header-first,
+    cookie-fallback — the same order and the same `_resolve_bearer` path as
+    `_resolve_principal` — so a cookie-authed POST is resolved identically to
+    a bearer-authed one instead of silently reading as anonymous. None when
+    neither carrier resolves — the strict endpoint dependencies still
+    produce the real 401."""
+    claims = _resolve_bearer(db, authorization) if authorization else None
+    if claims is None and session_token:
+        claims = _resolve_bearer(db, f"Bearer {session_token}")
     return None if claims is None else f"{claims.role}:{claims.sub}"
 
 
