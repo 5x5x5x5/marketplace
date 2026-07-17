@@ -54,6 +54,7 @@ from .entities import (
     EmailToken,
     IdempotencyRecord,
     Job,
+    Listing,
     Notification,
     NotificationMute,
     Offer,
@@ -92,6 +93,8 @@ from .models import (
     JobCreateRequest,
     JobReviewOut,
     JobStatus,
+    ListingCreate,
+    ListingUpdate,
     MarginFloorBody,
     MarginSummaryOut,
     MatchingStrategyBody,
@@ -119,6 +122,7 @@ from .models import (
     SellerCompletionOut,
     SellerDisputeOut,
     SellerJobView,
+    SellerListingOut,
     SellerOfferView,
     SellerProfileOut,
     SellerProfileUpdate,
@@ -1028,6 +1032,49 @@ def review_buyer(
     return review
 
 
+@seller_router.post("/listings", response_model=SellerListingOut, status_code=201)
+def create_listing(body: ListingCreate, session: SessionDep, seller_id: SellerId) -> Listing:
+    _require_active(session, seller_id)
+    if session.get(ServiceType, body.service_type_id) is None:
+        raise HTTPException(status_code=404, detail="unknown service_type_id")
+    seller = repo.get_or_create_seller(session, seller_id)
+    if not seller.payments_ready:
+        raise HTTPException(status_code=409, detail="onboard payments before listing")
+    listing = Listing(
+        seller_id=seller_id,
+        service_type_id=body.service_type_id,
+        title=body.title,
+        description=body.description,
+        photo_urls=body.photo_urls,
+    )
+    session.add(listing)
+    session.flush()
+    return listing
+
+
+@seller_router.get("/listings", response_model=list[SellerListingOut])
+def my_listings(session: SessionDep, seller_id: SellerId) -> list[Listing]:
+    rows = session.scalars(
+        select(Listing).where(Listing.seller_id == seller_id).order_by(Listing.created_at.desc())
+    ).all()
+    return list(rows)
+
+
+@seller_router.put("/listings/{listing_id}", response_model=SellerListingOut)
+def update_listing(
+    listing_id: UUID, body: ListingUpdate, session: SessionDep, seller_id: SellerId
+) -> Listing:
+    _require_active(session, seller_id)
+    listing = session.get(Listing, listing_id)
+    if listing is None or listing.seller_id != seller_id:
+        raise HTTPException(status_code=404, detail="listing not found")
+    for field in ("title", "description", "photo_urls", "active"):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(listing, field, value)
+    return listing
+
+
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)
 def accept_offer(
     offer_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
@@ -1406,6 +1453,34 @@ def admin_list_reviews(
     model = Review if kind == "buyer" else SellerReview
     rows = session.scalars(select(model).order_by(model.created_at.desc())).all()
     return [_admin_review_out(r) for r in _paginate(rows, limit, offset)]
+
+
+@admin_router.get("/listings", response_model=list[SellerListingOut])
+def admin_list_listings(
+    session: SessionDep, limit: Limit = 100, offset: Offset = 0
+) -> list[Listing]:
+    rows = session.scalars(select(Listing).order_by(Listing.created_at.desc())).all()
+    return _paginate(list(rows), limit, offset)
+
+
+@admin_router.post("/listings/{listing_id}/hide", response_model=SellerListingOut)
+def hide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> Listing:
+    listing = session.get(Listing, listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    listing.hidden = True
+    audit(session, admin_id, "hide_listing", str(listing_id), {})
+    return listing
+
+
+@admin_router.post("/listings/{listing_id}/unhide", response_model=SellerListingOut)
+def unhide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> Listing:
+    listing = session.get(Listing, listing_id)
+    if listing is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    listing.hidden = False
+    audit(session, admin_id, "unhide_listing", str(listing_id), {})
+    return listing
 
 
 def _set_comment_hidden(

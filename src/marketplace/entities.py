@@ -138,6 +138,26 @@ class SellerProfile(Base):
         return (self.rating_sum / self.rating_count) if self.rating_count else None
 
 
+class Listing(Base):
+    """A seller's public offering of a service type — presentation only.
+    Pricing stays platform-owned: a listing never carries a price. `active`
+    is the seller's toggle; `hidden` is an admin takedown the seller cannot
+    undo (moderation parity with review comments)."""
+
+    __tablename__ = "listings"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    service_type_id: Mapped[str] = mapped_column(ForeignKey("service_types.id"), index=True)
+    title: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(4000), default="")
+    photo_urls: Mapped[list[str]] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(default=True)
+    hidden: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
+
+
 class BuyerProfile(Base):
     __tablename__ = "buyer_profiles"
 
@@ -170,6 +190,8 @@ class Quote(Base):
     buyer_price: Mapped[Decimal] = mapped_column(_MONEY)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
     expires_at: Mapped[datetime] = mapped_column(_TS)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id"), default=None)
+    pinned_seller_id: Mapped[str | None] = mapped_column(String(128), default=None)
 
 
 class Job(Base):
@@ -181,6 +203,7 @@ class Job(Base):
     service_type_id: Mapped[str] = mapped_column(String(128), index=True)
     buyer_price: Mapped[Decimal] = mapped_column(_MONEY)
     seller_id: Mapped[str | None] = mapped_column(String(128), index=True, default=None)
+    pinned_seller_id: Mapped[str | None] = mapped_column(String(128), default=None)
     seller_payout: Mapped[Decimal | None] = mapped_column(_MONEY, default=None)
     status: Mapped[JobStatus] = mapped_column(
         _enum(JobStatus), default=JobStatus.PENDING, index=True
