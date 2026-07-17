@@ -1,11 +1,25 @@
-# marketplace — two-sided marketplace with platform margin
+# market-platform — browse marketplace on the platform-margin template
 
 FastAPI · Pydantic v2 · SQLAlchemy 2.0 + Alembic · Postgres (SQLite for
 local/tests). Buyer-facing price and seller payout are computed independently by
 pluggable pricing pipelines; the platform keeps the spread on every matched pair.
 
-The pivot from `auction` → `marketplace` happened on 2026-04-23. The auction
-work is preserved at github.com/5x5x5x5/auction, untouched.
+This is a **private fork** (`github.com/5x5x5x5/market-platform`, remote
+`origin`) of the public feature-complete template
+(`github.com/5x5x5x5/marketplace`, remote `upstream`). The fork is
+specializing the template into a **browse marketplace**: a public catalog of
+seller listings that buyers browse before booking, for a browse-family
+vertical with a few big sellers per market (the specific vertical is TBD —
+`rideshare`/`cleaning` in the seed/demo data are placeholders, not the
+committed vertical). Phase 1 (browse core: listings, public catalog, pinned
+chosen-seller booking — this branch, `browse-core`) is done; see
+`ROADMAP.md`'s fork section for phases 2-3. The template's own dispatch mode
+(quote → platform-matched offer, no listing) still works underneath and is
+exercised by demo acts 1-8; browse/pinned booking is additive, not a
+replacement.
+
+The pivot from `auction` → `marketplace` happened on 2026-04-23, upstream. The
+auction work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Commands
 
@@ -107,6 +121,50 @@ work is preserved at github.com/5x5x5x5/auction, untouched.
   in the async handler — a slow/blocked DB call must never stall the event
   loop for every other in-flight request. Keep new webhook-handling code in
   that thread-offloaded function, not back on the coroutine.
+- **Listings never carry prices.** Platform-set, independently-computed
+  buyer price and seller payout are the differentiator (see the top of this
+  file) — a `Listing` (`entities.py`) is title/description/photos/service
+  type only. `POST/PUT /v1/seller/listings` never accept a price field, and
+  never will; a seller "pricing" their own listing would collapse the whole
+  spread model back into seller-set-price-plus-commission.
+- **Public catalog responses never carry payouts, capacity, emails, or
+  `payments_ready`.** `CatalogListingOut`/`CatalogSellerOut`/
+  `CatalogSellerProfileOut` (`models.py`) are a third view family alongside
+  buyer/seller/admin — asymmetry doctrine extends to unauthenticated browse.
+  `price_from` is the buyer pipeline evaluated pre-floor, never the seller's
+  payout or the margin.
+- **`Listing.hidden` is admin-owned; `Listing.active` is seller-owned.**
+  Never let a seller-facing endpoint touch `hidden` (that's takedown,
+  `/v1/admin/listings/{id}/hide|unhide`) and never let an admin endpoint
+  touch `active` (that's the seller's own on/off toggle,
+  `PUT /v1/seller/listings/{id}`). Catalog visibility requires both
+  `active=true` and `hidden=false` (`api._listing_bookable`) — the two flags
+  are independent, not a shared boolean.
+- **Pinned jobs never re-match to another seller.** A quote created with
+  `listing_id` stamps `pinned_seller_id` on both the quote and the resulting
+  job; the buyer picked that seller, so decline/expiry/sweep on a pinned job
+  end it (expire it) rather than walking the candidate list to a rival
+  seller. Only the template's original unpinned dispatch path (no
+  `listing_id`) re-matches. Don't fold pinned jobs into
+  `repo.sellers_seen_for_job`'s re-match loop.
+- **A handler returning a mutated/created ORM object must `session.flush()`
+  before returning it.** `CommitRoute` serializes the response model from
+  the returned object *before* the commit runs (so a validation error still
+  400s instead of committing); an unflushed object can carry stale/absent
+  server-generated ids or timestamps into that serialization. Every listing
+  mutation handler (`create_listing`, `update_listing`, admin
+  hide/unhide) flushes before `return`.
+- **A handler that must persist state ahead of a possible error response has
+  to commit mid-handler, with a comment naming the mechanism.** `CommitRoute`
+  only commits 2xx responses — it never persists anything for a raised
+  `HTTPException` (4xx or 5xx). Two deliberate precedents: dispute
+  resolution pins `refund_amount`/`clawback_amount` and commits *before*
+  calling the payment provider, so a subsequent provider failure (502) still
+  leaves the pinned amounts durable for a retry to converge on
+  (`resolve_dispute`, `api.py`); and pinned quote-consumption on a 410 — a
+  pinned listing that's gone unavailable deletes+commits the now-dead quote
+  before raising, so it can never be retried (`create_job`'s
+  pinned-listing-unavailable branch, `api.py`).
 
 ## Subtle bits
 
@@ -166,7 +224,10 @@ The template is feature-complete (10 migrations; every phase — payments,
 real-user auth, notifications + scheduler, disputes/chargebacks,
 seller→buyer reviews, moderation, notification preferences, fee-aware
 margin, observability & ops — ships; the full record lives in `ROADMAP.md`
-and the invariants above). Deliberately left to a fork, by maintainer
+and the invariants above). This fork's browse-core phase adds an 11th
+(listings; see `ROADMAP.md`'s fork section) — an expected, ongoing count as
+fork phases land, not a template regression. Deliberately left to a fork, by
+maintainer
 decision (2026-07-15): notification digests and push/SMS channels, gateway
 rate-limiting, admin RBAC (one shared admin role here), OAuth/social login,
 and automatic abuse signals/limits (report-count thresholds, auto-suspend —

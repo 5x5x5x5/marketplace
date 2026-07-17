@@ -1,9 +1,33 @@
 # Roadmap
 
-Goal: a **generic two-sided marketplace template** that scales to hundreds of
-users, then gets forked and specialized per market vertical. The differentiator
-— platform sets buyer price and seller payout independently and keeps the spread
-— stays in this repo's core; everything else is a swappable adapter.
+## Fork: market-platform
+
+This repo (`github.com/5x5x5x5/market-platform`) is a private fork of the
+public template below (`github.com/5x5x5x5/marketplace`, remote `upstream`),
+specializing it into a browse marketplace. See `CLAUDE.md` for the fork
+identity paragraph and the browse-core non-negotiables.
+
+- **Phase 1 — browse core (done, branch `browse-core`).** Seller listings
+  (`POST/GET/PUT /v1/seller/listings`, admin hide/unhide, migration #11 —
+  11 total), an unauthenticated public catalog (`/v1/catalog/…`) with live
+  indicative pricing (`price_from`) and role-safe views (no payouts,
+  capacity, emails, or `payments_ready`), and pinned chosen-seller booking
+  (`POST /v1/quotes` with `listing_id` pins `pinned_seller_id` through to
+  the job's offer; a pinned job never re-matches on decline/timeout/sweep —
+  it expires instead). `QUOTE_TTL_MINUTES`/`OFFER_TTL_MINUTES` defaults
+  moved from the template's 5/2 to 15/120 for a human-paced browse flow.
+  `scripts/demo.py` act 9 and `scripts/seed.py` exercise it end to end.
+- **Phase 2 — HTMX pages (next).** Server-rendered browse/listing pages over
+  the catalog endpoints above, so the browse flow is reachable without
+  Swagger or a hand-rolled client.
+- **Phase 3 — transact pages.** Server-rendered quote/job/offer pages over
+  the buyer/seller flows, completing a browsable, bookable front end without
+  a SPA.
+
+Everything below this section documents the public upstream template as of
+the fork point — it is **historical** from this fork's perspective (still
+accurate for what shipped in the template, but frozen; new fork work is
+recorded above, not folded into "Where we are"/"Done ✓" below).
 
 ## Where we are
 

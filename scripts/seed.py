@@ -47,10 +47,12 @@ SERVICE_TYPES: dict[str, dict[str, object]] = {
     "rideshare": {
         "prices": {"base_buyer_price": 20, "base_seller_payout": 14},
         "pipelines": {"buyer": ["surge_by_demand_ratio"], "seller": []},
+        "listing_title": "City rides, vetted drivers",
     },
     "cleaning": {
         "prices": {"base_buyer_price": 80, "base_seller_payout": 55},
         "pipelines": {"buyer": [], "seller": ["seller_tier_multiplier"]},
+        "listing_title": "Two-person deep clean crew",
     },
 }
 
@@ -114,6 +116,29 @@ def main() -> None:
                 == 200
             )
 
+        # One listing per service type, so the catalog isn't empty out of the
+        # box. Idempotent on title: a re-run skips titles that already exist
+        # rather than piling up duplicates.
+        existing_titles = {
+            row["title"] for row in c.get("/v1/seller/listings", headers=seller).json()
+        }
+        for sid, cfg in SERVICE_TYPES.items():
+            title = cfg["listing_title"]
+            if title in existing_titles:
+                continue
+            assert (
+                c.post(
+                    "/v1/seller/listings",
+                    json={
+                        "service_type_id": sid,
+                        "title": title,
+                        "photo_urls": ["https://placehold.co/600x400"],
+                    },
+                    headers=seller,
+                ).status_code
+                == 201
+            )
+
     db_kind = settings.database_url.split("://", 1)[0]
     print(f"Seeded ({db_kind}): {', '.join(SERVICE_TYPES)} + demo buyer/seller.\n")
     print("Paste one of these into Swagger's Authorize dialog (just the token,")
@@ -121,7 +146,8 @@ def main() -> None:
     print("re-run this script for fresh ones:\n")
     print(f"  admin   ({settings.admin_email} / {settings.admin_password}):\n  {admin_token}\n")
     print(f"  buyer   ({BUYER_EMAIL} / {DEMO_PASSWORD}):\n  {buyer_token}\n")
-    print(f"  seller  ({SELLER_EMAIL} / {DEMO_PASSWORD}):\n  {seller_token}")
+    print(f"  seller  ({SELLER_EMAIL} / {DEMO_PASSWORD}):\n  {seller_token}\n")
+    print("browse: GET /v1/catalog/listings")
 
 
 if __name__ == "__main__":
