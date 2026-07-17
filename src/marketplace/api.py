@@ -27,7 +27,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import Row, Select, and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -85,6 +85,9 @@ from .models import (
     BuyerDisputeOut,
     BuyerJobView,
     BuyerProfileOut,
+    CatalogListingOut,
+    CatalogSellerOut,
+    CatalogSellerProfileOut,
     DisputeRequest,
     DisputeSource,
     DisputeStatus,
@@ -558,6 +561,26 @@ def _job_reviews(session: Session, job_id: UUID) -> list[JobReviewOut]:
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"], route_class=CommitRoute)
 
 
+def _indicative_buyer_price(session: Session, service_type_id: str) -> Decimal | None:
+    """Catalog 'from' price: the buyer pipeline at this instant, pre-floor.
+    Mirrors create_quote's price computation below (cross-reference: keep the
+    two in sync); a real quote may floor-bump the price upward, so this is a
+    floor-blind lower bound, never an exact promise."""
+    cfg = repo.load_pricing_config(session, service_type_id)
+    if cfg is None:
+        return None
+    supply = repo.available_count(session, service_type_id)
+    demand = repo.active_demand(session, service_type_id) + 1
+    ctx = PricingContext(
+        side=Side.BUYER, buyer_completed_jobs=0, live_supply=supply, live_demand=demand
+    )
+    return to_money(
+        run_pipeline(
+            float(cfg.service.base_buyer_price), cfg.buyer_pipeline, ctx, cfg.adjuster_params
+        )
+    )
+
+
 @buyer_router.post("/quotes", response_model=QuoteOut, status_code=201)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
     _require_active(session, buyer_id)
@@ -573,6 +596,8 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
     demand = repo.active_demand(session, cfg.service.id) + 1
     buyer = repo.get_or_create_buyer(session, buyer_id)
 
+    # Cross-reference: mirrors _indicative_buyer_price (catalog's pre-floor
+    # "from" price) above — keep both computations in sync.
     ctx = PricingContext(
         side=Side.BUYER,
         buyer_completed_jobs=buyer.completed_jobs,
@@ -2163,6 +2188,148 @@ async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str,
     return await asyncio.to_thread(_process_webhook, event)
 
 
+# ---------- Catalog router (unauthenticated public browse) ----------
+
+catalog_router = APIRouter(prefix="/v1/catalog", tags=["catalog"], route_class=CommitRoute)
+
+
+def _listing_bookable(  # pyright: ignore[reportUnusedFunction]
+    session: Session, listing: Listing
+) -> bool:
+    """True iff `listing` is currently visible/bookable to the public: the
+    seller's own active toggle is on, admin hasn't hidden it, the seller's
+    account is ACTIVE, and the seller has completed payments onboarding.
+
+    Task-3 interface: single-row companion to `_visible_listings_stmt` below —
+    reuse this for booking guards (e.g. confirming a listing is still bookable
+    at quote/job-creation time), rather than re-deriving the visibility rule.
+    Unused within Task 2 itself (catalog reads only ever need the list form);
+    the ignore below is deliberate, matching the fixture idiom in conftest.py.
+    """
+    if not listing.active or listing.hidden:
+        return False
+    user = session.get(User, listing.seller_id)
+    if user is None or user.status is not UserStatus.ACTIVE:
+        return False
+    seller = session.get(SellerProfile, listing.seller_id)
+    return seller is not None and seller.payments_ready
+
+
+def _visible_listings_stmt() -> Select[tuple[Listing, User, SellerProfile]]:
+    """Select of (Listing, User, SellerProfile) rows visible to the public
+    catalog: listing active, not admin-hidden, seller account ACTIVE, seller
+    payments onboarded. Row-equivalent of `_listing_bookable` above.
+
+    Task-3 interface: extend with `.where(Listing.id == ...)` /
+    `.where(Listing.service_type_id == ...)` for detail/list/booking reuse —
+    don't re-derive this join+filter elsewhere.
+    """
+    return (
+        select(Listing, User, SellerProfile)
+        .join(User, User.id == Listing.seller_id)
+        .join(SellerProfile, SellerProfile.id == Listing.seller_id)
+        .where(
+            Listing.active.is_(True),
+            Listing.hidden.is_(False),
+            User.status == UserStatus.ACTIVE,
+            SellerProfile.payments_ready.is_(True),
+        )
+    )
+
+
+def _catalog_seller_out(user: User, seller: SellerProfile) -> CatalogSellerOut:
+    return CatalogSellerOut(
+        seller_id=user.id,
+        display_name=user.display_name,
+        rating=seller.rating,
+        rating_count=seller.rating_count,
+    )
+
+
+def _catalog_listing_out(
+    listing: Listing, user: User, seller: SellerProfile, price: Decimal
+) -> CatalogListingOut:
+    return CatalogListingOut(
+        id=listing.id,
+        title=listing.title,
+        description=listing.description,
+        photo_urls=listing.photo_urls,
+        service_type_id=listing.service_type_id,
+        price_from=price,
+        seller=_catalog_seller_out(user, seller),
+    )
+
+
+def _catalog_listings_for_rows(
+    session: Session, rows: Sequence[Row[tuple[Listing, User, SellerProfile]]]
+) -> list[CatalogListingOut]:
+    """Map visible (Listing, User, SellerProfile) rows to catalog cards,
+    memoizing `_indicative_buyer_price` per service_type_id (one pipeline
+    evaluation per type per response, not per listing). A listing whose
+    service type no longer resolves (should not happen — service types are
+    never deleted) is silently omitted rather than crashing the response."""
+    price_cache: dict[str, Decimal | None] = {}
+    out: list[CatalogListingOut] = []
+    for listing, user, seller in rows:
+        if listing.service_type_id not in price_cache:
+            price_cache[listing.service_type_id] = _indicative_buyer_price(
+                session, listing.service_type_id
+            )
+        price = price_cache[listing.service_type_id]
+        if price is None:
+            continue
+        out.append(_catalog_listing_out(listing, user, seller, price))
+    return out
+
+
+@catalog_router.get("/listings", response_model=list[CatalogListingOut])
+def catalog_list_listings(
+    session: SessionDep,
+    service_type_id: str | None = None,
+    limit: Limit = 50,
+    offset: Offset = 0,
+) -> list[CatalogListingOut]:
+    stmt = _visible_listings_stmt().order_by(Listing.created_at.desc())
+    if service_type_id is not None:
+        stmt = stmt.where(Listing.service_type_id == service_type_id)
+    rows = _paginate(session.execute(stmt).all(), limit, offset)
+    return _catalog_listings_for_rows(session, rows)
+
+
+@catalog_router.get("/listings/{listing_id}", response_model=CatalogListingOut)
+def catalog_get_listing(listing_id: UUID, session: SessionDep) -> CatalogListingOut:
+    row = session.execute(_visible_listings_stmt().where(Listing.id == listing_id)).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    listing, user, seller = row
+    price = _indicative_buyer_price(session, listing.service_type_id)
+    if price is None:
+        raise HTTPException(status_code=404, detail="listing not found")
+    return _catalog_listing_out(listing, user, seller, price)
+
+
+@catalog_router.get("/sellers/{seller_id}", response_model=CatalogSellerProfileOut)
+def catalog_get_seller(seller_id: str, session: SessionDep) -> CatalogSellerProfileOut:
+    user = session.get(User, seller_id)
+    seller = session.get(SellerProfile, seller_id)
+    if (
+        user is None
+        or seller is None
+        or user.status is not UserStatus.ACTIVE
+        or not seller.payments_ready
+    ):
+        raise HTTPException(status_code=404, detail="seller not found")
+    rows = session.execute(_visible_listings_stmt().where(Listing.seller_id == seller_id)).all()
+    return CatalogSellerProfileOut(
+        seller_id=user.id,
+        display_name=user.display_name,
+        rating=seller.rating,
+        rating_count=seller.rating_count,
+        completed_jobs=seller.completed_jobs,
+        listings=_catalog_listings_for_rows(session, rows),
+    )
+
+
 # ---------- App assembly ----------
 
 
@@ -2217,6 +2384,7 @@ app.include_router(admin_router)
 app.include_router(reports_router)
 app.include_router(prefs_router)
 app.include_router(payments_router)
+app.include_router(catalog_router)
 
 
 def _assert_commit_routes(app: FastAPI) -> None:
