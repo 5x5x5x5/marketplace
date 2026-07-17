@@ -1072,6 +1072,7 @@ def update_listing(
         value = getattr(body, field)
         if value is not None:
             setattr(listing, field, value)
+    session.flush()
     return listing
 
 
@@ -1470,6 +1471,7 @@ def hide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> Li
         raise HTTPException(status_code=404, detail="listing not found")
     listing.hidden = True
     audit(session, admin_id, "hide_listing", str(listing_id), {})
+    session.flush()
     return listing
 
 
@@ -1480,6 +1482,7 @@ def unhide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> 
         raise HTTPException(status_code=404, detail="listing not found")
     listing.hidden = False
     audit(session, admin_id, "unhide_listing", str(listing_id), {})
+    session.flush()
     return listing
 
 

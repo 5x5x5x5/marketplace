@@ -1,5 +1,8 @@
 """Seller listing management + admin takedown (browse phase 1)."""
 
+import time
+from datetime import datetime, timedelta
+
 from fastapi.testclient import TestClient
 from httpx import Response
 
@@ -99,6 +102,52 @@ def test_update_own_only_and_never_hidden(
             f"/v1/seller/listings/{lid}", json={"title": "mine now"}, headers=other
         ).status_code
         == 404
+    )
+
+
+def test_update_returns_fresh_updated_at(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    # created_at/updated_at both default to independent _now() calls at insert
+    # time, so they can differ by a stray microsecond even when nothing was
+    # ever updated — a bare `!=` would be a false-positive-prone assertion.
+    # Require a delta that can only come from the 1.1s sleep below, so a
+    # response serialized before flush (stale updated_at) fails this check.
+    seller = _onboarded_seller(client, auth, basic_service)
+    lid = _mk(client, seller, basic_service).json()["id"]
+    time.sleep(1.1)
+    r = client.put(
+        f"/v1/seller/listings/{lid}",
+        json={"title": "Deeper clean"},
+        headers=seller,
+    )
+    assert r.status_code == 200
+    out = r.json()
+    created_at = datetime.fromisoformat(out["created_at"])
+    updated_at = datetime.fromisoformat(out["updated_at"])
+    assert updated_at - created_at > timedelta(seconds=1)
+
+
+def test_update_photo_urls_validation(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    seller = _onboarded_seller(client, auth, basic_service)
+    lid = _mk(client, seller, basic_service).json()["id"]
+    assert (
+        client.put(
+            f"/v1/seller/listings/{lid}",
+            json={"photo_urls": ["http://insecure.example/a.jpg"]},
+            headers=seller,
+        ).status_code
+        == 422
+    )
+    assert (
+        client.put(
+            f"/v1/seller/listings/{lid}",
+            json={"photo_urls": [f"https://img.example/{i}.jpg" for i in range(13)]},
+            headers=seller,
+        ).status_code
+        == 422
     )
 
 
