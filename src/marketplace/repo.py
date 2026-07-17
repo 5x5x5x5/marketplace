@@ -164,9 +164,7 @@ def eligible_candidates(
     return out
 
 
-def candidate_for_seller(
-    session: Session, seller_id: str, service_type_id: str
-) -> Candidate | None:
+def candidate_for_seller(session: Session, seller_id: str) -> Candidate | None:
     """Build a `Candidate` for one specific seller, regardless of availability.
 
     The pinned floor probe (and pinned offer creation) need this seller's

@@ -74,7 +74,7 @@ from .entities import (
 )
 from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
-from .matching import STRATEGIES, estimated_fee, required_spread, seller_payout_for
+from .matching import STRATEGIES, estimated_fee, passes_floor, required_spread, seller_payout_for
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
@@ -596,6 +596,21 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
         listing = session.get(Listing, req.listing_id)
         if listing is None or not _listing_bookable(session, listing):
             raise HTTPException(status_code=409, detail="listing unavailable")
+        # I1: a listing whose seller has NO Availability row is otherwise
+        # fully visible/bookable (`_listing_bookable` never checks
+        # Availability) -- every booking against it would consume the quote
+        # and 410 at job time with nothing to fall back to. Reject here,
+        # before anything is consumed, instead of at job time.
+        if (
+            session.scalar(
+                select(Availability).where(
+                    Availability.seller_id == listing.seller_id,
+                    Availability.service_type_id == listing.service_type_id,
+                )
+            )
+            is None
+        ):
+            raise HTTPException(status_code=409, detail="listing unavailable")
         if req.service_type_id is not None and req.service_type_id != listing.service_type_id:
             raise HTTPException(status_code=422, detail="listing_id and service_type_id disagree")
         service_type_id = listing.service_type_id
@@ -633,7 +648,7 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
         # Pinned: probe the CHOSEN seller's payout, not the market minimum —
         # the buyer picked this seller, so the floor check must reflect what
         # the platform would actually pay them, not whoever is cheapest.
-        pinned_candidate = repo.candidate_for_seller(session, listing.seller_id, service_type_id)
+        pinned_candidate = repo.candidate_for_seller(session, listing.seller_id)
         if pinned_candidate is None:
             raise HTTPException(status_code=409, detail="listing unavailable")
         probe = seller_payout_for(pinned_candidate, cfg, supply, demand)
@@ -689,6 +704,7 @@ def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) ->
 
     cfg: PricingConfig | None = None
     payout_candidate: Candidate | None = None
+    payout: Decimal | None = None
     if quote.pinned_seller_id is not None:
         listing = session.get(Listing, quote.listing_id) if quote.listing_id else None
         has_availability = (
@@ -701,9 +717,7 @@ def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) ->
             is not None
         )
         cfg = repo.load_pricing_config(session, quote.service_type_id)
-        payout_candidate = repo.candidate_for_seller(
-            session, quote.pinned_seller_id, quote.service_type_id
-        )
+        payout_candidate = repo.candidate_for_seller(session, quote.pinned_seller_id)
         if (
             listing is None
             or not _listing_bookable(session, listing)
@@ -720,6 +734,21 @@ def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) ->
             session.delete(quote)
             session.commit()
             raise HTTPException(status_code=410, detail="listing no longer available")
+        # C1: the quote-time probe checked the floor against the pinned
+        # seller's payout AS OF THE QUOTE. Tier/pricing can drift inside the
+        # quote's TTL window, so recompute the payout at JOB time here — before
+        # the Job row is built — and re-check the floor. Compute once and
+        # reuse below for `_create_offer` so the offer reflects the same
+        # payout the check approved.
+        supply = repo.available_count(session, quote.service_type_id)
+        demand = repo.active_demand(session, quote.service_type_id)
+        payout = seller_payout_for(payout_candidate, cfg, supply, demand)
+        if not passes_floor(quote.buyer_price, payout, cfg.margin_floor, cfg.fees):
+            # Same mid-commit-consume 410 contract as the guards above — never
+            # leak payout/floor numbers in the response.
+            session.delete(quote)
+            session.commit()
+            raise HTTPException(status_code=410, detail="listing no longer available")
 
     job = Job(
         quote_id=quote.id,
@@ -731,16 +760,9 @@ def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) ->
     session.delete(quote)  # quotes are single-use; deleting also blocks a racing reuse
     session.flush()
     if quote.pinned_seller_id is not None:
-        assert cfg is not None and payout_candidate is not None  # guarded above
+        assert cfg is not None and payout_candidate is not None and payout is not None  # guarded
         job.pinned_seller_id = quote.pinned_seller_id
-        supply = repo.available_count(session, job.service_type_id)
-        demand = repo.active_demand(session, job.service_type_id)
-        _create_offer(
-            session,
-            job,
-            quote.pinned_seller_id,
-            seller_payout_for(payout_candidate, cfg, supply, demand),
-        )
+        _create_offer(session, job, quote.pinned_seller_id, payout)
     else:
         _match_and_offer(session, job)  # PENDING with an offer, or EXPIRED if no seller fits
     session.flush()

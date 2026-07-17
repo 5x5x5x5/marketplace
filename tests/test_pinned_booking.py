@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Job, Offer, Payment, SellerProfile
+from marketplace.entities import Job, Offer, Payment, Quote, SellerProfile
 from marketplace.settings import settings
 from tests.conftest import AuthFactory, Header
 
@@ -116,6 +116,7 @@ def test_quote_validation_matrix(
     client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
 ) -> None:
     seller = _seller_onboarded(client, auth, "matrix_seller")
+    _avail(client, auth, basic_service, "matrix_seller")
     listing = _listing(client, seller, basic_service)
     other_sid = "matrix_other"
     r = client.put(
@@ -204,6 +205,19 @@ def test_quote_409_when_unavailable(
     assert r.status_code == 409
     assert r.json()["detail"] == "listing unavailable"
 
+    # Reason 5 (I1): seller has no Availability row for the listing's service
+    # type. Fully visible/bookable by `_listing_bookable` (which never checks
+    # Availability), so without this guard the quote would succeed and every
+    # subsequent POST /v1/jobs would 410 -- a guaranteed dead end. Deliberately
+    # skips `_avail` for this seller.
+    s5 = _seller_onboarded(client, auth, "un_noavail")
+    l5 = _listing(client, s5, basic_service)
+    r = client.post("/v1/quotes", json={"listing_id": l5["id"]}, headers=buyer)
+    assert r.status_code == 409
+    assert r.json()["detail"] == "listing unavailable"
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count()).select_from(Quote)) == 0
+
 
 def test_job_410_when_listing_dies_between_quote_and_job(
     client: TestClient, basic_service: str, auth: AuthFactory
@@ -230,6 +244,79 @@ def test_job_410_when_listing_dies_between_quote_and_job(
         assert s.scalar(select(func.count()).select_from(Job)) == 0
         assert s.scalar(select(func.count()).select_from(Offer)) == 0
         assert s.scalar(select(func.count()).select_from(Payment)) == 0
+
+
+def test_job_410_when_tier_promotion_breaks_floor_at_job_time(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """C1: the pinned quote-time probe checked the seller's tier AT QUOTE
+    TIME. If an admin promotes that seller's tier inside the quote's 15-min
+    TTL window, the job-time payout can violate the margin floor even though
+    the quote itself was never bumped -- `create_job`'s pinned branch must
+    recompute the payout and re-check the floor before booking, not just
+    reuse whatever `_listing_bookable`/availability guards already cover."""
+    _tiered_pipeline(client, admin, basic_service, {"cheap": 0.5, "chosen": 1.4})
+    seller = _seller_onboarded(client, auth, "promo_seller", "cheap")
+    _avail(client, auth, basic_service, "promo_seller")
+    listing = _listing(client, seller, basic_service)
+    client.put("/v1/admin/config/margin_floor", json={"absolute": 5}, headers=admin)
+
+    buyer = auth("buyer", "promo_buyer")
+    quote = client.post("/v1/quotes", json={"listing_id": listing["id"]}, headers=buyer).json()
+    # cheap tier (payout 7.00) clears required 5.88 with room to spare -> no
+    # quote-time bump.
+    assert quote["buyer_price"] == "20.00"
+
+    # Promote the pinned seller to a tier whose payout (14 * 1.4 = 19.60)
+    # leaves only a 0.40 spread against buyer_price 20.00 -- required is 5.88
+    # (floor 5 + fee(20) 0.88). The quote is untouched; only the seller's
+    # tier moved.
+    r = client.put("/v1/admin/sellers/promo_seller", json={"tier": "chosen"}, headers=admin)
+    assert r.status_code == 200
+
+    r = client.post("/v1/jobs", json={"quote_id": quote["id"]}, headers=buyer)
+    assert r.status_code == 410
+    # Generic detail -- never leak payout/floor numbers in the response.
+    assert r.json()["detail"] == "listing no longer available"
+
+    # Single-use regardless of outcome: a retry finds nothing to consume.
+    r2 = client.post("/v1/jobs", json={"quote_id": quote["id"]}, headers=buyer)
+    assert r2.status_code == 404
+
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count()).select_from(Quote)) == 0
+        assert s.scalar(select(func.count()).select_from(Job)) == 0
+        assert s.scalar(select(func.count()).select_from(Offer)) == 0
+        assert s.scalar(select(func.count()).select_from(Payment)) == 0
+
+
+def test_pinned_offer_books_job_time_payout(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Happy path counterpart to the C1 fix: a tier promotion between quote
+    and job that still clears the floor must book at the JOB-TIME payout
+    (computed once, right before the Job row is built), not whatever the
+    quote-time probe implied."""
+    _tiered_pipeline(client, admin, basic_service, {"low": 0.8, "mid": 1.0})
+    seller = _seller_onboarded(client, auth, "jobtime_seller", "low")
+    _avail(client, auth, basic_service, "jobtime_seller")
+    listing = _listing(client, seller, basic_service)
+
+    buyer = auth("buyer", "jobtime_buyer")
+    quote = client.post("/v1/quotes", json={"listing_id": listing["id"]}, headers=buyer).json()
+
+    # Promote after the quote -- low tier payout would have been 14*0.8 =
+    # 11.20; mid tier is 14*1.0 = 14.00. Both clear the (unconfigured, hence
+    # zero-absolute/pct) floor easily, so the job still books.
+    r = client.put("/v1/admin/sellers/jobtime_seller", json={"tier": "mid"}, headers=admin)
+    assert r.status_code == 200
+
+    job = client.post("/v1/jobs", json={"quote_id": quote["id"]}, headers=buyer)
+    assert job.status_code == 201, job.text
+
+    offers = client.get("/v1/seller/offers", headers=auth("seller", "jobtime_seller")).json()
+    assert len(offers) == 1
+    assert offers[0]["seller_payout"] == "14.00"
 
 
 def test_pinned_decline_expires_never_rematches(
