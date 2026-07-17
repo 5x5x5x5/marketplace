@@ -1,12 +1,18 @@
 """Public catalog with live indicative pricing (browse phase 2). Unauthenticated —
 no test in this file ever sends an Authorization header to a /v1/catalog/* route."""
 
+from itertools import product
 from typing import Any
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
+from marketplace.api import (
+    _listing_bookable,  # pyright: ignore[reportPrivateUsage]
+    _visible_listings_stmt,  # pyright: ignore[reportPrivateUsage]
+)
 from marketplace.db import SessionLocal
-from marketplace.entities import SellerProfile
+from marketplace.entities import Listing, SellerProfile
 from tests.conftest import AuthFactory, Header
 from tests.test_payments import onboard_and_avail
 
@@ -117,6 +123,94 @@ def test_catalog_price_from_matches_quote(
 
     catalog_listing = client.get(f"/v1/catalog/listings/{listing['id']}").json()
     assert catalog_listing["price_from"] == quote["buyer_price"]
+
+
+def test_catalog_price_from_reflects_live_demand(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Carried from Task 2's review: the empty-pipeline mirror test above is
+    supply-blind. Configure surge_by_demand_ratio with real live demand (a
+    pending job in flight) and assert price_from still equals a fresh quote's
+    buyer_price at the same moment — AND that both diverge from the base
+    price, so the mirror claim is actually discriminating."""
+    client.put(
+        f"/v1/admin/config/pipelines/{basic_service}",
+        json={"buyer": ["surge_by_demand_ratio"], "seller": []},
+        headers=admin,
+    )
+    # supply = 1 (one available seller elsewhere in the pool).
+    onboard_and_avail(client, auth, basic_service, "surge_seller")
+
+    lister = _seller(client, auth, "surge_lister")
+    listing = _listing(client, lister, basic_service)
+
+    # demand: one other live (pending) job for this service type.
+    other_buyer = auth("buyer", "surge_other_buyer")
+    other_qid = client.post(
+        "/v1/quotes", json={"service_type_id": basic_service}, headers=other_buyer
+    ).json()["id"]
+    other_job = client.post("/v1/jobs", json={"quote_id": other_qid}, headers=other_buyer).json()
+    assert other_job["status"] == "pending"
+
+    # supply=1, demand=1(existing)+1(self)=2 -> ratio 2.0 -> max_multiplier 2.5
+    # -> 20 * 2.5 = 50.00, for both the catalog call and a fresh quote at the
+    # same moment (nothing between the two calls changes live demand/supply).
+    catalog_listing = client.get(f"/v1/catalog/listings/{listing['id']}").json()
+    buyer = auth("buyer", "surge_buyer")
+    quote = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer).json()
+
+    assert catalog_listing["price_from"] == quote["buyer_price"]
+    assert catalog_listing["price_from"] != "20.00"
+
+
+def test_catalog_visibility_matches_bookable_matrix(
+    client: TestClient, basic_service: str, auth: AuthFactory, admin: Header
+) -> None:
+    """Carried from Task 2's review: build every combination of
+    (active, hidden, suspended, onboarded) and assert catalog membership
+    (`_visible_listings_stmt`) agrees with the single-row booking guard
+    (`_listing_bookable`) on every single row -- the two must never drift."""
+    for i, (active, hidden, suspended, onboarded) in enumerate(product([True, False], repeat=4)):
+        name = f"vparity{i}"
+        headers = auth("seller", name)
+        # Onboard first regardless -- listing creation requires payments_ready.
+        assert client.post("/v1/seller/payments/onboard", headers=headers).status_code == 200
+        listing = client.post(
+            "/v1/seller/listings",
+            json={"service_type_id": basic_service, "title": "parity"},
+            headers=headers,
+        ).json()
+
+        if not active:
+            r = client.put(
+                f"/v1/seller/listings/{listing['id']}", json={"active": False}, headers=headers
+            )
+            assert r.status_code == 200
+        if hidden:
+            r = client.post(f"/v1/admin/listings/{listing['id']}/hide", headers=admin)
+            assert r.status_code == 200
+        if not onboarded:
+            # No un-onboard endpoint exists; white-box it (same idiom as
+            # test_catalog_shows_bookable_only's seller "se").
+            with SessionLocal() as s:
+                prof = s.get(SellerProfile, name)
+                assert prof is not None
+                prof.payments_ready = False
+                s.commit()
+        if suspended:
+            # Last: suspension blocks further seller-authenticated writes.
+            r = client.post(
+                f"/v1/admin/users/{name}/suspend", json={"reason": "parity"}, headers=admin
+            )
+            assert r.status_code == 200
+
+        listing_uuid = UUID(listing["id"])
+        with SessionLocal() as s:
+            row = s.execute(_visible_listings_stmt().where(Listing.id == listing_uuid)).first()
+            db_listing = s.get(Listing, listing_uuid)
+            assert db_listing is not None
+            bookable = _listing_bookable(s, db_listing)
+        assert (row is not None) == bookable, (active, hidden, suspended, onboarded)
 
 
 _FORBIDDEN = {"seller_payout", "margin", "capacity", "email", "payments_ready", "tier"}

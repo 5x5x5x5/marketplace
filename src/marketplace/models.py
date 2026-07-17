@@ -142,6 +142,8 @@ class QuoteOut(BaseModel):
     buyer_price: Decimal
     created_at: datetime
     expires_at: datetime
+    listing_id: UUID | None
+    pinned_seller_id: str | None
 
 
 class BuyerJobView(BaseModel):
@@ -606,7 +608,8 @@ class ResetConfirmRequest(BaseModel):
 
 
 class QuoteRequest(BaseModel):
-    service_type_id: str = Field(min_length=1, max_length=128)
+    service_type_id: str | None = Field(default=None, min_length=1, max_length=128)
+    listing_id: UUID | None = None
 
 
 class JobCreateRequest(BaseModel):

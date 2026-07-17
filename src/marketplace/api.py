@@ -43,6 +43,7 @@ from .auth import (
     current_seller,
     require_admin,
 )
+from .config import Candidate, PricingConfig
 from .db import CommitRoute, SessionLocal, get_session, init_db
 from .entities import (
     Adjustment,
@@ -224,6 +225,12 @@ def _match_and_offer(session: Session, job: Job) -> None:
     Excludes any seller who already had an offer for this job (so decline/expiry
     walk down the candidate list instead of looping).
     """
+    if job.pinned_seller_id is not None:
+        # Browse contract: the buyer chose this seller — never substitute.
+        # Pinned jobs get their offer at creation; a re-match call means
+        # decline/expiry, so the job ends here.
+        _expire_unmatched(session, job)
+        return
     cfg = repo.load_pricing_config(session, job.service_type_id)
     if cfg is None:
         _expire_unmatched(session, job)
@@ -584,7 +591,19 @@ def _indicative_buyer_price(session: Session, service_type_id: str) -> Decimal |
 @buyer_router.post("/quotes", response_model=QuoteOut, status_code=201)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
     _require_active(session, buyer_id)
-    cfg = repo.load_pricing_config(session, req.service_type_id)
+    listing: Listing | None = None
+    if req.listing_id is not None:
+        listing = session.get(Listing, req.listing_id)
+        if listing is None or not _listing_bookable(session, listing):
+            raise HTTPException(status_code=409, detail="listing unavailable")
+        if req.service_type_id is not None and req.service_type_id != listing.service_type_id:
+            raise HTTPException(status_code=422, detail="listing_id and service_type_id disagree")
+        service_type_id = listing.service_type_id
+    elif req.service_type_id is not None:
+        service_type_id = req.service_type_id
+    else:
+        raise HTTPException(status_code=422, detail="listing_id or service_type_id required")
+    cfg = repo.load_pricing_config(session, service_type_id)
     if cfg is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
 
@@ -610,11 +629,20 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
         )
     )
 
-    payouts = [
-        seller_payout_for(c, cfg, supply, demand)
-        for c in repo.eligible_candidates(session, cfg.service.id, set())
-    ]
-    probe = min(payouts) if payouts else None
+    if listing is not None:
+        # Pinned: probe the CHOSEN seller's payout, not the market minimum —
+        # the buyer picked this seller, so the floor check must reflect what
+        # the platform would actually pay them, not whoever is cheapest.
+        pinned_candidate = repo.candidate_for_seller(session, listing.seller_id, service_type_id)
+        if pinned_candidate is None:
+            raise HTTPException(status_code=409, detail="listing unavailable")
+        probe = seller_payout_for(pinned_candidate, cfg, supply, demand)
+    else:
+        payouts = [
+            seller_payout_for(c, cfg, supply, demand)
+            for c in repo.eligible_candidates(session, cfg.service.id, set())
+        ]
+        probe = min(payouts) if payouts else None
     if probe is not None:
         required = required_spread(buyer_price, cfg.margin_floor, cfg.fees)
         if buyer_price - probe < required:
@@ -641,6 +669,8 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
         service_type_id=cfg.service.id,
         buyer_price=buyer_price,
         expires_at=_now() + timedelta(minutes=settings.quote_ttl_minutes),
+        listing_id=req.listing_id,
+        pinned_seller_id=(listing.seller_id if listing is not None else None),
     )
     session.add(quote)
     session.flush()
@@ -657,6 +687,40 @@ def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) ->
     if quote.expires_at < _now():
         raise HTTPException(status_code=410, detail="quote expired")
 
+    cfg: PricingConfig | None = None
+    payout_candidate: Candidate | None = None
+    if quote.pinned_seller_id is not None:
+        listing = session.get(Listing, quote.listing_id) if quote.listing_id else None
+        has_availability = (
+            session.scalar(
+                select(Availability).where(
+                    Availability.seller_id == quote.pinned_seller_id,
+                    Availability.service_type_id == quote.service_type_id,
+                )
+            )
+            is not None
+        )
+        cfg = repo.load_pricing_config(session, quote.service_type_id)
+        payout_candidate = repo.candidate_for_seller(
+            session, quote.pinned_seller_id, quote.service_type_id
+        )
+        if (
+            listing is None
+            or not _listing_bookable(session, listing)
+            or not has_availability
+            or cfg is None
+            or payout_candidate is None
+        ):
+            # Single-use regardless of booking outcome — the same contract as
+            # the unpinned no-seller-found case, which still consumes the
+            # quote and simply yields an EXPIRED job. A pinned failure has no
+            # rival to fall back to, so it 410s instead of returning a job;
+            # commit the consumption here because CommitRoute never persists
+            # a 4xx response, and a dead quote must not be retryable.
+            session.delete(quote)
+            session.commit()
+            raise HTTPException(status_code=410, detail="listing no longer available")
+
     job = Job(
         quote_id=quote.id,
         buyer_id=quote.buyer_id,
@@ -666,7 +730,19 @@ def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) ->
     session.add(job)
     session.delete(quote)  # quotes are single-use; deleting also blocks a racing reuse
     session.flush()
-    _match_and_offer(session, job)  # PENDING with an offer, or EXPIRED if no seller fits
+    if quote.pinned_seller_id is not None:
+        assert cfg is not None and payout_candidate is not None  # guarded above
+        job.pinned_seller_id = quote.pinned_seller_id
+        supply = repo.available_count(session, job.service_type_id)
+        demand = repo.active_demand(session, job.service_type_id)
+        _create_offer(
+            session,
+            job,
+            quote.pinned_seller_id,
+            seller_payout_for(payout_candidate, cfg, supply, demand),
+        )
+    else:
+        _match_and_offer(session, job)  # PENDING with an offer, or EXPIRED if no seller fits
     session.flush()
     return job
 
@@ -2193,18 +2269,15 @@ async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str,
 catalog_router = APIRouter(prefix="/v1/catalog", tags=["catalog"], route_class=CommitRoute)
 
 
-def _listing_bookable(  # pyright: ignore[reportUnusedFunction]
-    session: Session, listing: Listing
-) -> bool:
+def _listing_bookable(session: Session, listing: Listing) -> bool:
     """True iff `listing` is currently visible/bookable to the public: the
     seller's own active toggle is on, admin hasn't hidden it, the seller's
     account is ACTIVE, and the seller has completed payments onboarding.
 
-    Task-3 interface: single-row companion to `_visible_listings_stmt` below —
-    reuse this for booking guards (e.g. confirming a listing is still bookable
-    at quote/job-creation time), rather than re-deriving the visibility rule.
-    Unused within Task 2 itself (catalog reads only ever need the list form);
-    the ignore below is deliberate, matching the fixture idiom in conftest.py.
+    Single-row companion to `_visible_listings_stmt` below — shared by the
+    catalog's list/detail reads and the pinned-booking guards in
+    `create_quote`/`create_job` (quote/job-creation time), so the two can
+    never drift apart.
     """
     if not listing.active or listing.hidden:
         return False
