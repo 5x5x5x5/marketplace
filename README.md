@@ -1,10 +1,14 @@
-# marketplace
+# market-platform
 
-A generic **two-sided marketplace** template. The platform sets the buyer-facing
-price and the seller payout **independently** and keeps the spread — a *managed*
-marketplace, not commission-on-seller-price. Pricing pipelines, matching
-strategy, margin floor, and adjuster parameters are all tunable at runtime via
-the admin API. Fork it and specialize it per market.
+A **browse marketplace**, forked from the generic two-sided marketplace
+platform-margin template (`github.com/5x5x5x5/marketplace`) to add a public,
+browsable catalog of seller listings in front of the template's own
+quote-and-match flow — for a browse-family vertical with a few big sellers
+per market (vertical TBD). The platform still sets the buyer-facing price
+and the seller payout **independently** and keeps the spread — a *managed*
+marketplace, not commission-on-seller-price — that differentiator is
+unchanged by the browse work. Pricing pipelines, matching strategy, margin
+floor, and adjuster parameters are all tunable at runtime via the admin API.
 
 ## Stack
 
@@ -31,6 +35,37 @@ FastAPI · Pydantic v2 · SQLAlchemy 2.0 + Alembic · Postgres (SQLite for local
 
 Buyer- and seller-facing responses use distinct view models that exclude the
 other side's number; only admin endpoints see both.
+
+## Browse model (fork phase 1)
+
+Layered on top of the mechanism above, without changing it: sellers can
+publish **listings** — title, description, up to 12 `https://` photo URLs,
+one service type — that buyers browse before booking, and a buyer can pin a
+quote to one specific listing's seller instead of taking whoever the
+platform matches.
+
+- **Listings never carry a price.** `POST/GET/PUT /v1/seller/listings`
+  (seller-owned `active` toggle) and `GET/POST /v1/admin/listings/{id}
+  /hide|unhide` (admin-owned takedown, independent of `active`) — a listing
+  needs both `active=true` and not `hidden` to be publicly visible.
+- **Public catalog** — `GET /v1/catalog/listings` (optionally filtered by
+  `service_type_id`), `GET /v1/catalog/listings/{id}`, and
+  `GET /v1/catalog/sellers/{id}` are all **unauthenticated**. Cards carry a
+  `price_from` (the buyer pricing pipeline evaluated live, pre-floor — a
+  real quote may bump it upward) and a seller summary (display name,
+  rating), never a payout, capacity, email, or `payments_ready`.
+- **Pinned booking** — `POST /v1/quotes` with a `listing_id` (instead of a
+  bare `service_type_id`) probes and pins to *that listing's seller*: the
+  quote and the resulting job both carry `pinned_seller_id`, and
+  `POST /v1/jobs` offers the job to that seller only. A listing that's gone
+  unavailable 409s at quote time and 410s at job-creation time (the quote is
+  still consumed either way — single-use, no retry on a dead pin). A pinned
+  job never re-matches to a different seller on decline, offer timeout, or
+  sweep — it just expires, unlike the template's unpinned dispatch flow.
+- **TTL defaults are 15/120**, not the template's original 5/2:
+  `QUOTE_TTL_MINUTES=15`, `OFFER_TTL_MINUTES=120` (see `.env.example`) — a
+  human browsing a catalog and picking a specific seller needs longer
+  windows than the template's tighter platform-matched defaults.
 
 ## Quickstart
 
@@ -62,23 +97,28 @@ The test suite runs against whatever `DATABASE_URL` points at, so `DATABASE_URL=
 
 The fastest tour is headless: `uv run python scripts/demo.py` runs the whole
 lifecycle (quote → match → escrow → complete → dispute → refund → moderation →
-stats) in-process and prints each step. To drive it yourself from Swagger:
+stats → browse catalog + pinned booking) in-process and prints each step. To
+drive it yourself from Swagger:
 
 ```bash
 # 1. Start the API (the admin account is seeded from these two vars)
 ADMIN_EMAIL=admin@marketplace-demo.dev ADMIN_PASSWORD=try-it-admin-password \
     uv run uvicorn marketplace.api:app --reload
 
-# 2. In another terminal: seed service types, pipelines, a buyer, and a seller
+# 2. In another terminal: seed service types, pipelines, a buyer/seller, and a listing per type
 uv run python scripts/seed.py
 ```
 
-`seed.py` prints three bearer tokens. Open <http://localhost:8000/docs>, click
-**Authorize**, and paste one in (token only — no `Bearer ` prefix). Then walk a
+`seed.py` prints three bearer tokens and seeds one listing per service type
+for the demo seller — `GET /v1/catalog/listings` is unauthenticated, so try
+it with no token at all before opening Swagger. Then, in Swagger: click
+**Authorize** and paste a token in (token only — no `Bearer ` prefix). Walk a
 job end to end:
 
 1. Authorize as the **buyer** → `POST /v1/quotes` with
-   `{"service_type_id": "rideshare"}` → `POST /v1/jobs` with the quote id.
+   `{"service_type_id": "rideshare"}` (platform-matched) or
+   `{"listing_id": "…"}` from a catalog card (pinned to that seller) →
+   `POST /v1/jobs` with the quote id.
 2. Re-Authorize as the **seller** → `GET /v1/seller/offers` →
    `POST /v1/seller/offers/{id}/accept` (the fake provider charges instantly)
    → `POST /v1/seller/jobs/{id}/complete`.
@@ -147,7 +187,9 @@ suspend, reinstate, hide, unhide, etc.) return 200.
 
 **Auth** (`/v1/auth/…`) — see the Auth section above.
 
-**Buyer** — `POST /quotes` · `POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
+**Buyer** — `POST /quotes` (`{service_type_id}` for platform-matched, or
+`{listing_id}` to pin to that listing's seller — see Browse model above) ·
+`POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
 `POST /jobs/{id}/cancel` · `GET /profile` (own rating aggregate) ·
 `POST /jobs/{id}/review` · `GET /jobs/{id}/reviews` (own job's review(s),
 no party ids) · `POST /reports` · `GET /reports` (own filed
@@ -155,6 +197,8 @@ reports; shared with seller, see Seller list)
 
 **Seller** (`/v1/seller/…`) — `PUT|GET /profile` (own capacity) ·
 `POST /payments/onboard` · `POST|DELETE /availability[/{service_type_id}]` ·
+`POST /listings` · `GET /listings` (own listings, any state) ·
+`PUT /listings/{id}` (title/description/photos/`active`, never a price) ·
 `GET /offers` · `GET /jobs` · `POST /offers/{id}/accept` ·
 `POST /offers/{id}/decline` · `POST /jobs/{id}/complete` ·
 `POST /jobs/{id}/review` (rate the buyer) ·
@@ -162,11 +206,19 @@ reports; shared with seller, see Seller list)
 `POST /v1/reports` ·
 `GET /v1/reports` (shared with buyer, not `/seller`-prefixed — see Buyer list)
 
+**Catalog** (`/v1/catalog/…`, unauthenticated — see Browse model above) —
+`GET /listings` (optional `service_type_id` filter) ·
+`GET /listings/{id}` · `GET /sellers/{id}` (aggregate stats + their
+currently visible listings)
+
 **Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·
 `PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
 `PUT /config/matching_strategy` · `PUT /config/adjuster_params/{name}` ·
 `PUT /config/fees` (pct/fixed provider-fee estimate) ·
 `PUT /sellers/{id}` (tier/capacity) · `GET /buyers` (rating aggregates) ·
+`GET /listings` (every listing, any state) ·
+`POST /listings/{id}/hide` · `POST /listings/{id}/unhide` (admin-owned
+takedown, independent of the seller's own `active` toggle) ·
 `GET /transactions` · `GET /payouts` ·
 `POST /payouts/{id}/retry` · `GET /notifications` ·
 `POST /notifications/drain` · `GET /margins/summary` · `GET /audit` ·
@@ -228,7 +280,9 @@ Configuring a real Stripe account: point its webhook at
 ## Notifications
 
 Fourteen lifecycle events email the right party: the seller's new-offer alert
-(the one that makes 2-minute offer TTLs livable), the buyer's
+(the one that makes short offer TTLs livable — see `OFFER_TTL_MINUTES` in
+the Browse model section above; this fork's default is 120, not the
+template's original 2), the buyer's
 accepted/payment-due, completed, expired, and refund notices, a cancel notice
 to a committed seller, dispute outcomes to both sides, and report/payout-failure
 alerts to every admin. Recipients tune this per kind via

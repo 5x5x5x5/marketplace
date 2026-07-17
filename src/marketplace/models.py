@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 CENTS = Decimal("0.01")
 
@@ -142,6 +142,8 @@ class QuoteOut(BaseModel):
     buyer_price: Decimal
     created_at: datetime
     expires_at: datetime
+    listing_id: UUID | None
+    pinned_seller_id: str | None
 
 
 class BuyerJobView(BaseModel):
@@ -215,6 +217,89 @@ class SellerCompletionOut(BaseModel):
     job_id: UUID
     seller_payout: Decimal
     completed_at: datetime
+
+
+class ListingCreate(BaseModel):
+    service_type_id: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    photo_urls: list[str] = Field(default_factory=list[str], max_length=12)
+
+    @field_validator("photo_urls")
+    @classmethod
+    def _https_only(cls, v: list[str]) -> list[str]:
+        for url in v:
+            if not url.startswith("https://") or len(url) > 512:
+                raise ValueError("photo_urls must be https:// and at most 512 chars")
+        return v
+
+
+class ListingUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=4000)
+    photo_urls: list[str] | None = Field(default=None, max_length=12)
+    active: bool | None = None
+
+    @field_validator("photo_urls")
+    @classmethod
+    def _https_only(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        for url in v:
+            if not url.startswith("https://") or len(url) > 512:
+                raise ValueError("photo_urls must be https:// and at most 512 chars")
+        return v
+
+
+class SellerListingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    service_type_id: str
+    title: str
+    description: str
+    photo_urls: list[str]
+    active: bool
+    hidden: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class CatalogSellerOut(BaseModel):
+    """Public seller summary attached to a catalog listing. No `tier`,
+    `capacity`, `payments_ready`, or email — asymmetry doctrine extends to
+    unauthenticated browse, not just buyer/seller views."""
+
+    seller_id: str
+    display_name: str
+    rating: float | None
+    rating_count: int
+
+
+class CatalogListingOut(BaseModel):
+    """Public listing card. `price_from` is indicative only — the buyer
+    pipeline evaluated now, pre-floor; a real quote may bump it upward
+    (see `api._indicative_buyer_price`). No `seller_payout`/`margin`."""
+
+    id: UUID
+    title: str
+    description: str
+    photo_urls: list[str]
+    service_type_id: str
+    price_from: Decimal  # indicative: the buyer pipeline now; a real quote may bump upward
+    seller: CatalogSellerOut
+
+
+class CatalogSellerProfileOut(BaseModel):
+    """Public seller profile: aggregate stats + their currently visible
+    listings. No `capacity`/`payments_ready`/`tier`/email."""
+
+    seller_id: str
+    display_name: str
+    rating: float | None
+    rating_count: int
+    completed_jobs: int
+    listings: list[CatalogListingOut]
 
 
 class PayoutOut(BaseModel):
@@ -523,7 +608,8 @@ class ResetConfirmRequest(BaseModel):
 
 
 class QuoteRequest(BaseModel):
-    service_type_id: str = Field(min_length=1, max_length=128)
+    service_type_id: str | None = Field(default=None, min_length=1, max_length=128)
+    listing_id: UUID | None = None
 
 
 class JobCreateRequest(BaseModel):

@@ -7,6 +7,7 @@ beats a join; fine at pilot scale (ponytail: revisit if a service type ever has
 thousands of live sellers).
 """
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -161,6 +162,28 @@ def eligible_candidates(
         if cand.has_capacity:
             out.append(cand)
     return out
+
+
+def candidate_for_seller(session: Session, seller_id: str) -> Candidate | None:
+    """Build a `Candidate` for one specific seller, regardless of availability.
+
+    The pinned floor probe (and pinned offer creation) need this seller's
+    payout math even when the question isn't "is anyone available" but "is
+    THIS seller available" — that's checked separately, by the caller, via
+    `Availability`/`_listing_bookable`. Returns None if the seller has no
+    profile (mirrors `eligible_candidates`'s Candidate construction)."""
+    prof = session.get(SellerProfile, seller_id)
+    if prof is None:
+        return None
+    return Candidate(
+        seller_id=seller_id,
+        tier=prof.tier,
+        rating=prof.rating,
+        completed_jobs=prof.completed_jobs,
+        available_since=datetime.now(UTC),
+        active_jobs=active_job_count(session, seller_id),
+        capacity=prof.capacity,
+    )
 
 
 def sellers_seen_for_job(session: Session, job_id: UUID) -> set[str]:

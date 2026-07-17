@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     # Point DATABASE_URL at Postgres (see docker-compose.yml) for real deployments.
     database_url: str = "sqlite+pysqlite:///./marketplace.db"
 
-    quote_ttl_minutes: int = 5
-    offer_ttl_minutes: int = 2
+    # fork divergence: browse marketplace with human sellers — see browse-core spec
+    quote_ttl_minutes: int = 15
+    offer_ttl_minutes: int = 120
 
     # Payments. STRIPE_SECRET_KEY set → real Stripe adapter; unset → deterministic
     # in-memory fake (dev/tests, no account needed).
