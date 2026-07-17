@@ -1,0 +1,11 @@
+<article class="card">
+  {% if listing.photo_urls %}
+  <img class="card-photo" src="{{ listing.photo_urls[0] }}" alt="" />
+  {% endif %}
+  <div class="card-body">
+    <h3 class="card-title">{{ listing.title }}</h3>
+    <p class="card-desc">{{ listing.description }}</p>
+    <p class="card-seller">{{ listing.seller.display_name }}</p>
+    <p class="card-price">from <strong>${{ listing.price_from }}</strong></p>
+  </div>
+</article>
