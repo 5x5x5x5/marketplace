@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from . import catalog
 from .db import CommitRoute, get_session
 from .entities import Listing, SellerProfile, User
-from .models import CatalogSellerProfileOut, UserStatus
+from .models import CatalogSellerProfileOut
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 pages_router = APIRouter(route_class=CommitRoute, tags=["pages"])
@@ -79,13 +79,10 @@ def listing_detail(request: Request, session: _SessionDep, listing_id: UUID) -> 
 def seller_profile(request: Request, session: _SessionDep, seller_id: str) -> HTMLResponse:
     user = session.get(User, seller_id)
     seller = session.get(SellerProfile, seller_id)
-    if (
-        user is None
-        or seller is None
-        or user.status is not UserStatus.ACTIVE
-        or not seller.payments_ready
-    ):
+    if not catalog.seller_publicly_visible(user, seller):
         return _not_found(request, "This seller isn't available.")
+    assert user is not None
+    assert seller is not None
     rows = session.execute(
         catalog.visible_listings_stmt().where(Listing.seller_id == seller_id)
     ).all()

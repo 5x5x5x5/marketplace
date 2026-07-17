@@ -80,6 +80,20 @@ def visible_listings_stmt() -> Select[tuple[Listing, User, SellerProfile]]:
     )
 
 
+def seller_publicly_visible(user: User | None, seller: SellerProfile | None) -> bool:
+    """Whether a seller's own profile/lookup endpoint should resolve at all:
+    account exists, ACTIVE, and payments onboarded. Single-seller equivalent
+    of `visible_listings_stmt`'s row filter above — same rule, shared here so
+    the catalog API's `/v1/catalog/sellers/{id}` and the pages router's
+    `/sellers/{id}` can never drift on what counts as a visible seller."""
+    return (
+        user is not None
+        and seller is not None
+        and user.status is UserStatus.ACTIVE
+        and seller.payments_ready
+    )
+
+
 def catalog_seller_out(user: User, seller: SellerProfile) -> CatalogSellerOut:
     return CatalogSellerOut(
         seller_id=user.id,

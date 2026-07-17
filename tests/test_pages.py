@@ -6,6 +6,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from marketplace.db import SessionLocal
+from marketplace.entities import SellerProfile
 from tests.conftest import AuthFactory, Header
 from tests.test_payments import onboard_and_avail
 
@@ -149,6 +151,20 @@ def test_seller_profile_unknown_404(client: TestClient) -> None:
     assert r.status_code == 404
 
 
+def test_seller_profile_not_onboarded_404(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    _listed_seller(client, auth, basic_service)
+    with SessionLocal() as s:
+        prof = s.get(SellerProfile, "s1")
+        assert prof is not None
+        prof.payments_ready = False
+        s.commit()
+    r = client.get("/sellers/s1")
+    assert r.status_code == 404
+    assert r.headers["content-type"].startswith("text/html")
+
+
 def test_page_source_asymmetry_detail_and_seller(
     client: TestClient, basic_service: str, auth: AuthFactory
 ) -> None:
@@ -162,11 +178,27 @@ def test_page_source_asymmetry_detail_and_seller(
 def test_xss_listing_title_escaped_detail_and_seller(
     client: TestClient, basic_service: str, auth: AuthFactory
 ) -> None:
-    listing = _listed_seller(client, auth, basic_service, title="<script>alert(1)</script>")
+    listing = _listed_seller(
+        client,
+        auth,
+        basic_service,
+        title="<script>alert(1)</script>",
+        photo_urls=["https://img.test.local/xss.jpg"],
+    )
     for url in (f"/listings/{listing['id']}", "/sellers/s1"):
         html = client.get(url).text
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;" in html
+
+    # The img alt attribute is a separate sink from the page body text above
+    # (attribute context, not element content) — exercise it directly by
+    # isolating the <img ...> tag and checking escaping within it.
+    detail_html = client.get(f"/listings/{listing['id']}").text
+    img_start = detail_html.index("<img")
+    img_end = detail_html.index("/>", img_start)
+    img_tag = detail_html[img_start:img_end]
+    assert "<script>alert(1)</script>" not in img_tag
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in img_tag
 
 
 def test_commit_route_invariant_covers_pages() -> None:

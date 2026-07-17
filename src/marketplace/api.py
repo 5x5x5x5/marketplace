@@ -2317,13 +2317,10 @@ def catalog_get_listing(listing_id: UUID, session: SessionDep) -> CatalogListing
 def catalog_get_seller(seller_id: str, session: SessionDep) -> CatalogSellerProfileOut:
     user = session.get(User, seller_id)
     seller = session.get(SellerProfile, seller_id)
-    if (
-        user is None
-        or seller is None
-        or user.status is not UserStatus.ACTIVE
-        or not seller.payments_ready
-    ):
+    if not catalog.seller_publicly_visible(user, seller):
         raise HTTPException(status_code=404, detail="seller not found")
+    assert user is not None
+    assert seller is not None
     rows = session.execute(_visible_listings_stmt().where(Listing.seller_id == seller_id)).all()
     return CatalogSellerProfileOut(
         seller_id=user.id,
