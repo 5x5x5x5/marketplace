@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}{{ seller.display_name }} — Marketplace{% endblock %}
+
+{% block content %}
+<section class="seller-header">
+  <h1>{{ seller.display_name }}</h1>
+  <p class="seller-stats">
+    {% if seller.rating is not none %}
+    {{ "%.1f"|format(seller.rating) }} rating ({{ seller.rating_count }} review{% if seller.rating_count != 1 %}s{% endif %})
+    {% else %}
+    No ratings yet
+    {% endif %}
+    &middot; {{ seller.completed_jobs }} completed job{% if seller.completed_jobs != 1 %}s{% endif %}
+  </p>
+</section>
+
+{% if seller.listings %}
+<div class="catalog-grid">
+  {% for listing in seller.listings %}
+  {% include "_listing_card.html" %}
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No active listings right now.</p>
+{% endif %}
+{% endblock %}

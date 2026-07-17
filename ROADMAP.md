@@ -17,12 +17,46 @@ identity paragraph and the browse-core non-negotiables.
   it expires instead). `QUOTE_TTL_MINUTES`/`OFFER_TTL_MINUTES` defaults
   moved from the template's 5/2 to 15/120 for a human-paced browse flow.
   `scripts/demo.py` act 9 and `scripts/seed.py` exercise it end to end.
-- **Phase 2 — HTMX pages (next).** Server-rendered browse/listing pages over
-  the catalog endpoints above, so the browse flow is reachable without
-  Swagger or a hand-rolled client.
-- **Phase 3 — transact pages.** Server-rendered quote/job/offer pages over
-  the buyer/seller flows, completing a browsable, bookable front end without
-  a SPA.
+- **Phase 2 — pages foundation (done, branch `pages-foundation`).**
+  Server-rendered storefront over the catalog and auth endpoints, so browse
+  and account creation are reachable without Swagger or a hand-rolled
+  client: `GET /` (catalog landing, paginated, filterable), `GET
+  /listings/{id}`, `GET /sellers/{id}`, plus `GET/POST /signup`, `GET/POST
+  /login`, `POST /logout` — the last three cookie-backed (`HttpOnly`,
+  `SameSite=Lax`, `Secure` via `cookie_secure`) over the *same*
+  `auth_sessions` rows the JSON API uses, narrowed to `buyer`/`seller` (no
+  browser path to an admin session). Catalog read logic was extracted into
+  `catalog.py` — the single source of visibility/pricing truth for both
+  `/v1/catalog/*` and the pages, closing two double-expression regressions
+  a first draft introduced by hand-rolling the same check twice. The
+  `_assert_commit_routes` invariant widened to cover every route in the app
+  (not just `/v1/*`), with a named `_COMMIT_EXEMPT` for `/healthz`. No
+  booking flow — an anonymous or signed-in buyer can browse and hold a
+  session, but there's no page to create a quote or job yet; the
+  listing-detail page is asserted to render no booking form and no
+  `/v1/quotes`/`/v1/jobs` reference. No migration (no new tables — cookie
+  sessions reuse `auth_sessions`). See `CLAUDE.md` and `SECURITY.md` for the
+  invariants and cookie/XSS/CSRF posture, and `README.md`'s "The storefront"
+  section for the routes.
+- **Phase 3 — transact pages (next).** Server-rendered quote/job/offer pages
+  over the buyer/seller flows, completing a browsable, bookable front end
+  without a SPA:
+  - The booking flow itself — turning a catalog listing (or a
+    platform-matched service type) into a quote and then a job from a page,
+    replacing today's API-only path.
+  - Buyer and seller dashboards — a signed-in buyer's own jobs, a signed-in
+    seller's own listings/offers/jobs, rendered from the existing
+    role-scoped views (`BuyerJobView`/`SellerJobView`), not new endpoints.
+  - An offer inbox page for sellers (accept/decline from a page instead of
+    Swagger/`GET /v1/seller/offers`).
+  - Payment-confirmation and email-token pages (`client_secret` confirmation
+    for `AWAITING_PAYMENT` jobs; the verification/password-reset links
+    README's Auth section notes have no GET handler today — this is where
+    that gap gets a page front end).
+  - CSRF tokens for these forms — deferred here in phase 2 because every
+    phase-2 mutation is cheap (signup/login/logout) and Lax + POST-only is
+    an accepted mitigation for that; money-moving forms in phase 3 need the
+    stronger guarantee. See `SECURITY.md`'s CSRF-stance note.
 
 Everything below this section documents the public upstream template as of
 the fork point — it is **historical** from this fork's perspective (still

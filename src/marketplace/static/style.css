@@ -1,0 +1,230 @@
+/* Marketplace — light editorial. Hand-rolled, no framework, no build step. */
+
+:root {
+  --cream: #faf6ef;
+  --cream-deep: #f1ebdd;
+  --ink: #1c1a17;
+  --ink-soft: #4a4640;
+  --hairline: #ddd4c2;
+  --accent: #6f1d21; /* oxblood — links and buttons only */
+  --accent-ink: #faf6ef;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--cream);
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.55;
+}
+
+h1,
+h2,
+h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  line-height: 1.2;
+  margin: 0 0 0.5em;
+}
+
+p {
+  margin: 0 0 1em;
+  color: var(--ink-soft);
+}
+
+a {
+  color: var(--accent);
+}
+
+.shell {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.site-header {
+  border-bottom: 1px solid var(--hairline);
+  background: var(--cream-deep);
+}
+
+.site-header .shell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 1.25rem;
+  padding-bottom: 1.25rem;
+}
+
+.brand {
+  font-size: 1.4rem;
+  text-decoration: none;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+
+.site-header nav a {
+  margin-left: 1.25rem;
+  text-decoration: none;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.5rem 1.1rem;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+
+.button:hover {
+  opacity: 0.9;
+}
+
+main.shell {
+  padding-top: 2.5rem;
+  padding-bottom: 4rem;
+  min-height: 60vh;
+}
+
+.catalog-header {
+  margin-bottom: 2rem;
+}
+
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1.75rem;
+}
+
+.card {
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: #fff;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-photo {
+  width: 100%;
+  height: 10rem;
+  object-fit: cover;
+  display: block;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.card-body {
+  padding: 1.1rem 1.25rem 1.4rem;
+}
+
+.card-title {
+  font-size: 1.1rem;
+  margin-bottom: 0.35em;
+}
+
+.card-desc {
+  font-size: 0.92rem;
+}
+
+.card-seller {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.card-price {
+  margin-top: 0.75em;
+  color: var(--ink);
+}
+
+.empty-state {
+  padding: 3rem 0;
+  text-align: center;
+  color: var(--ink-soft);
+}
+
+.pagination {
+  margin-top: 2.5rem;
+  text-align: center;
+}
+
+.pagination a {
+  text-decoration: none;
+}
+
+.error-page {
+  padding: 4rem 0;
+  text-align: center;
+}
+
+.listing-detail {
+  max-width: 42rem;
+}
+
+.listing-photos {
+  margin-bottom: 1.5rem;
+}
+
+.listing-photo {
+  width: 100%;
+  max-height: 20rem;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--hairline);
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.listing-photo-hero {
+  max-height: 26rem;
+}
+
+.listing-photo-placeholder {
+  width: 100%;
+  height: 18rem;
+  background: var(--cream-deep);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  margin-bottom: 1.5rem;
+}
+
+.listing-seller {
+  font-style: italic;
+}
+
+.listing-price {
+  font-size: 1.15rem;
+  color: var(--ink);
+}
+
+.booking-stub {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.booking-note {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.seller-header {
+  margin-bottom: 2rem;
+}
+
+.seller-stats {
+  color: var(--ink-soft);
+}
+
+.site-footer {
+  border-top: 1px solid var(--hairline);
+  background: var(--cream-deep);
+  padding: 1.5rem 0;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}

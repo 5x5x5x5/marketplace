@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Browse listings — Marketplace{% endblock %}
+
+{% block content %}
+<section class="catalog-header">
+  <h1>Browse listings</h1>
+</section>
+
+{% if listings %}
+<div class="catalog-grid">
+  {% for listing in listings %}
+  {% include "_listing_card.html" %}
+  {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No listings yet. Check back soon.</p>
+{% endif %}
+
+{% if has_next %}
+<nav class="pagination">
+  <a href="/?page={{ page + 1 }}{% if service_type_id %}&service_type_id={{ service_type_id }}{% endif %}">Next</a>
+</nav>
+{% endif %}
+{% endblock %}

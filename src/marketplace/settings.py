@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     admin_email: str = ""
     admin_password: str = ""
     base_url: str = "http://localhost:8000"  # used in verification/reset links
+    cookie_secure: bool = False  # set True behind TLS in production
 
     # Notifications: transactional outbox drained by the in-process loop.
     notify_drain_seconds: int = 5

@@ -67,6 +67,57 @@ platform matches.
   human browsing a catalog and picking a specific seller needs longer
   windows than the template's tighter platform-matched defaults.
 
+## The storefront (fork phase 2)
+
+Server-rendered HTML pages sit in front of the catalog API and auth
+endpoints — no Swagger, no hand-rolled client, no SPA build step needed to
+browse the catalog or hold a session in a browser. `uvicorn` already serves
+these; hit `/` directly instead of `/docs` to see them.
+
+- **`GET /`** — the catalog landing page: every publicly visible listing
+  (paginated, optionally filtered by `?service_type_id=`), same visibility
+  rule as `GET /v1/catalog/listings` (`catalog.visible_listings_stmt`).
+- **`GET /listings/{id}`** — one listing's detail page (photos, description,
+  indicative `price_from`, a link to the seller's profile). 404s (HTML, not
+  JSON) if the listing doesn't exist or isn't currently visible.
+- **`GET /sellers/{id}`** — a seller's public profile: rating, completed-job
+  count, and their currently visible listings. 404s under the same
+  visibility rule as the catalog API's `/v1/catalog/sellers/{id}`.
+- **`GET/POST /signup`, `GET/POST /login`, `POST /logout`** — cookie-backed
+  auth pages, restricted to `buyer`/`seller` (there is no browser login path
+  to an admin session — admin stays JSON-API-only, `/v1/auth/login` with
+  `role: "admin"`). A successful signup or login sets the session token as
+  an `HttpOnly` cookie and redirects to `/`; logout clears it. See "Auth"
+  above for the underlying session mechanics and `SECURITY.md` for the
+  cookie posture.
+
+Try it in a browser: start the API (`uv run uvicorn marketplace.api:app
+--reload`), seed some listings (`uv run python scripts/seed.py`), then open
+`http://localhost:8000/` — no token, no `/docs`, no `Authorize` button. Sign
+up as a buyer at `/signup` and the nav switches to your display name and a
+Log out link; the same `auth_sessions` row that a `POST /v1/auth/signup`
+bearer client would get is now sitting in a cookie instead.
+
+The look is deliberately light-editorial (cream background, ink text, one
+accent, serif headings) rather than an "AI-generated" dark/neon default —
+`src/marketplace/static/style.css`, no framework, no build step. HTMX
+(`src/marketplace/static/htmx.min.js`, vendored) is wired in for phase 3;
+none of today's pages issue an HTMX request yet, since none of them mutate
+job/offer state.
+
+**Phase 2 scope, and what it deliberately leaves out:** browse (catalog
+landing, listing detail, seller profile) and account pages (signup/login/
+logout) only. There is **no booking flow yet** — a signed-in buyer can browse
+listings and see their own display name in the nav, but there's no page to
+turn a listing into a quote or a job; that's still API-only, and the anonymous
+listing-detail page never renders a booking form or an `/v1/quotes|/v1/jobs`
+reference (`tests/test_pages.py::test_listing_detail_anonymous_no_booking_form`).
+Phase 3 (see `ROADMAP.md`) adds the transact pages: the booking flow itself,
+buyer/seller dashboards, an offer inbox, and the payment- and
+email-token-confirmation pages, plus CSRF tokens for those money-moving forms
+(this phase's Lax-cookie + POST-only posture is enough for read-mostly browse
+and auth, not for money — see `SECURITY.md`).
+
 ## Quickstart
 
 ```bash
@@ -98,7 +149,10 @@ The test suite runs against whatever `DATABASE_URL` points at, so `DATABASE_URL=
 The fastest tour is headless: `uv run python scripts/demo.py` runs the whole
 lifecycle (quote → match → escrow → complete → dispute → refund → moderation →
 stats → browse catalog + pinned booking) in-process and prints each step. To
-drive it yourself from Swagger:
+poke at the catalog and account pages yourself, open `http://localhost:8000/`
+in a browser after starting the API below — no Swagger needed for browse or
+signup/login (see "The storefront" above). To drive the transact flow
+(quote → job → offer → payment), which has no page yet, use Swagger:
 
 ```bash
 # 1. Start the API (the admin account is seeded from these two vars)
@@ -140,8 +194,18 @@ Bearer <token>`, resolved to `(role, user_id)` by one indexed lookup against
 `auth_sessions`. Identity is taken from the resolved session, **never** from the
 request body. Sessions are revocable (logout, password reset, and a future ban
 path all just delete rows) and expire after `SESSION_TTL_HOURS` (default 72).
-`GET /healthz` and `POST /v1/payments/webhook` are the only unauthenticated
-routes. See `SECURITY.md`.
+`GET /healthz`, `POST /v1/payments/webhook`, `/v1/catalog/*`, `/v1/auth/*`
+(always unauthenticated — that's how a session is obtained in the first
+place), and the whole storefront page surface (`/`, `/listings/*`,
+`/sellers/*`, `/static/*`, `GET/POST /signup`, `GET/POST /login`,
+`POST /logout` — see "The storefront" below) are unauthenticated; everything
+else requires a resolved session. See `SECURITY.md`.
+
+Browser pages resolve the same session a different way: `POST /signup` and
+`POST /login` on the page routes (not `/v1/auth/*`) set the session token as
+an `HttpOnly` cookie instead of returning it as JSON, and `_principal` reads
+`Authorization: Bearer` first, falling back to that cookie — see "The
+storefront" below and `SECURITY.md`'s cookie-posture section.
 
 An **account is one email + one role**: the same email can hold a separate buyer
 account and a separate seller account (each with its own password), but never
