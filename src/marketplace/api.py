@@ -27,6 +27,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
@@ -34,6 +35,7 @@ from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.responses import Response
 
 from . import catalog, notifications, repo
 from .auth import (
@@ -75,6 +77,7 @@ from .entities import (
     User,
     WebhookEvent,
 )
+from .errors import DomainError
 from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
 from .matching import STRATEGIES, estimated_fee, passes_floor, required_spread, seller_payout_for
@@ -2737,6 +2740,19 @@ app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
 app.add_middleware(IdempotencyMiddleware)
 _add_hardening_middleware(app)
 app.add_middleware(RequestIdMiddleware)  # outermost, unchanged
+
+
+async def _domain_error_response(request: Request, exc: Exception) -> Response:
+    """The one place a service-layer error becomes HTTP: rendered by FastAPI's
+    own HTTPException handler, so status, `detail` body and headers are exactly
+    what the route would have produced by raising HTTPException itself."""
+    assert isinstance(exc, DomainError)  # registered for DomainError only
+    return await http_exception_handler(
+        request, HTTPException(status_code=exc.status_code, detail=exc.detail, headers=exc.headers)
+    )
+
+
+app.add_exception_handler(DomainError, _domain_error_response)
 
 
 @app.get("/healthz")
