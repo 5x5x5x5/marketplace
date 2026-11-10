@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     admin_password: str = ""
     base_url: str = "http://localhost:8000"  # used in verification/reset links
     cookie_secure: bool = False  # set True behind TLS in production
+    # When on, creating a job, accepting an offer and creating a listing need
+    # a verified email (enforced in the services, so API and pages agree).
+    require_verified_email: bool = False
 
     # Notifications: transactional outbox drained by the in-process loop.
     notify_drain_seconds: int = 5

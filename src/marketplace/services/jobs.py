@@ -39,6 +39,7 @@ from ..settings import settings
 from .common import now as _now
 from .common import paginate as _paginate
 from .common import require_active as _require_active
+from .common import require_verified_email as _require_verified_email
 from .maintenance import sweep as _sweep
 from .offers import expire_open_offers as _expire_open_offers
 from .offers import match_and_offer as _match_and_offer
@@ -178,6 +179,7 @@ def accept_offer(
     session: Session, seller_id: str, offer_id: UUID, provider: PaymentProvider
 ) -> Job:
     _require_active(session, seller_id)
+    _require_verified_email(session, seller_id)
     offer = session.get(Offer, offer_id, with_for_update=True)
     if offer is None or offer.seller_id != seller_id:
         raise NotFoundError("offer not found")

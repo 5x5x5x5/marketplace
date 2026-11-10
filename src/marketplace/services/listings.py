@@ -15,10 +15,12 @@ from ..models import ListingCreate, ListingUpdate
 from ..repo import audit
 from .common import paginate as _paginate
 from .common import require_active as _require_active
+from .common import require_verified_email as _require_verified_email
 
 
 def create_listing(session: Session, seller_id: str, body: ListingCreate) -> Listing:
     _require_active(session, seller_id)
+    _require_verified_email(session, seller_id)
     if session.get(ServiceType, body.service_type_id) is None:
         raise NotFoundError("unknown service_type_id")
     seller = repo.get_or_create_seller(session, seller_id)
@@ -41,6 +43,13 @@ def my_listings(session: Session, seller_id: str) -> list[Listing]:
         select(Listing).where(Listing.seller_id == seller_id).order_by(Listing.created_at.desc())
     ).all()
     return list(rows)
+
+
+def get_own_listing(session: Session, seller_id: str, listing_id: UUID) -> Listing:
+    listing = session.get(Listing, listing_id)
+    if listing is None or listing.seller_id != seller_id:
+        raise NotFoundError("listing not found")
+    return listing
 
 
 def update_listing(
