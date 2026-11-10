@@ -115,7 +115,43 @@ run, reported twenty published advisories in six packages.
 
 ## The reviewer evaluation
 
-<!-- COORDINATOR: reviewer eval results. Summarize evals/reviewer/results: how many seeded bugs each layer caught (tests, architecture tests, Semgrep, reviewer agent), which were caught by exactly one layer, which by none, and false positives on the controls. State that it is one run. -->
+Sixteen bugs, fourteen of them from this repository's own history and two
+synthetic, were re-introduced one at a time as small, plausible changes
+with innocent commit messages, alongside four correct changes as controls
+(`evals/`). For each, the question was which layer of defense notices.
+
+| Layer | Seeded bugs caught |
+|---|---|
+| Test suite on SQLite | 10 of 16 |
+| Test suite on Postgres | 12 of 16 |
+| Architecture tests | 4 of 16 |
+| Semgrep rules | 1 of 16 |
+| Reviewer agent reading only the diff (one run) | 16 of 16 |
+
+No control change tripped any layer, the reviewer included.
+
+The mechanical columns are the solid part. Two bugs passed every
+mechanical layer (a notification payload shared between buyer and seller,
+and a charge key derived from the offer instead of the job), so those
+classes have no test or static check today. The regression tests for two
+historical concurrency bugs only fail on Postgres, which is why CI runs
+both engines. One mutation makes a Postgres test hang instead of fail, and
+the suite has no per-test timeout.
+
+The reviewer column needs more care than its number suggests. The bugs are
+ones the repository already knows about: their rules are written in
+`CLAUDE.md` and in the reviewer checklists, and the reviewer can read both.
+Several diffs delete the very comment that explains the hazard. It is one
+run per case, graded by one grader who knew the answers. So this shows
+that the reviewers reliably apply rules the project has written down,
+which is worth having, and it does not show that they find new kinds of
+bug. The audit above is the evidence for that, and there the reviewers and
+tests had both passed the code. The run's caveats and follow-ups are in
+`evals/reviewer/results/2026-11-10/NOTES.md`.
+
+The habit this is meant to support is simple: every real bug becomes a
+case, and a guard test (`tests/test_reviewer_eval_cases.py`) keeps the
+cases applying as the code moves.
 
 ## The overhaul, as a worked example of parallel agents
 

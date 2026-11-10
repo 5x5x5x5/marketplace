@@ -78,6 +78,7 @@ Agents with Claude Code get this as executable configuration under
 | Review a diff | `.claude/agents/*-reviewer.md` |
 | Background agents (issue to PR, PR review, weekly upkeep) | `docs/background-agents.md` |
 | Operate the marketplace from an agent | `src/marketplace_mcp/README.md` |
+| Measure the reviewers against past bugs | `evals/README.md` |
 
 `docs/agent-setup.md` explains why each piece exists.
 

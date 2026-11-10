@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at db.get_session: the commit now runs in teardown after the response is sent, so a chained request can read pre-write state; a second Critical covers a failed commit behind a 2xx. Confidence stated as medium (not run)."
+    }
+  ]
+}

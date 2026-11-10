@@ -26,8 +26,8 @@
         "of": 16
       },
       "reviewer": {
-        "caught": 0,
-        "decided": 0,
+        "caught": 16,
+        "decided": 16,
         "of": 16
       },
       "tests_sqlite": {
@@ -44,26 +44,15 @@
     "layers_counted_for_overlap": [
       "tests",
       "architecture",
-      "semgrep"
+      "semgrep",
+      "reviewer"
     ],
-    "reviewer_complete": false,
+    "reviewer_complete": true,
     "caught_by_exactly_one_layer": {
-      "asym-seller-review-buyer-id": "tests",
-      "money-a1-cancel-blocking-offer-lock": "tests",
-      "money-a2-full-clawback-reads-as-failure": "tests",
-      "money-dispute-pin-not-committed": "tests",
-      "money-f5-admin-cancel-stale-relock": "tests",
-      "money-floor-gross-not-net": "tests",
-      "money-late-success-resurrects-void": "tests",
-      "money-payout-retry-replays-reversed-key": "tests",
-      "ops-pagination-in-python": "tests",
-      "ops-retention-reaps-failed-webhooks": "tests",
-      "ops-webhook-db-on-event-loop": "architecture"
+      "asym-cancel-notice-shared-payload": "reviewer",
+      "money-charge-key-per-offer": "reviewer"
     },
-    "caught_by_none": [
-      "asym-cancel-notice-shared-payload",
-      "money-charge-key-per-offer"
-    ],
+    "caught_by_none": [],
     "reviewer_partial": [],
     "control_false_positives": {}
   },
@@ -110,8 +99,18 @@
           ]
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at AvailabilityRequest.seller_id / post_availability: 'Availability body `seller_id` overrides the authenticated seller (impersonation)', with the write landing on the victim's availability."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -153,8 +152,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Important at _notify_cancelled: one snapshot dict is enqueued for both roles, so 'the seller's row stores the buyer price ... the buyer's row stores the seller payout'. Names which amount reaches which party."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -204,8 +213,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at routers/seller.py complete_job: 'Seller completion receipt returns admin TransactionOut (buyer price and margin leak to every seller)'."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -251,8 +270,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at SellerReviewOut: 'Seller review receipt now returns buyer_id to the seller', letting a seller correlate buyers across jobs."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -294,8 +323,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "clean",
+          "counts": {
+            "clean": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "clean",
+              "rationale": "'No findings.' The reviewer traced lock order, the re-check and the moved lines on both cancel paths."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -337,8 +376,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "clean",
+          "counts": {
+            "clean": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "clean",
+              "rationale": "'No findings.' A timestamp on the seller's own offer row; no money or buyer identity."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -380,8 +429,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "clean",
+          "counts": {
+            "clean": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "clean",
+              "rationale": "'No findings.' Pure rename, both references updated."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -423,8 +482,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "clean",
+          "counts": {
+            "clean": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "clean",
+              "rationale": "'No findings.' The added ordering changes no lock, guard or provider call."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -469,8 +538,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at expire_open_offers: 'Blocking offer lock under the Job lock reintroduces an ABBA deadlock with accept, decline and the sweep', with the interleaving spelled out."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -520,8 +599,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at the transfer_failed branch: a full dispute clawback 'marks the payout FAILED and an admin retry pays the seller again', traced through the adapter mapping and retry_payout."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -563,8 +652,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Important at accept_offer: 'Charge key now varies per offer, so a re-offered job can charge the buyer twice', with the first PaymentIntent orphaned. The reviewer rated its own confidence medium."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -611,8 +710,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at resolve_dispute: 'Pinned dispute amounts no longer survive a provider 502, so a retry can book different amounts than the provider moved'."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -668,8 +777,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at db.get_session: the commit now runs in teardown after the response is sent, so a chained request can read pre-write state; a second Critical covers a failed commit behind a 2xx. Confidence stated as medium (not run)."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -713,8 +832,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at admin_cancel_job: the locked get returns the identity-map object, the guard reads stale ACCEPTED, and 'a cancel racing complete can refund the buyer and pay the seller'."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -760,8 +889,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at matching._priced: 'Inlined floor check drops the fee estimate, so matching uses the gross spread', with a worked numeric example."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -809,8 +948,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at the payment_succeeded branch: a late success 'marks a voided payment SUCCEEDED while the job stays dead, so the buyer is never refunded'."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -856,8 +1005,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Critical at retry_payout: 'replays the key of a reversed transfer and books PAID with no money moved'."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -929,8 +1088,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "The spec-compliance reviewer's format has categories, not severities. Its top-category [Constraint] finding at services.common.paginate says it 'fetches every row and slices in Python ... exactly the banned pattern' and that 'memory and latency grow with table size on every page request'. Graded caught on substance; a strict reading of 'Critical or Important' would make this partial."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -976,8 +1145,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Important at _sweep_retention: 'Retention sweep deletes FAILED webhook rows that are still owed a retry', so the event is lost with no dead-letter row."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     },
@@ -1021,8 +1200,18 @@
           "detail": []
         },
         "reviewer": {
-          "outcome": "pending",
-          "runs": []
+          "outcome": "caught",
+          "counts": {
+            "caught": 1
+          },
+          "runs": [
+            {
+              "output": "review/run-1.md",
+              "verdict": "caught",
+              "rationale": "Important at payments_webhook: 'Sync webhook processor now runs on the event loop', stalling every in-flight request while it waits on the database."
+            }
+          ],
+          "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)"
         }
       }
     }

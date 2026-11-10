@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "The spec-compliance reviewer's format has categories, not severities. Its top-category [Constraint] finding at services.common.paginate says it 'fetches every row and slices in Python ... exactly the banned pattern' and that 'memory and latency grow with table size on every page request'. Graded caught on substance; a strict reading of 'Critical or Important' would make this partial."
+    }
+  ]
+}

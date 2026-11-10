@@ -13,12 +13,12 @@ Test columns exclude `tests/test_architecture.py`, which is its own column. A te
 | Tests (either backend) | 12 / 16 |
 | Architecture tests | 4 / 16 |
 | Semgrep rules | 1 / 16 |
-| Reviewer agent (caught; partial not counted) | pending |
+| Reviewer agent (caught; partial not counted) | 16 / 16 |
 
-Overlap below counts these layers: tests, architecture, semgrep (reviewer still pending).
+Overlap below counts these layers: tests, architecture, semgrep, reviewer.
 
-- Caught by exactly one layer: `asym-seller-review-buyer-id` (tests), `money-a1-cancel-blocking-offer-lock` (tests), `money-a2-full-clawback-reads-as-failure` (tests), `money-dispute-pin-not-committed` (tests), `money-f5-admin-cancel-stale-relock` (tests), `money-floor-gross-not-net` (tests), `money-late-success-resurrects-void` (tests), `money-payout-retry-replays-reversed-key` (tests), `ops-pagination-in-python` (tests), `ops-retention-reaps-failed-webhooks` (tests), `ops-webhook-db-on-event-loop` (architecture)
-- Caught by no layer: `asym-cancel-notice-shared-payload`, `money-charge-key-per-offer`
+- Caught by exactly one layer: `asym-cancel-notice-shared-payload` (reviewer), `money-charge-key-per-offer` (reviewer)
+- Caught by no layer: none
 - Reviewer partial catches: none
 - False positives on controls: none
 
@@ -26,26 +26,26 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 
 | Case | Kind | Class | Tests SQLite | Tests PG | Arch | Semgrep | Reviewer |
 |---|---|---|---|---|---|---|---|
-| `asym-availability-seller-id-in-body` | bug | asymmetry/identity-from-request | missed | missed | **caught** | **caught** | pending |
-| `asym-cancel-notice-shared-payload` | bug (synthetic) | asymmetry/notification-payload | missed | missed | missed | missed | pending |
-| `asym-f1-seller-receipt-ledger-model` | bug | asymmetry/wrong-view-model | **caught** | **caught** | **caught** | missed | pending |
-| `asym-seller-review-buyer-id` | bug | asymmetry/forbidden-field-in-role-view | **caught** | **caught** | missed | missed | pending |
-| `ctrl-cancel-shared-tail` | control | control/refactor | clean | clean | clean | clean | pending |
-| `ctrl-offer-view-responded-at` | control | control/new-field-right-view | clean | clean | clean | clean | pending |
-| `ctrl-rename-superseded-helper` | control | control/rename | clean | clean | clean | clean | pending |
-| `ctrl-stale-sweep-ordered` | control | control/money-path-correct-change | clean | clean | clean | clean | pending |
-| `money-a1-cancel-blocking-offer-lock` | bug | money-path/lock-order | missed | **caught** | missed | missed | pending |
-| `money-a2-full-clawback-reads-as-failure` | bug | money-path/webhook-mapping | **caught** | **caught** | missed | missed | pending |
-| `money-charge-key-per-offer` | bug (synthetic) | money-path/idempotency-key-derivation | missed | missed | missed | missed | pending |
-| `money-dispute-pin-not-committed` | bug | money-path/mid-handler-commit | **caught** | **caught** | missed | missed | pending |
-| `money-f2-commit-in-teardown` | bug | money-path/commit-ordering | **caught** | **caught** | **caught** | missed | pending |
-| `money-f5-admin-cancel-stale-relock` | bug | money-path/stale-relock | missed | **caught** | missed | missed | pending |
-| `money-floor-gross-not-net` | bug | money-path/margin-floor | **caught** | **caught** | missed | missed | pending |
-| `money-late-success-resurrects-void` | bug | money-path/resurrection | **caught** | **caught** | missed | missed | pending |
-| `money-payout-retry-replays-reversed-key` | bug | money-path/idempotency-key-reuse | **caught** | **caught** | missed | missed | pending |
-| `ops-pagination-in-python` | bug | operational/pagination | **caught** | **caught** | missed | missed | pending |
-| `ops-retention-reaps-failed-webhooks` | bug | operational/retention | **caught** | **caught** | missed | missed | pending |
-| `ops-webhook-db-on-event-loop` | bug | operational/event-loop-blocking | missed | missed | **caught** | missed | pending |
+| `asym-availability-seller-id-in-body` | bug | asymmetry/identity-from-request | missed | missed | **caught** | **caught** | **caught** |
+| `asym-cancel-notice-shared-payload` | bug (synthetic) | asymmetry/notification-payload | missed | missed | missed | missed | **caught** |
+| `asym-f1-seller-receipt-ledger-model` | bug | asymmetry/wrong-view-model | **caught** | **caught** | **caught** | missed | **caught** |
+| `asym-seller-review-buyer-id` | bug | asymmetry/forbidden-field-in-role-view | **caught** | **caught** | missed | missed | **caught** |
+| `ctrl-cancel-shared-tail` | control | control/refactor | clean | clean | clean | clean | **clean** |
+| `ctrl-offer-view-responded-at` | control | control/new-field-right-view | clean | clean | clean | clean | **clean** |
+| `ctrl-rename-superseded-helper` | control | control/rename | clean | clean | clean | clean | **clean** |
+| `ctrl-stale-sweep-ordered` | control | control/money-path-correct-change | clean | clean | clean | clean | **clean** |
+| `money-a1-cancel-blocking-offer-lock` | bug | money-path/lock-order | missed | **caught** | missed | missed | **caught** |
+| `money-a2-full-clawback-reads-as-failure` | bug | money-path/webhook-mapping | **caught** | **caught** | missed | missed | **caught** |
+| `money-charge-key-per-offer` | bug (synthetic) | money-path/idempotency-key-derivation | missed | missed | missed | missed | **caught** |
+| `money-dispute-pin-not-committed` | bug | money-path/mid-handler-commit | **caught** | **caught** | missed | missed | **caught** |
+| `money-f2-commit-in-teardown` | bug | money-path/commit-ordering | **caught** | **caught** | **caught** | missed | **caught** |
+| `money-f5-admin-cancel-stale-relock` | bug | money-path/stale-relock | missed | **caught** | missed | missed | **caught** |
+| `money-floor-gross-not-net` | bug | money-path/margin-floor | **caught** | **caught** | missed | missed | **caught** |
+| `money-late-success-resurrects-void` | bug | money-path/resurrection | **caught** | **caught** | missed | missed | **caught** |
+| `money-payout-retry-replays-reversed-key` | bug | money-path/idempotency-key-reuse | **caught** | **caught** | missed | missed | **caught** |
+| `ops-pagination-in-python` | bug | operational/pagination | **caught** | **caught** | missed | missed | **caught** |
+| `ops-retention-reaps-failed-webhooks` | bug | operational/retention | **caught** | **caught** | missed | missed | **caught** |
+| `ops-webhook-db-on-event-loop` | bug | operational/event-loop-blocking | missed | missed | **caught** | missed | **caught** |
 
 ## Detail
 
@@ -58,7 +58,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: `tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id`
 - Semgrep: `marketplace-request-model-identity-field src/marketplace/models.py:665`
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at AvailabilityRequest.seller_id / post_availability: 'Availability body `seller_id` overrides the authenticated seller (impersonation)', with the write landing on the victim's availability.
 
 ### `asym-cancel-notice-shared-payload`
 
@@ -69,7 +69,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Important at _notify_cancelled: one snapshot dict is enqueued for both roles, so 'the seller's row stores the buyer price ... the buyer's row stores the seller payout'. Names which amount reaches which party.
 
 ### `asym-f1-seller-receipt-ledger-model`
 
@@ -80,7 +80,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_end_to_end.py::test_full_flow_books_correct_margin`, `tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped`
 - Architecture: `tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]`
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at routers/seller.py complete_job: 'Seller completion receipt returns admin TransactionOut (buyer price and margin leak to every seller)'.
 
 ### `asym-seller-review-buyer-id`
 
@@ -91,7 +91,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at SellerReviewOut: 'Seller review receipt now returns buyer_id to the seller', letting a seller correlate buyers across jobs.
 
 ### `ctrl-cancel-shared-tail`
 
@@ -102,7 +102,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: clean: 'No findings.' The reviewer traced lock order, the re-check and the moved lines on both cancel paths.
 
 ### `ctrl-offer-view-responded-at`
 
@@ -113,7 +113,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: clean: 'No findings.' A timestamp on the seller's own offer row; no money or buyer identity.
 
 ### `ctrl-rename-superseded-helper`
 
@@ -124,7 +124,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: clean: 'No findings.' Pure rename, both references updated.
 
 ### `ctrl-stale-sweep-ordered`
 
@@ -135,7 +135,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: clean: 'No findings.' The added ordering changes no lock, guard or provider call.
 
 ### `money-a1-cancel-blocking-offer-lock`
 
@@ -146,7 +146,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[admin]`, `tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[buyer]`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at expire_open_offers: 'Blocking offer lock under the Job lock reintroduces an ABBA deadlock with accept, decline and the sweep', with the interleaving spelled out.
 
 ### `money-a2-full-clawback-reads-as-failure`
 
@@ -157,7 +157,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry`, `tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout`, `tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at the transfer_failed branch: a full dispute clawback 'marks the payout FAILED and an admin retry pays the seller again', traced through the adapter mapping and retry_payout.
 
 ### `money-charge-key-per-offer`
 
@@ -168,7 +168,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Important at accept_offer: 'Charge key now varies per offer, so a re-offered job can charge the buyer twice', with the first PaymentIntent orphaned. The reviewer rated its own confidence medium.
 
 ### `money-dispute-pin-not-committed`
 
@@ -179,7 +179,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `suite timed out`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at resolve_dispute: 'Pinned dispute amounts no longer survive a provider 502, so a retry can book different amounts than the provider moved'.
 - Follow-up notes: `cases/money-dispute-pin-not-committed/notes.md`
 
 ### `money-f2-commit-in-teardown`
@@ -192,7 +192,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_live_server.py::test_commit_lands_before_client_has_response`, `tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing`, `tests/test_live_server.py::test_read_your_writes_over_socket`, `tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical`
 - Architecture: `tests/test_architecture.py::test_get_session_teardown_does_not_commit`
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at db.get_session: the commit now runs in teardown after the response is sent, so a chained request can read pre-write state; a second Critical covers a failed commit behind a 2xx. Confidence stated as medium (not run).
 
 ### `money-f5-admin-cancel-stale-relock`
 
@@ -203,7 +203,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_payments.py::test_cancel_vs_complete_race`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at admin_cancel_job: the locked get returns the identity-map object, the guard reads stale ACCEPTED, and 'a cancel racing complete can refund the buyer and pay the seller'.
 
 ### `money-floor-gross-not-net`
 
@@ -214,7 +214,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_matching.py::test_floor_filters_candidate_fee_aware`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at matching._priced: 'Inlined floor check drops the fee estimate, so matching uses the gross spread', with a worked numeric example.
 
 ### `money-late-success-resurrects-void`
 
@@ -225,7 +225,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel`, `tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at the payment_succeeded branch: a late success 'marks a voided payment SUCCEEDED while the job stays dead, so the buyer is never refunded'.
 
 ### `money-payout-retry-replays-reversed-key`
 
@@ -236,7 +236,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Critical at retry_payout: 'replays the key of a reversed transfer and books PAID with no money moved'.
 
 ### `ops-pagination-in-python`
 
@@ -247,7 +247,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]`, `tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]` and 6 more
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: The spec-compliance reviewer's format has categories, not severities. Its top-category [Constraint] finding at services.common.paginate says it 'fetches every row and slices in Python ... exactly the banned pattern' and that 'memory and latency grow with table size on every page request'. Graded caught on substance; a strict reading of 'Critical or Important' would make this partial.
 
 ### `ops-retention-reaps-failed-webhooks`
 
@@ -258,7 +258,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: `tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones`
 - Architecture: nothing
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Important at _sweep_retention: 'Retention sweep deletes FAILED webhook rows that are still owed a retry', so the event is lost with no dead-letter row.
 
 ### `ops-webhook-db-on-event-loop`
 
@@ -269,7 +269,7 @@ Overlap below counts these layers: tests, architecture, semgrep (reviewer still 
 - Postgres: nothing
 - Architecture: `tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread`
 - Semgrep: nothing
-- Reviewer: pending
+- Reviewer review/run-1.md: caught: Important at payments_webhook: 'Sync webhook processor now runs on the event loop', stalling every in-flight request while it waits on the database.
 
 ## Baseline (unmodified tree)
 

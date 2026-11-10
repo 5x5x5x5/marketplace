@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at routers/seller.py complete_job: 'Seller completion receipt returns admin TransactionOut (buyer price and margin leak to every seller)'."
+    }
+  ]
+}

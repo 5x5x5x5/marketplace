@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at SellerReviewOut: 'Seller review receipt now returns buyer_id to the seller', letting a seller correlate buyers across jobs."
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at the payment_succeeded branch: a late success 'marks a voided payment SUCCEEDED while the job stays dead, so the buyer is never refunded'."
+    }
+  ]
+}

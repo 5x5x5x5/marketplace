@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at expire_open_offers: 'Blocking offer lock under the Job lock reintroduces an ABBA deadlock with accept, decline and the sweep', with the interleaving spelled out."
+    }
+  ]
+}

@@ -265,6 +265,11 @@ invariants.
   and `.semgrep/rules/` encode the rules here that a machine can verify; each
   failure names the rule and the fix. When you add a rule to this list, add
   its check if one is expressible.
+- **Every real bug becomes a seeded review case.** `evals/reviewer/cases/`
+  re-introduces past bugs as small mutations, and
+  `tests/test_reviewer_eval_cases.py` keeps each one applying to the tree, so
+  moving the code a case targets means re-anchoring the case in the same
+  change (`evals/README.md`).
 - **Listings never carry prices.** Platform-set, independently-computed
   buyer price and seller payout are the differentiator (see the top of this
   file) — a `Listing` (`entities.py`) is title/description/photos/service

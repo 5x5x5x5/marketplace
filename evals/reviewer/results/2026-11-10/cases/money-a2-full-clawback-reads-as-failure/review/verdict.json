@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at the transfer_failed branch: a full dispute clawback 'marks the payout FAILED and an admin retry pays the seller again', traced through the adapter mapping and retry_payout."
+    }
+  ]
+}
