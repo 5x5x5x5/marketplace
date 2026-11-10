@@ -33,6 +33,9 @@ MUST_SEND: frozenset[EventKind] = frozenset(
         EventKind.DISPUTE_RESOLVED_BUYER,
         EventKind.DISPUTE_RESOLVED_SELLER,
         EventKind.PAYOUT_FAILED_ADMIN,
+        # A payment event that never applied is as actionable as a failed
+        # payout: an operator has to look at it, so it can't be muted.
+        EventKind.WEBHOOK_DEAD_LETTER_ADMIN,
     }
 )
 
@@ -53,6 +56,7 @@ KIND_ROLES: dict[EventKind, UserRole] = {
     EventKind.CHARGEBACK_OPENED_ADMIN: UserRole.ADMIN,
     EventKind.CHARGEBACK_CLOSED_ADMIN: UserRole.ADMIN,
     EventKind.REPORT_OPENED_ADMIN: UserRole.ADMIN,
+    EventKind.WEBHOOK_DEAD_LETTER_ADMIN: UserRole.ADMIN,
 }
 
 _BACKOFF_BASE_SECONDS = 30
@@ -251,6 +255,18 @@ def _render_report_opened_admin(p: dict[str, Any]) -> tuple[str, str]:
     )
 
 
+def _render_webhook_dead_letter_admin(p: dict[str, Any]) -> tuple[str, str]:
+    return (
+        f"Webhook DEAD-LETTERED: {p['kind']} ({p['provider_event_id']})",
+        (
+            f"Payment event {p['provider_event_id']} (kind={p['kind']}) never applied "
+            f"after every retry.\nLast error: {p['last_error']}\n"
+            "Inspect: GET /v1/admin/webhooks?status=dead_letter\n"
+            f"Re-queue once the cause is fixed: POST /v1/admin/webhooks/{p['webhook_id']}/retry"
+        ),
+    )
+
+
 RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.OFFER_RECEIVED: _render_offer_received,
     EventKind.JOB_ACCEPTED_BUYER: _render_job_accepted_buyer,
@@ -266,6 +282,7 @@ RENDERERS: dict[EventKind, Callable[[dict[str, Any]], tuple[str, str]]] = {
     EventKind.CHARGEBACK_OPENED_ADMIN: _render_chargeback_opened_admin,
     EventKind.CHARGEBACK_CLOSED_ADMIN: _render_chargeback_closed_admin,
     EventKind.REPORT_OPENED_ADMIN: _render_report_opened_admin,
+    EventKind.WEBHOOK_DEAD_LETTER_ADMIN: _render_webhook_dead_letter_admin,
 }
 
 

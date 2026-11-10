@@ -45,6 +45,7 @@ from .models import (
     ReportTargetKind,
     UserRole,
     UserStatus,
+    WebhookEventStatus,
 )
 
 
@@ -351,7 +352,13 @@ class Payout(Base):
 
 
 class WebhookEvent(Base):
-    """Processed provider events — the dedup ledger (replayed events no-op)."""
+    """Webhook outbox: the dedup ledger and the retry/dead-letter record.
+
+    Every inbound event gets a row keyed on `provider_event_id` before it is
+    applied, and ANY existing row (whatever its status) makes a redelivery a
+    no-op. A handler failure leaves the row FAILED with backoff fields for
+    the retry job. `payload` is the parsed `PaymentEvent` fields needed to
+    re-apply the event, never the raw body or signature."""
 
     __tablename__ = "webhook_events"
 
@@ -359,6 +366,17 @@ class WebhookEvent(Base):
     provider_event_id: Mapped[str] = mapped_column(String(256), unique=True)
     kind: Mapped[str] = mapped_column(String(64))
     received_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    # The provider object the event is about (payment/account/transfer/
+    # dispute id): lets a handler ask whether the same object's event was
+    # already applied under a different event id.
+    object_id: Mapped[str | None] = mapped_column(String(256), default=None, index=True)
+    status: Mapped[WebhookEventStatus] = mapped_column(
+        _enum(WebhookEventStatus), default=WebhookEventStatus.APPLIED, index=True
+    )
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_error: Mapped[str | None] = mapped_column(String(512), default=None)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(_TS, default=None, index=True)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
 
 
 class IdempotencyRecord(Base):

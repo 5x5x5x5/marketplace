@@ -71,6 +71,18 @@ class PayoutStatus(StrEnum):
     FAILED = "failed"  # transfer rejected/errored; admin retries via /v1/admin/payouts/{id}/retry
 
 
+class WebhookEventStatus(StrEnum):
+    """Webhook outbox row state. APPLIED covers events recorded but ignored
+    (unknown kinds/ids) too. FAILED is owed a retry (the maintenance loop's
+    retry job owns it; retention never reaps it). DEAD_LETTER is terminal
+    after `webhook_max_attempts`: admins were notified, and an operator can
+    re-queue it via POST /v1/admin/webhooks/{id}/retry."""
+
+    APPLIED = "applied"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
 class EventKind(StrEnum):
     OFFER_RECEIVED = "offer_received"  # seller: the 2-minute clock is ticking
     JOB_ACCEPTED_BUYER = "job_accepted_buyer"
@@ -86,6 +98,7 @@ class EventKind(StrEnum):
     CHARGEBACK_OPENED_ADMIN = "chargeback_opened_admin"
     CHARGEBACK_CLOSED_ADMIN = "chargeback_closed_admin"
     REPORT_OPENED_ADMIN = "report_opened_admin"
+    WEBHOOK_DEAD_LETTER_ADMIN = "webhook_dead_letter_admin"
 
 
 class NotificationStatus(StrEnum):
@@ -514,6 +527,39 @@ class NotificationOut(BaseModel):
     last_error: str | None
     created_at: datetime
     sent_at: datetime | None
+
+
+class WebhookPayloadOut(BaseModel):
+    """The parsed provider event fields stored for replay — exactly the
+    `PaymentEvent` shape. Declared field by field so nothing else stored on
+    the row could ever ride along."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    event_id: str
+    kind: str
+    object_id: str
+    payments_ready: bool | None = None
+    amount_minor: int | None = None
+    outcome: str | None = None
+    related_id: str | None = None
+
+
+class WebhookEventOut(BaseModel):
+    """Admin view of a webhook outbox row."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    provider_event_id: str
+    kind: str
+    object_id: str | None
+    status: WebhookEventStatus
+    attempts: int
+    last_error: str | None
+    received_at: datetime
+    next_attempt_at: datetime | None
+    payload: WebhookPayloadOut | None
 
 
 class AuditOut(BaseModel):

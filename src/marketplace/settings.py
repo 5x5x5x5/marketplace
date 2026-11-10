@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     currency: str = "usd"  # ponytail: single currency; multi-currency is a fork concern
     payment_ttl_minutes: int = 30  # AWAITING_PAYMENT older than this expires on sweep
     onboarding_return_url: str = "http://localhost:8000/onboarded"
+    # Webhook outbox: a handler failure is persisted FAILED and retried by the
+    # maintenance loop after webhook_retry_base_seconds * 5**(attempts-1); at
+    # webhook_max_attempts the event is dead-lettered and admins notified.
+    webhook_retry_base_seconds: int = 60
+    webhook_max_attempts: int = 5
 
     # Auth. Sessions are DB-backed and revocable; the admin account is seeded
     # from these two settings at startup (empty -> no admin, logged).
