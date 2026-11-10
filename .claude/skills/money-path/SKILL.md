@@ -84,7 +84,7 @@ against your diff before you call the task done, and ask for the
     with `reversed=False`; mapping it to `transfer_failed` would flip a paid
     payout to FAILED and invite an admin retry that pays the seller twice.
 16. **Unknown ids are recorded and ignored, never a 500.** DB work stays in
-    `_process_webhook`, which runs in `asyncio.to_thread`.
+    `services.webhooks.process_webhook`, which runs in `asyncio.to_thread`.
 
 ## Ledger and money values
 

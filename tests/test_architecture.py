@@ -513,6 +513,8 @@ _PURE_FORBIDDEN_INTERNAL = (
     "payments",
     "idempotency",
     "observability",
+    "services",
+    "routers",
 )
 
 
@@ -608,6 +610,9 @@ def test_import_direction_is_one_way() -> None:
         "matching",
         "config",
         "payments",
+        "errors",
+        "services",
+        "routers",
     }
     bad: list[str] = []
     for path in _py_files():
@@ -619,6 +624,159 @@ def test_import_direction_is_one_way() -> None:
                 bad.append(f"{path.relative_to(ROOT)}:{lineno}: notifications imports {name}")
     assert _modules_named("pages") and _modules_named("notifications")
     assert not bad, f"import cycle risk:\n  {_fmt(bad)}"
+
+
+def _services_layer() -> list[Path]:
+    """The framework-free logic layer: `services/`, plus the two modules that
+    already played that role before it existed (`catalog`, `errors`)."""
+    found = _modules_named("services", "catalog", "errors")
+    assert any(p.relative_to(SRC).parts[0] == "services" for p in found), found
+    return found
+
+
+def test_services_import_no_web_framework_and_no_upper_layer() -> None:
+    """INVARIANT: domain logic lives in service modules that hold no app and import
+    no web framework, so the JSON routers and the HTML pages can both call them.
+
+    `services/*`, `catalog` and `errors` may not import fastapi/starlette, nor
+    `api`, `routers`, `pages` or `auth` (identity arrives as a plain argument),
+    and may not mention `HTTPException`. Fix: raise an `errors.DomainError`
+    subclass (api.py maps it to HTTP) and take ids/roles as parameters.
+    """
+    forbidden = (
+        "fastapi",
+        "starlette",
+        f"{PKG}.api",
+        f"{PKG}.routers",
+        f"{PKG}.pages",
+        f"{PKG}.auth",
+    )
+    bad: list[str] = []
+    for path in _services_layer():
+        rel = path.relative_to(ROOT)
+        for name, lineno in _imports(path):
+            if _is_mod(name, *forbidden):
+                bad.append(f"{rel}:{lineno}: imports {name}")
+        for node in ast.walk(_parse(path)):
+            if isinstance(node, ast.Name) and node.id == "HTTPException":
+                bad.append(f"{rel}:{node.lineno}: HTTPException")
+    assert not bad, f"service layer depends on the web layer:\n  {_fmt(bad)}"
+
+
+def test_lower_layers_never_import_services_or_routers() -> None:
+    """INVARIANT: the pure core and the persistence/outbox layers sit below the
+    services; services sit below routers and pages; only `api` mounts routers.
+
+    `pricing`/`matching`/`config`/`repo`/`notifications`/`db`/`entities`/
+    `models`/`mail`/`payments` may not import `services` or `routers`; `pages`
+    may import `services` but never `routers`; a service never imports a
+    router. Fix: move the shared piece down a layer instead of importing up.
+    """
+    below_services = {
+        "pricing",
+        "matching",
+        "config",
+        "repo",
+        "notifications",
+        "db",
+        "entities",
+        "models",
+        "mail",
+        "payments",
+        "settings",
+        "errors",
+        "catalog",
+        "idempotency",
+        "observability",
+        "auth",
+    }
+    bad: list[str] = []
+    for path in _py_files():
+        top = path.relative_to(SRC).parts[0].removesuffix(".py")
+        rel = path.relative_to(ROOT)
+        for name, lineno in _imports(path):
+            if top in below_services and _is_mod(name, f"{PKG}.services", f"{PKG}.routers"):
+                bad.append(f"{rel}:{lineno}: {top} imports {name}")
+            if top in {"pages", "services"} and _is_mod(name, f"{PKG}.routers"):
+                bad.append(f"{rel}:{lineno}: {top} imports {name}")
+    assert not bad, f"layering broken:\n  {_fmt(bad)}"
+
+
+def test_routers_hand_the_session_to_services() -> None:
+    """INVARIANT: routers are thin (parse, call one service, return); the domain
+    work, including every session read and write, happens in `services/`.
+
+    No `session.<method>(...)` call in a router module: a router only passes
+    the session along. Fix: move the query or mutation into the service the
+    route calls (a page will want the same logic).
+    """
+    routers = [p for p in _py_files() if p.relative_to(SRC).parts[0] == "routers"]
+    assert routers, "no routers package found"
+    bad: list[str] = []
+    for path in routers:
+        for node in ast.walk(_parse(path)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in {"session", "db", "sess"}
+            ):
+                bad.append(f"{path.relative_to(ROOT)}:{node.lineno}: session.{node.func.attr}")
+    assert not bad, f"router touches the session directly:\n  {_fmt(bad)}"
+
+
+def test_api_module_is_app_assembly_only() -> None:
+    """INVARIANT: `api.py` assembles the app (middleware, lifespan, error mapping,
+    router mounting, the CommitRoute check) and holds no routers or handlers
+    beyond `/healthz`.
+
+    Fix: put a new route in the matching `routers/` module and its logic in a
+    service; never grow a router back inside `api.py`.
+    """
+    (api_path,) = [p for p in _py_files() if p.relative_to(SRC) == Path("api.py")]
+    bad: list[str] = []
+    for node in ast.walk(_parse(api_path)):
+        if _calls(node, "APIRouter"):
+            bad.append(f"api.py:{getattr(node, 'lineno', 0)}: APIRouter(...)")
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            for dec in node.decorator_list:
+                target = dec.func if isinstance(dec, ast.Call) else dec
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr in {"get", "post", "put", "patch", "delete"}
+                    and node.name != "healthz"
+                ):
+                    bad.append(f"api.py:{node.lineno}: route {node.name}")
+    assert not bad, f"api.py is app assembly only:\n  {_fmt(bad)}"
+
+
+def test_services_and_pages_import_without_the_app() -> None:
+    """INVARIANT: `pages.py` never imports `api.py`, and the services it will call
+    are importable without dragging in the app or the JSON routers.
+
+    Checked at runtime in a fresh interpreter, so a transitive import (a
+    service importing a module that imports `api`) fails too. Fix: break the
+    chain by moving the shared piece into a lower module.
+    """
+    import subprocess
+    import sys
+
+    services = sorted(
+        _module_name(p) for p in _py_files() if p.relative_to(SRC).parts[0] == "services"
+    )
+    code = (
+        "import importlib, sys\n"
+        f"for m in {[f'{PKG}.pages', *services]!r}:\n"
+        "    importlib.import_module(m)\n"
+        f"leaked = sorted(m for m in sys.modules if m == '{PKG}.api'"
+        f" or m.startswith('{PKG}.routers'))\n"
+        "print(','.join(leaked))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert len(services) > 5, services
+    assert out == "", f"importing pages/services pulled in: {out}"
 
 
 def test_catalog_queries_live_in_catalog_module() -> None:

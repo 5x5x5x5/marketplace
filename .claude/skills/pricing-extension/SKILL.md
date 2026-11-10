@@ -24,7 +24,7 @@ reproducible from its inputs.
 If the rule needs a fact the context doesn't carry, add a field to
 `PricingContext` (or `Candidate`) with a neutral default, load it in
 `repo.py`, and fill it at **both** buyer-side construction sites:
-`api.create_quote` and `catalog.indicative_buyer_price` (the public "from"
+`services.booking.create_quote` and `catalog.indicative_buyer_price` (the public "from"
 price; it has no buyer, so it uses the neutral value). The two carry a
 cross-reference comment because they have drifted before.
 

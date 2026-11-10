@@ -52,7 +52,7 @@ non-negotiables first; they are the rules you enforce.
    event can undo; a provider event mapped by name instead of by what
    happened (a partial `transfer.reversed` is not a failed payout); an
    unknown id that 500s; DB work on the coroutine instead of in
-   `_process_webhook` via `asyncio.to_thread`.
+   `services.webhooks.process_webhook` via `asyncio.to_thread`.
 8. **Ledger and money**: an edit to a booked `Transaction`; an adjustment
    that isn't append-only or has a negative amount; `Payment.status` changed
    by a partial refund; `float` money outside the pricing pipeline; a floor
