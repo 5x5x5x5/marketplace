@@ -986,8 +986,15 @@ seller_router = APIRouter(prefix="/v1/seller", tags=["seller"], route_class=Comm
 
 
 def _expire_open_offers(session: Session, job_id: UUID) -> None:
+    # Callers already hold the Job lock, and accept/decline/the offer sweep
+    # lock Offer -> Job: waiting here for an offer one of them holds is a
+    # deadlock. SKIP LOCKED leaves that offer to its holder, which finds the
+    # job no longer PENDING once we commit (accept 409s, decline and the
+    # sweep do not re-match).
     for offer in session.scalars(
-        select(Offer).where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+        select(Offer)
+        .where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+        .with_for_update(skip_locked=True)
     ).all():
         offer.status = OfferStatus.EXPIRED
         offer.responded_at = _now()
@@ -2284,7 +2291,23 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
                 # A failed/reversed transfer is terminal for that transfer id,
                 # so applying it late is truthful; notify only on the
                 # transition so a replay doesn't re-page admins.
-                if payout.status is not PayoutStatus.FAILED:
+                # A dispute clawback of the whole payout fully reverses the
+                # transfer, which the provider reports exactly like a failure.
+                # The seller was paid and then clawed back: FAILED would invite
+                # an admin payout retry that pays them again. The clawback pin
+                # is committed before the reversal leg runs, so it is always
+                # visible here, and it is a permanent row (replay-safe).
+                clawback = session.scalar(
+                    select(Dispute.clawback_amount).where(Dispute.job_id == payout.job_id)
+                )
+                if clawback is not None and clawback >= payout.amount:
+                    logger.info(
+                        "transfer %s fully reversed by dispute clawback; payout %s stays %s",
+                        event.object_id,
+                        payout.id,
+                        payout.status,
+                    )
+                elif payout.status is not PayoutStatus.FAILED:
                     payout.status = PayoutStatus.FAILED
                     notifications.enqueue_admins(
                         session,
