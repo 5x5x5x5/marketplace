@@ -1,5 +1,7 @@
 # Pages Foundation Implementation Plan (market-platform fork, phase 2)
 
+> **Note (added later):** this phase was built in a separate fork named `market-platform`, which was later merged back. The phase is part of this repository; the fork, `upstream`/`origin` remotes and fork-specific database names mentioned below no longer exist.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Server-rendered HTMX/Jinja foundation in the monolith: public catalog/listing/seller pages, cookie sessions over the existing `auth_sessions`, signup/login/logout pages — with the catalog logic extracted to one shared module and the CommitRoute invariant widened to every route.
@@ -12,7 +14,7 @@
 
 ## Global Constraints
 
-- `uv` only from /home/danny/projects/market-platform. **Bare exit codes.**
+- `uv` only from the repository root. **Bare exit codes.**
 - Pyright strict 0; ruff clean; formatter strips not-yet-used imports (import + first use SAME edit).
 - TDD binding and audited: failing tests first, RUN, quote red output.
 - Fork PG: `postgresql+psycopg://marketplace:marketplace@localhost:5432/market_platform`. **NEVER `docker compose down -v` (shared container). Never bind port 8000.** The container is usually already up — do not race `docker compose up` from this dir if it is.
@@ -20,7 +22,7 @@
 - **Jinja autoescape stays on** (seller-supplied content on unauthenticated pages — XSS boundary, tested).
 - **HTML asymmetry doctrine:** public page source never contains payout/margin/capacity/email/payments_ready — tested by scan.
 - House lessons apply to pages too: flush before returning created ORM state that gets serialized; CommitRoute never persists 4xx (error re-renders must not need persistence — they don't here).
-- Commit trailer: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks in double-quoted `git commit -m`. Commit ONLY listed files.
+- Commit trailer: `Co-Authored-By: <agent attribution trailer>`. No backticks in double-quoted `git commit -m`. Commit ONLY listed files.
 - Branch `pages-foundation` (exists, spec committed).
 
 ---

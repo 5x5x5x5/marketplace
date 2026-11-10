@@ -1,5 +1,7 @@
 # Browse Core Implementation Plan (market-platform fork, phase 1)
 
+> **Note (added later):** this phase was built in a separate fork named `market-platform`, which was later merged back. The phase is part of this repository; the fork, `upstream`/`origin` remotes and fork-specific database names mentioned below no longer exist.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the dispatch template into a browse marketplace's backend: seller listings, an unauthenticated public catalog with live indicative pricing, chosen-seller (pinned) booking that never substitutes sellers, and human-paced timing defaults — with dispatch mode fully intact underneath.
@@ -19,7 +21,7 @@
 - **Fork Postgres URL: `postgresql+psycopg://marketplace:marketplace@localhost:5432/market_platform`** (the `market_platform` database inside the SHARED `marketplace-db-1` container). **NEVER run `docker compose down -v`** — the container also serves the template's database and its live dev server. **Never bind port 8000.**
 - Every new router sets `route_class=CommitRoute` (the import-time invariant will fail collection otherwise — that's the signal you forgot).
 - All money math through `models.to_money`; floor checks through `matching.required_spread` (never gross).
-- Commit trailer: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks in double-quoted `git commit -m`. Commit ONLY listed files.
+- Commit trailer: `Co-Authored-By: <agent attribution trailer>`. No backticks in double-quoted `git commit -m`. Commit ONLY listed files.
 - Migrations render plain types, no app imports; `down_revision = "87aec6283afd"`; chain after this branch: exactly 11.
 - Work on branch `browse-core` (exists, spec committed).
 

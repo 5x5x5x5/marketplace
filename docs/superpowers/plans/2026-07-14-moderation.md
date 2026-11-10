@@ -20,7 +20,7 @@
 - **Ordering lesson (from the seller-reviews branch):** in any endpoint that both queries and inserts, do ALL reads (including `get_or_create_*`) BEFORE `session.add(...)`; the guarded `session.flush()` must be the only statement that can hit a UNIQUE violation — autoflush inside a later query would raise OUTSIDE the try/except guard.
 - Resolving a report never auto-suspends or auto-hides. Nothing is ever deleted. Every admin moderation action calls `audit(session, admin_id, <action>, <target>, <detail>)` (imported from repo, already in api.py's namespace).
 - Suspension gates ONLY these acquisition verbs: buyer create_quote/create_job/review_job/open_dispute; seller availability/accept_offer/onboard_payments/review_buyer; both file_report. Login, logout, all GETs, buyer cancel, seller decline, seller complete, webhooks stay open to suspended users.
-- Commit style: concise, imperative; end body with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks inside double-quoted `git commit -m` strings.
+- Commit style: concise, imperative; end body with `Co-Authored-By: <agent attribution trailer>`. No backticks inside double-quoted `git commit -m` strings.
 
 ---
 

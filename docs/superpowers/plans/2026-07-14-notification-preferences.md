@@ -19,7 +19,7 @@
 - Ordering lesson: reads before `session.add`; the guarded flush is the only statement that can hit a UNIQUE violation.
 - MUST_SEND is exactly: `REFUND_ISSUED_BUYER`, `DISPUTE_RESOLVED_BUYER`, `DISPUTE_RESOLVED_SELLER`, `PAYOUT_FAILED_ADMIN`. These four kinds never consult the mute table — a smuggled DB mute row for them is ignored.
 - Preferences endpoints are NOT suspension-gated (preference ≠ acquisition verb) and serve all three roles via `Principal`.
-- Commit style: concise, imperative; end body with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks in double-quoted -m strings.
+- Commit style: concise, imperative; end body with `Co-Authored-By: <agent attribution trailer>`. No backticks in double-quoted -m strings.
 
 ---
 

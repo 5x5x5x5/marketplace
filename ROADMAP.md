@@ -1,296 +1,263 @@
 # Roadmap
 
-## Fork: market-platform
+What shipped, in order, followed by what is deliberately left to whoever
+adapts this template and the known limitations of what is here. Each phase
+from payments onward has a design spec and an implementation plan in
+[`docs/superpowers/`](docs/superpowers/), named by date. The invariants each
+phase added are in [`CLAUDE.md`](CLAUDE.md); security-relevant changes are in
+[`SECURITY.md`](SECURITY.md).
 
-This repo (`github.com/5x5x5x5/market-platform`) is a private fork of the
-public template below (`github.com/5x5x5x5/marketplace`, remote `upstream`),
-specializing it into a browse marketplace. See `CLAUDE.md` for the fork
-identity paragraph and the browse-core non-negotiables.
+## What shipped
 
-- **Phase 1 — browse core (done, branch `browse-core`).** Seller listings
-  (`POST/GET/PUT /v1/seller/listings`, admin hide/unhide, migration #11 —
-  11 total), an unauthenticated public catalog (`/v1/catalog/…`) with live
-  indicative pricing (`price_from`) and role-safe views (no payouts,
-  capacity, emails, or `payments_ready`), and pinned chosen-seller booking
-  (`POST /v1/quotes` with `listing_id` pins `pinned_seller_id` through to
-  the job's offer; a pinned job never re-matches on decline/timeout/sweep —
-  it expires instead). `QUOTE_TTL_MINUTES`/`OFFER_TTL_MINUTES` defaults
-  moved from the template's 5/2 to 15/120 for a human-paced browse flow.
-  `scripts/demo.py` act 9 and `scripts/seed.py` exercise it end to end.
-- **Phase 2 — pages foundation (done, branch `pages-foundation`).**
-  Server-rendered storefront over the catalog and auth endpoints, so browse
-  and account creation are reachable without Swagger or a hand-rolled
-  client: `GET /` (catalog landing, paginated, filterable), `GET
-  /listings/{id}`, `GET /sellers/{id}`, plus `GET/POST /signup`, `GET/POST
-  /login`, `POST /logout` — the last three cookie-backed (`HttpOnly`,
-  `SameSite=Lax`, `Secure` via `cookie_secure`) over the *same*
-  `auth_sessions` rows the JSON API uses, narrowed to `buyer`/`seller` (no
-  browser path to an admin session). Catalog read logic was extracted into
-  `catalog.py` — the single source of visibility/pricing truth for both
-  `/v1/catalog/*` and the pages, closing two double-expression regressions
-  a first draft introduced by hand-rolling the same check twice. The
-  `_assert_commit_routes` invariant widened to cover every route in the app
-  (not just `/v1/*`), with a named `_COMMIT_EXEMPT` for `/healthz`. No
-  booking flow — an anonymous or signed-in buyer can browse and hold a
-  session, but there's no page to create a quote or job yet; the
-  listing-detail page is asserted to render no booking form and no
-  `/v1/quotes`/`/v1/jobs` reference. No migration (no new tables — cookie
-  sessions reuse `auth_sessions`). See `CLAUDE.md` and `SECURITY.md` for the
-  invariants and cookie/XSS/CSRF posture, and `README.md`'s "The storefront"
-  section for the routes.
-- **Phase 3 — transact pages (next).** Server-rendered quote/job/offer pages
-  over the buyer/seller flows, completing a browsable, bookable front end
-  without a SPA:
-  - The booking flow itself — turning a catalog listing (or a
-    platform-matched service type) into a quote and then a job from a page,
-    replacing today's API-only path.
-  - Buyer and seller dashboards — a signed-in buyer's own jobs, a signed-in
-    seller's own listings/offers/jobs, rendered from the existing
-    role-scoped views (`BuyerJobView`/`SellerJobView`), not new endpoints.
-  - An offer inbox page for sellers (accept/decline from a page instead of
-    Swagger/`GET /v1/seller/offers`).
-  - Payment-confirmation and email-token pages (`client_secret` confirmation
-    for `AWAITING_PAYMENT` jobs; the verification/password-reset links
-    README's Auth section notes have no GET handler today — this is where
-    that gap gets a page front end).
-  - CSRF tokens for these forms — deferred here in phase 2 because every
-    phase-2 mutation is cheap (signup/login/logout) and Lax + POST-only is
-    an accepted mitigation for that; money-moving forms in phase 3 need the
-    stronger guarantee. See `SECURITY.md`'s CSRF-stance note.
+### 0. Scaffold and safe-to-pilot hardening (2026-04 to 2026-07-11)
 
-Everything below this section documents the public upstream template as of
-the fork point — it is **historical** from this fork's perspective (still
-accurate for what shipped in the template, but frozen; new fork work is
-recorded above, not folded into "Where we are"/"Done ✓" below).
+The first version: independent buyer and seller pricing pipelines,
+pluggable matching strategies, and separate buyer and seller response models.
+A read-only security sweep then found that identity was a caller-supplied
+string (anyone could read the other side's price, act as any seller, or open
+the admin API) along with race, validation and pagination problems. The
+hardening pass gated every route on an authenticated principal (pilot-grade
+HMAC tokens at the time), added concurrency guards and admin-input
+validation. The findings and their status are in `SECURITY.md`.
 
-## Where we are
+### 1. Template build (2026-07-11)
 
-- v1 scaffold: pricing pipelines + matching strategies + information asymmetry.
-- Safe-to-pilot hardening: real identity, concurrency, admin-input validation.
-- **Full template build (done):** Postgres + Alembic behind DI sessions, Decimal
-  money, the complete job/offer lifecycle (capacity, decline, timeout+re-match,
-  cancel, history), buyer→seller ratings, admin seller-tier management, `/v1`
-  versioning, token expiry, and an admin audit log. See `SECURITY.md`.
-- **Payments (done):** escrow via a provider port (Stripe Connect + a
-  deterministic fake), seller onboarding gate, signed/deduped webhooks,
-  payment-timeout sweep, cancel void/refund, admin payout retry, and client
-  idempotency keys. **Verified against a real Stripe test account 2026-07-13**:
-  full escrow loop (connected-account onboarding → PaymentIntent → signed
-  webhook → transfer) ran with zero adapter changes, plus the adversarial
-  paths — card decline + same-PI recovery, buyer void (PI canceled at Stripe),
-  admin refund (charge refunded at Stripe), transfer reversal → payout retry
-  under a fresh idempotency key (new transfer, not a replay), and the
-  payment-timeout sweep voiding a live PaymentIntent.
-- **Auth (done):** pilot HMAC (`mint_token`/`MARKETPLACE_SECRET`) is deleted;
-  real signup/login/logout/me/verify/password-reset over DB-backed, revocable
-  sessions (`/v1/auth/*`). Separate accounts per role (`unique(email, role)`),
-  argon2 password hashing, admin seeded from `ADMIN_EMAIL`/`ADMIN_PASSWORD` at
-  startup, and an `EmailSender` port (console adapter for now) backing
-  verification/reset. Residuals named in `SECURITY.md`: no login
-  rate-limiting, a timing delta on `password-reset/request`, and email
-  verification doesn't gate anything yet (no real mail sender to make the
-  gate meaningful).
-- **Disputes + partial refunds (done):** first sub-phase of the trust &
-  safety bucket. Buyers dispute a completed job within `DISPUTE_WINDOW_DAYS`
-  (default 7) of `completed_at`, one dispute per job; an admin arbitrates
-  with independent `refund_amount`/`clawback_amount` amounts (partial Stripe
-  refund + partial transfer reversal, bounds-checked, idempotent legs),
-  booked onto an append-only `adjustments` ledger — `Transaction` rows and
-  `Payment.status` stay untouched. `GET /v1/admin/margins/summary` reports
-  gross AND net-of-adjustments margin. Stripe chargebacks
-  (`charge.dispute.created`/`closed`) ride the same webhook into the same
-  `disputes` table, recorded and notified rather than fought — evidence
-  submission stays in the Stripe dashboard (fork work). See `SECURITY.md`.
-- **Seller→buyer reviews (done):** second T&S sub-phase, a mirror table
-  (`seller_reviews`, one review per job) feeding a display-only buyer
-  rating aggregate — `GET /v1/profile` for the buyer, `GET /v1/admin/buyers`
-  for admin. The two review directions are independent (no double-blind);
-  the aggregate gates nothing, by design (revisit if ratings ever gate
-  anything). The four disputes-carried minors are closed: race-safe dispute
-  creation, the fake-provider seam documented, the dead charge-only dispute
-  `related_id` fallback deleted, and a DB `CHECK` on `adjustments.amount`.
-  See `SECURITY.md`.
-- **Moderation (done):** third T&S sub-phase — suspension, takedown, and
-  abuse reports (migration #7). Suspension is verb-gated, not a global
-  freeze: acquisition verbs (quotes, jobs, reviews, disputes, availability,
-  offer-accept, payments-onboard, report-filing) 403 for a suspended user,
-  while login, GETs, complete, decline, and cancel stay open and matching
-  drops suspended sellers — freeze-new/finish-in-flight by design, and
-  suspension itself never moves money. Takedown hides, never deletes: a
-  hidden comment vanishes from non-admin views but the rating, aggregates,
-  and admin visibility (raw text + flag) are untouched; a suspended/flagged
-  user's display name can be reset to `user-{id[:8]}`. Reports are
-  counterparty-only (a shared job, or a party to the review), one per
-  reporter per target ever, and resolving is terminal with no automatic
-  action taken. See `SECURITY.md`.
-- **Notification preferences (done):** fourth and final T&S sub-phase —
-  per-kind mutes (migration #8). `GET/PUT /v1/notification-preferences` is
-  role-scoped (a buyer only sees/sets buyer kinds, same for seller/admin) and
-  replace-set (PUT sends the full muted list, race-safe via a row lock on the
-  user). Enforcement is at `enqueue`, not at send, so a smuggled DB row can
-  never resurrect muted mail. A server-side money floor
-  (`REFUND_ISSUED_BUYER`, `DISPUTE_RESOLVED_BUYER`, `DISPUTE_RESOLVED_SELLER`,
-  `PAYOUT_FAILED_ADMIN`) can never be muted, by any path. See `SECURITY.md`.
-- **Fee-aware margin (done):** the `Transaction` ledger recorded margin gross
-  of the payment provider's cut, so a refunded job cost the platform its fee
-  with no ledger entry (verified on the test account: $50.00 ledger margin
-  landed as $42.14 cash after $7.86 in fees). Admin-tunable platform config
-  (`pct`/`fixed`, defaulting to Stripe's 2.9% + 30¢, `PUT
-  /v1/admin/config/fees`, migration #9) now backs a `fee_estimate` snapshot
-  stamped onto every charge at charge time (never recomputed later), and the
-  margin floor is enforced net of that estimate at both quote time and
-  match-time candidate filtering so a floor-priced job can't be signed at a
-  loss for the fee config in force at quote/match time — a fee-config change
-  between quote and accept is applied at the stamp, the same
-  eventual-consistency stance as the margin floor itself.
-  `GET /v1/admin/margins/summary` adds `fees_estimated` and
-  `platform_margin_net_of_fees` — a cash view over SUCCEEDED/REFUNDED charges
-  that matches what actually lands in the bank account. See `SECURITY.md`.
-- **Observability & ops (done):** the fifth and final generic bucket.
-  Every request carries a request id (`X-Request-ID` honored if present,
-  always echoed) threaded through a contextvar so every log line — access
-  and application — carries it; JSON logs by default, `LOG_FORMAT=plain`
-  for local reading. A single request-boundary middleware turns any
-  unhandled exception into a clean `{"detail": "internal error",
-  "request_id": …}` 500 — traceback only in the log, never the response
-  body. `GET /v1/admin/stats` gives an operator a one-call snapshot
-  (jobs/payments/payouts/notifications/disputes/reports/users/quotes/
-  retention counts, uptime). Retention sweeps age out `idempotency_keys`
-  (7d), `webhook_events` (30d), and terminal SENT/FAILED `notifications`
-  (30d) on the maintenance loop's own clock — PENDING outbox rows are
-  never reaped, by design (they still need to send). The webhook
-  handler's DB work moved off the event loop (`asyncio.to_thread`),
-  closing the async-over-sync-`Session` gap, alongside a
-  resurrection-guard fix (a late-arriving webhook success can never
-  resurrect a voided/cancelled payment) and a PG-gated
-  cancel-vs-webhook race test. API hardening adds a body-size cap
-  (`MAX_BODY_BYTES`, default 1 MiB), `TrustedHostMiddleware` and
-  `CORSMiddleware` (both open by default; narrow via `TRUSTED_HOSTS`/
-  `CORS_ORIGINS` in production), and `limit`/`offset` pagination on the
-  admin list endpoints, plus indexes on the hot query paths. Migration
-  #10 (10 total). See `SECURITY.md`.
+State moved to Postgres behind SQLAlchemy sessions and Alembic
+(`initial_schema`), with SQLite kept for local work and tests. Money became
+`Decimal`. The job lifecycle was completed: seller capacity, decline, offer
+timeout with re-match to the next seller, graceful expiry, cancel and
+history. Buyer-to-seller ratings feed the `highest_rated` strategy. Admins
+manage seller tiers and capacity. The API moved under `/v1`, tokens gained
+expiry, and admin actions are written to an audit log. Concurrency moved to
+database row locks, with a true-parallel capacity race test that runs on
+Postgres.
 
-## Done ✓
+### 2. Payments (2026-07-12 to 07-13)
 
-Persistence (Postgres/SQLAlchemy/Alembic) · Decimal money · lifecycle
-completeness (cancel/decline/offer-timeout/re-match/graceful-expiry) · ratings
-write-path feeding `highest_rated` · seller tier + capacity management · `/v1`
-API versioning · admin audit log · **payments & payouts** (seller onboarding
-gate, escrow charge-at-accept/transfer-at-complete, async payment via
-signed+deduped webhook, payment-timeout sweep, cancel void/refund, admin
-payout retry — Stripe Connect controller-properties accounts, fake provider
-for dev/tests; **verified end-to-end against a real Stripe test account
-2026-07-13**: onboarding, charge, signed webhook, and transfer all worked
-first-contact with zero adapter changes) · **idempotency keys** (client
-`Idempotency-Key` header on money-mutating POSTs, replayed per-principal) ·
-**real-user auth** (DB-backed, revocable, sha256-at-rest sessions replacing
-pilot HMAC; separate buyer/seller/admin accounts; argon2 passwords; admin
-bootstrap from env; email verification + password reset over an `EmailSender`
-port — residuals: no login rate-limiting, a reset-timing delta, verification
-gates nothing yet; see `SECURITY.md`) · **notifications + background
-scheduler** (transactional outbox: lifecycle events — 14 kinds today —
-enqueued inside the domain transaction with role-safe payload snapshots; drained with
-retry/backoff by an in-process maintenance loop that also runs the sweeps on
-a clock — offers, stale payments, and sessions now expire without traffic;
-stdlib SMTP adapter behind `SMTP_HOST`, console adapter otherwise; admin
-list/drain endpoints; an external-worker extraction needs no schema change) ·
-**disputes + partial refunds** (buyer-initiated arbitration within
-`DISPUTE_WINDOW_DAYS`, one dispute per job; admin resolves independent
-refund/clawback amounts onto an append-only `adjustments` ledger; gross AND
-net-of-adjustments margin reporting; Stripe chargebacks recorded into the
-same table via the existing webhook, not fought — evidence submission is
-fork work; see `SECURITY.md`) · **seller→buyer reviews** (mirror
-`seller_reviews` table, one per job; display-only buyer rating aggregate via
-`GET /v1/profile` and `GET /v1/admin/buyers`; independent of the
-buyer→seller direction, no double-blind; see `SECURITY.md`) ·
-**moderation** (verb-gated suspension excluding suspended sellers from
-matching; hide-not-delete takedown of review comments plus display-name
-reset; counterparty-only abuse reports with a terminal admin resolve and no
-automatic action; migration #7; see `SECURITY.md`) · **notification
-preferences** (role-scoped, replace-set `GET/PUT
-/v1/notification-preferences`; per-kind mutes enforced at enqueue; a
-server-side money floor that can't be muted by any path, including a
-smuggled DB row; migration #8; see `SECURITY.md`) · **fee-aware margin**
-(admin-tunable `pct`/`fixed` fee config defaulting to Stripe's 2.9% + 30¢;
-`fee_estimate` stamped on every charge at charge time; margin floor enforced
-net-of-fees at both the quote path and match-time filtering; `fees_estimated`
-/`platform_margin_net_of_fees` cash-view fields on the margin summary;
-migration #9; see `SECURITY.md`) · **observability & ops** (request-id
-propagation and JSON access logging with a `plain` toggle; a single
-request-boundary middleware giving a clean 500 envelope; `GET
-/v1/admin/stats` operator snapshot; 7/30/30 retention sweeps over
-idempotency keys/webhook events/terminal notifications with PENDING rows
-never reaped; webhook DB work moved off the event loop plus a
-resurrection-guard money fix and a PG-gated race test; body-size cap,
-`TrustedHostMiddleware`/`CORSMiddleware`, admin-list pagination, and
-hot-path indexes; migration #10; see `SECURITY.md`).
+Escrow through a provider port, with a deterministic fake and a Stripe
+Connect adapter (`payments`). The buyer is charged when the seller accepts
+and the payout is transferred at completion. Sellers must onboard before
+matching offers them work. Charges that don't clear inline wait in
+`awaiting_payment` until a signed, deduplicated webhook settles them, and a
+sweep releases charges that never settle. Cancel voids or refunds. Admins can
+retry failed payouts. Clients can send an `Idempotency-Key` on POSTs. The
+commit history records a manual run against a Stripe test account on
+2026-07-13: onboarding, charge, signed webhook and transfer, plus card
+decline and recovery, void, refund, transfer reversal with payout retry, and
+the payment-timeout sweep.
 
-## What's still ahead
+### 3. Real-user auth (2026-07-13 to 07-14)
 
-**The template is feature-complete.** Trust & safety (four sub-phases) and
-observability & ops are both done — see "Where we are" and "Done ✓" above.
-What remains below is fork work by maintainer decision (2026-07-15): genuinely
-fork-specific, not a generic default this template should carry, so it
-stays unscheduled rather than rough-prioritized.
+The pilot HMAC tokens were deleted. Users sign up and log in with argon2
+passwords and get opaque, revocable, DB-backed sessions stored as sha256
+hashes (`auth`). Accounts are one email per role. The admin is seeded from
+the environment at startup. Email verification and password reset go
+through an `EmailSender` port with a console adapter.
 
-1. **Admin RBAC** — beyond the single shared admin role; every admin account
-   currently has identical, full authority.
-2. **Gateway rate-limiting / API extras** — login/endpoint throttling, API
-   keys, quotas: deliberately left to the gateway/edge layer rather than the
-   app (see `SECURITY.md`'s no-rate-limiting residuals). Body-size caps,
-   `TrustedHostMiddleware`, and `CORSMiddleware` are already in the app —
-   see "Done ✓" above.
-3. **OAuth / social login** — Google/GitHub sign-in alongside password auth.
-   Additive, not a replacement — real-user auth (password signup/login,
-   sessions, argon2, verification/reset) already shipped; see "Done ✓" above
-   and `SECURITY.md`.
+### 4. Notifications and the maintenance loop (2026-07-14)
 
-Also fork scope: push/SMS notification channels and digest emails (the
-`EmailSender` port and the transactional outbox are the extension points),
-and automatic abuse signals/limits (report-count thresholds, auto-suspend) —
-fork-specific heuristics, not a generic default (see `CLAUDE.md`'s
-non-goals).
+A transactional outbox (`notifications`): lifecycle events are enqueued in
+the same transaction as the state change, with payloads that respect the
+asymmetry, and an in-process maintenance loop sends them with retry and
+backoff. The same loop runs the sweeps on a clock, so offers, stale payments
+and sessions expire without traffic. An SMTP adapter is used when
+`SMTP_HOST` is set. Admins can list and drain the outbox.
 
-## Build vs template: build
+### 5. Disputes and partial refunds (2026-07-14)
 
-No mainstream marketplace template supports platform-set double-sided pricing.
-Sharetribe, Medusa/MercurJS, Vendure, Dokan/WC Vendors, and CS-Cart all assume
-**seller-set price + admin commission**. The spread model is exactly the thing
-they don't ship, and it's this project's whole point. Rule of thumb: **own the
-differentiator (pricing/matching), rent the commodity** (auth/payments/hosting)
-behind thin adapters. There is no notable FastAPI marketplace starter — this
-scaffold is already ahead of that field.
+Buyers can dispute a completed job within a window, once per job. Admins
+resolve with independent refund and clawback amounts, booked on an
+append-only `adjustments` ledger without editing transactions (`disputes`).
+The margin summary reports gross and net-of-adjustments margin. Provider
+chargebacks arrive through the same webhook into the same table and are
+recorded rather than contested.
 
-## Infrastructure: defer, shortlist noted
+### 6. Seller-to-buyer reviews (2026-07-14)
 
-Practitioner consensus is to pick infra *after* a product exists; at hundreds of
-users this is firmly pre-scale. Keep the core in portable FastAPI + vanilla
-Postgres behind adapters so none of these choices lock you in. When ready:
+A mirror review table, one per job (`seller_reviews`), feeding a buyer rating
+aggregate that is displayed and gates nothing. Dispute creation was made
+race-safe, and the adjustments ledger got a database `CHECK` on amounts.
 
-- **Hosting** — Railway or Render (zero-ops, ~$5–25/mo). Hetzner + Coolify only
-  if you want rock-bottom cost and will own server ops. Fly.io only if you need
-  global edge (you don't yet).
-- **DB** — Neon (serverless, branching) or Supabase (bundles auth; note the
-  7-day inactivity pause on free projects).
-- **Auth** — implemented in-house (DB-backed sessions, argon2, `/v1/auth/*`;
-  see "Done" above and `SECURITY.md`) rather than rented, so there's no
-  vendor lock-in on identity. A fork wanting OAuth/social login or managed
-  user infra instead can layer fastapi-users (currently maintenance-mode; a
-  successor is in progress) or Supabase Auth on top; avoid Auth0/Clerk MAU
-  pricing cliffs until enterprise SSO justifies them.
-- **Payments** — implemented (Stripe Connect, controller-properties accounts).
-  Wired against `stripe` 15.3.0's `.v1` namespace; verified end-to-end on a
-  real Stripe test account 2026-07-13 (onboarding, charge, signed webhooks,
-  transfer). Going live is a dashboard activation + `sk_live` key swap, not code.
-- **Capacity coupling under load** — sync endpoints share one threadpool
-  with DB-connection waiters, so at saturation the pool (size 5 + overflow
-  10 by default) convoys into truthful 500 waves rather than queueing
-  gracefully. Scale `pool_size`/`max_overflow` with workers and put gateway
-  rate-limiting (fork work) in front; the app-side behavior is honest
-  backpressure, not data loss.
-- **Lock-in traps** — hosted Sharetribe (can't take the backend), Supabase
-  auth+DB coupling, Auth0/Clerk cliffs, RDS proprietary features.
+### 7. Moderation (2026-07-14)
 
-*Infra figures are from mid-2026 secondary sources; confirm on each vendor's own
-pricing page before committing — PaaS/DB/auth pricing shifted several times in
-2025–26.*
+Suspension that blocks acquisition actions while letting in-flight work
+finish and moves no money; takedown that hides review comments without
+deleting them or touching ratings; display-name reset; and counterparty-only
+abuse reports with a terminal, inert resolve (`moderation`).
+
+### 8. Notification preferences (2026-07-14 to 07-15)
+
+Per-kind mutes, scoped to the caller's role and set as a whole list
+(`notification_prefs`). Mutes are enforced at enqueue, and a fixed set of
+money-related kinds can't be muted by any path, including a row inserted
+directly into the database.
+
+### 9. Fee-aware margin (2026-07-15)
+
+The margin ledger had been gross of the payment provider's fee; the spec
+records a test-account run where $50.00 of ledger margin landed as $42.14 in
+cash. An admin-tunable fee estimate (`pct`/`fixed`) is now stamped on every
+charge when it is made and never recomputed (`fee_aware_margin`), the margin
+floor is enforced net of that estimate at quote time and when choosing a
+seller, and the margin summary adds `fees_estimated` and
+`platform_margin_net_of_fees`.
+
+### 10. Observability and operations (2026-07-15 to 07-16)
+
+Request ids on every request and log line, JSON logs, a single middleware
+that turns unhandled exceptions into a clean 500 envelope, `GET
+/v1/admin/stats`, retention sweeps that never delete pending notifications,
+webhook database work moved off the event loop, a fix so a late payment
+success can't revive a cancelled payment, a body-size cap,
+`TrustedHostMiddleware` and `CORSMiddleware`, admin list pagination, and
+indexes on hot queries (`ops_indexes`).
+
+### Try-out round (2026-07-16)
+
+The template was driven by hand against a live server after the suite and
+reviews were green. That added `scripts/seed.py`, bearer auth in Swagger and
+the ten-minute walkthrough, and found five bugs that `TestClient` could not
+show ([`docs/tryout-findings-2026-07-16.md`](docs/tryout-findings-2026-07-16.md)),
+all fixed:
+
+- F1: the seller's completion receipt returned the admin ledger model,
+  showing the buyer price and margin to the seller.
+- F2: the session committed after the response was sent, so a client's next
+  request could miss its own write. Every router now commits through
+  `CommitRoute` before responding.
+- F2b: the idempotency replay record was stored after the response, so an
+  immediate retry could execute twice.
+- F4: creation endpoints disagreed on 200 versus 201.
+- F5: a cancel racing a complete could refund a completed job (a stale read
+  after taking a row lock).
+
+### 11. Browse: listings, public catalog, pinned booking (2026-07-16 to 07-17)
+
+Sellers publish listings with no price (`listings`); admins can hide them
+independently of the seller's own on/off switch. An unauthenticated catalog
+(`/v1/catalog/*`) shows listings with a live indicative `price_from` and no
+payout, capacity, email or payment status. A quote created from a listing is
+pinned to that seller and never moves to another seller on decline or
+timeout. Quote and offer timeouts default to 15 and 120 minutes for a
+person-paced flow. The demo and seed script exercise it.
+
+### 12. Server-rendered pages and cookie sessions (2026-07-17)
+
+Jinja pages for the catalog, listing detail and seller profile, plus signup,
+login and logout pages that keep the session in an `HttpOnly`,
+`SameSite=Lax` cookie backed by the same `auth_sessions` rows as the API
+(buyer and seller only; no browser login for admins). Catalog reads were
+extracted into `catalog.py` so the JSON API and the pages share one
+implementation, after an earlier draft that duplicated the visibility check
+let the two drift. The commit-before-response check was widened from `/v1/*`
+to every route. No booking pages and no CSRF tokens yet; see the limitations
+below. No migration.
+
+### 13. Operational hardening, tooling and agent setup (2026-11)
+
+- **Migrations from empty on SQLite.** The listings migration failed on an
+  empty SQLite database; it was fixed in batch mode without changing
+  existing Postgres schemas, and `tests/test_migrations.py` now runs the
+  chain up, down and up again and checks for a single head.
+- **Load-test harness.** Locust scenarios for browsing, the booking
+  lifecycle and login, with a staged runner that records run conditions
+  (`loadtest/`).
+- **Capacity work.** The connection pool is sized against the threadpool
+  (10 + 30 by default) and pool exhaustion answers 503 with `Retry-After`
+  instead of a 30-second stall and a 500. List endpoints paginate in SQL.
+  The quote path loads candidates in a fixed number of queries and its hot
+  counts are indexed (`hot_path_indexes`). Deletes that nothing observes
+  moved off read paths into housekeeping, the offer-expiry sweep claims rows
+  with `SKIP LOCKED`, and `MAINTENANCE_ENABLED` lets one replica run the
+  loop. Idempotency middleware database work moved off the event loop.
+- **Webhooks.** The fake provider's unsigned webhook is closed unless
+  `ALLOW_UNSIGNED_WEBHOOKS=true`, and startup refuses incomplete or unsafe
+  Stripe configuration. Failed webhook handling is persisted to an outbox
+  and retried with backoff, then dead-lettered with an admin notification;
+  admins can list and re-queue events (`webhook_outbox`). Every payment-event
+  branch was audited and fixed to be safe to apply twice and to apply late
+  (`tests/test_webhook_replay.py`).
+- **Tooling.** CI (lint, types, tests on SQLite and Postgres, migrations on
+  both), a security workflow (Semgrep with repo rules, `pip-audit`, gitleaks
+  over history), Dependabot, pre-commit hooks, a `justfile`, and
+  `tests/test_architecture.py`, which checks the statically checkable
+  invariants from `CLAUDE.md`.
+- **Agent setup.** Skills, narrow reviewer subagents and hooks under
+  `.claude/`, `AGENTS.md`, and [`docs/agent-setup.md`](docs/agent-setup.md).
+
+<!-- COORDINATOR: money-path audit (in progress). Add it to phase 13 (or as its own entry) once merged, with what it found and fixed. -->
+
+<!-- COORDINATOR: api.py split into router and service modules (in progress). Add to phase 13 once merged. -->
+
+<!-- COORDINATOR: ops MCP server package and background-agent GitHub workflows (in progress). Add to phase 13 once merged. -->
+
+<!-- COORDINATOR: booking and payment pages (next, after the above). Add as phase 14 once merged; then remove the "No booking pages" limitation below and update the CSRF item. -->
+
+## Next
+
+The obvious next phase is the transactional pages: booking from a listing or
+service type, buyer and seller dashboards built on the existing role-scoped
+views, a seller offer inbox, payment confirmation for `awaiting_payment`
+jobs, pages behind the verification and password-reset links, and CSRF
+tokens on those forms.
+
+## Deliberately left to a fork
+
+Decided 2026-07-15: these are specific to a particular marketplace, not
+defaults a template should carry.
+
+- **Gateway rate limiting**, API keys and quotas. The argon2 endpoints
+  (signup, login, password reset, and the page forms that call them) most
+  need a limit; [`docs/DEPLOY.md`](docs/DEPLOY.md#edge-rate-limits) suggests
+  edge rules.
+- **Admin roles.** Every admin account has the same full authority.
+- **OAuth / social login**, alongside the existing password auth.
+- **Push/SMS channels and notification digests.** The `EmailSender` port and
+  the outbox are the extension points.
+- **Automatic abuse signals** such as report-count thresholds or
+  auto-suspend.
+
+Also left to a fork, as noted where each comes up in the code and specs:
+
+- **Chargeback evidence submission**; the app records chargeback outcomes
+  only.
+- **Reconciling actual provider fees** against the stamped estimate.
+- **Multiple currencies**; one currency is configured.
+
+Seller bidding is out entirely: this is a managed marketplace, not an
+auction.
+
+## Known limitations
+
+- **Row locks and a pooled connection are held across payment-provider
+  calls** in accept, complete and cancel. The fake provider answers
+  instantly, so tests and the load harness understate this; with a real
+  provider every accept or complete holds its locks and a pool connection
+  for the length of a network call.
+- **`email_verified` gates nothing.** `POST /v1/auth/verify` sets it and no
+  endpoint checks it.
+- **No rate limiting on the argon2 endpoints.** Each login, signup or reset
+  attempt costs real CPU and memory; this has to be handled at the edge.
+- **Load-test numbers come from a single shared box**: Locust, the app and
+  Postgres on one machine. They are useful for comparing two builds, not as
+  production capacity figures.
+- **No booking or payment pages, and no CSRF tokens.** Booking is API-only.
+  The current page forms (signup, login, logout) rely on `SameSite=Lax` and
+  POST-only mutation, which is not enough for money-moving forms.
+- **The Stripe adapter is tested for webhook signature verification and
+  event mapping only**; the end-to-end Stripe run is a manual record from
+  2026-07-13, not something the suite repeats.
+- **A timing difference on `password-reset/request`.** Status and body are
+  identical whether or not the account exists, but the existing-account
+  path does more work.
+- **A commit failure after a provider call** leaves the provider briefly
+  ahead of the database; the client gets a truthful 500 and a retry
+  converges through the provider idempotency keys.
+- **Truly simultaneous requests with the same `Idempotency-Key`** can both
+  execute; the row locks downstream keep that safe, but it is not
+  exactly-once.
+- **A non-standard JSON body** (`NaN`, `Infinity`) is rejected but answers
+  500 (the clean envelope) instead of 422.
+- **`Payment.fee_estimate` is an estimate**, not the provider's actual fee.
+
+See `SECURITY.md` for the security residuals in more detail.
