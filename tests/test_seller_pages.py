@@ -11,6 +11,7 @@ from sqlalchemy import select
 from marketplace.db import SessionLocal
 from marketplace.entities import Job, Listing, Offer
 from marketplace.models import JobStatus, OfferStatus, PaymentStatus
+from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory
 from tests.page_helpers import csrf_of, page_user, user_id
 
@@ -52,6 +53,14 @@ def only_offer() -> Offer:
         offer = db.scalar(select(Offer))
         assert offer is not None
         return offer
+
+
+def test_onboard_link_outage_shows_provider_notice(fake_payments: FakeProvider) -> None:
+    s = page_user("seller")
+    assert post(s, "/seller/payments/onboard").status_code == 303  # account created
+    fake_payments.fail_next_call = True  # now only the onboarding-link call can fail
+    r = post(s, "/seller/payments/onboard")
+    assert r.status_code == 303 and r.headers["location"] == "/seller?notice=provider"
 
 
 def test_dashboard_is_for_sellers(client: TestClient) -> None:

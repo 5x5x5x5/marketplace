@@ -79,6 +79,7 @@ class FakeProvider:
         return AccountResult(provider_account_id=f"acct_fake_{seller_id}", payments_ready=True)
 
     def onboarding_link(self, provider_account_id: str, return_url: str) -> str:
+        self._maybe_fail()
         return f"https://fake.example/onboard/{provider_account_id}?return={return_url}"
 
     def charge_buyer(

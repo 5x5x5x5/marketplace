@@ -59,6 +59,21 @@ def test_onboard_provider_outage_is_502_then_recovers(
     assert r2.json()["payments_ready"] is True
 
 
+def test_onboard_link_outage_is_502_not_500(
+    client: TestClient, auth: AuthFactory, fake_payments: FakeProvider
+) -> None:
+    # The account exists, so only the onboarding-link call can fail.
+    assert (
+        client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1")).status_code == 200
+    )
+    fake_payments.fail_next_call = True
+    r = client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1"))
+    assert r.status_code == 502
+    assert (
+        client.post("/v1/seller/payments/onboard", headers=auth("seller", "s1")).status_code == 200
+    )
+
+
 def test_unonboarded_seller_never_matched(
     client: TestClient, basic_service: str, auth: AuthFactory
 ) -> None:
