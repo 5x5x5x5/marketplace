@@ -80,6 +80,21 @@ def visible_listings_stmt() -> Select[tuple[Listing, User, SellerProfile]]:
     )
 
 
+def visible_listings_page(
+    limit: int, offset: int, service_type_id: str | None = None
+) -> Select[tuple[Listing, User, SellerProfile]]:
+    """One page of `visible_listings_stmt`, newest first, bounded in SQL.
+
+    The `Listing.id` tie-breaker makes the order total, so LIMIT/OFFSET pages
+    never skip or repeat a listing that shares a `created_at` with another.
+    Every paged catalog consumer (the JSON list, the landing page) goes
+    through here rather than fetching all visible rows and slicing."""
+    stmt = visible_listings_stmt()
+    if service_type_id is not None:
+        stmt = stmt.where(Listing.service_type_id == service_type_id)
+    return stmt.order_by(Listing.created_at.desc(), Listing.id.desc()).limit(limit).offset(offset)
+
+
 def seller_publicly_visible(user: User | None, seller: SellerProfile | None) -> bool:
     """Whether a seller's own profile/lookup endpoint should resolve at all:
     account exists, ACTIVE, and payments onboarded. Single-seller equivalent

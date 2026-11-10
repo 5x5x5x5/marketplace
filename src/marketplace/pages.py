@@ -80,11 +80,10 @@ def landing(
     service_type_id: str | None = None,
     page: Annotated[int, Query(ge=1)] = 1,
 ) -> HTMLResponse:
-    stmt = catalog.visible_listings_stmt().order_by(Listing.created_at.desc())
-    if service_type_id is not None:
-        stmt = stmt.where(Listing.service_type_id == service_type_id)
     offset = (page - 1) * _PAGE_SIZE
-    rows = session.execute(stmt.offset(offset).limit(_PAGE_SIZE + 1)).all()
+    # one extra row tells us whether a next page exists
+    stmt = catalog.visible_listings_page(_PAGE_SIZE + 1, offset, service_type_id)
+    rows = session.execute(stmt).all()
     has_next = len(rows) > _PAGE_SIZE
     listings = catalog.catalog_listings_for_rows(session, rows[:_PAGE_SIZE])
     return templates.TemplateResponse(
