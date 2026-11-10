@@ -143,7 +143,17 @@ from .payments import get_provider
 from .payments.port import PaymentError, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY
 from .repo import audit
-from .services import booking, disputes, jobs, maintenance, moderation, payouts, reviews, webhooks
+from .services import (
+    booking,
+    disputes,
+    jobs,
+    listings,
+    maintenance,
+    moderation,
+    payouts,
+    reviews,
+    webhooks,
+)
 from .services.common import now as _now
 from .services.common import paginate as _paginate
 from .services.common import require_active as _require_active
@@ -436,46 +446,19 @@ def review_buyer(
 
 @seller_router.post("/listings", response_model=SellerListingOut, status_code=201)
 def create_listing(body: ListingCreate, session: SessionDep, seller_id: SellerId) -> Listing:
-    _require_active(session, seller_id)
-    if session.get(ServiceType, body.service_type_id) is None:
-        raise HTTPException(status_code=404, detail="unknown service_type_id")
-    seller = repo.get_or_create_seller(session, seller_id)
-    if not seller.payments_ready:
-        raise HTTPException(status_code=409, detail="onboard payments before listing")
-    listing = Listing(
-        seller_id=seller_id,
-        service_type_id=body.service_type_id,
-        title=body.title,
-        description=body.description,
-        photo_urls=body.photo_urls,
-    )
-    session.add(listing)
-    session.flush()
-    return listing
+    return listings.create_listing(session, seller_id, body)
 
 
 @seller_router.get("/listings", response_model=list[SellerListingOut])
 def my_listings(session: SessionDep, seller_id: SellerId) -> list[Listing]:
-    rows = session.scalars(
-        select(Listing).where(Listing.seller_id == seller_id).order_by(Listing.created_at.desc())
-    ).all()
-    return list(rows)
+    return listings.my_listings(session, seller_id)
 
 
 @seller_router.put("/listings/{listing_id}", response_model=SellerListingOut)
 def update_listing(
     listing_id: UUID, body: ListingUpdate, session: SessionDep, seller_id: SellerId
 ) -> Listing:
-    _require_active(session, seller_id)
-    listing = session.get(Listing, listing_id)
-    if listing is None or listing.seller_id != seller_id:
-        raise HTTPException(status_code=404, detail="listing not found")
-    for field in ("title", "description", "photo_urls", "active"):
-        value = getattr(body, field)
-        if value is not None:
-            setattr(listing, field, value)
-    session.flush()
-    return listing
+    return listings.update_listing(session, seller_id, listing_id, body)
 
 
 @seller_router.post("/offers/{offer_id}/accept", response_model=SellerJobView)
@@ -668,30 +651,17 @@ def admin_list_reviews(
 def admin_list_listings(
     session: SessionDep, limit: Limit = 100, offset: Offset = 0
 ) -> list[Listing]:
-    stmt = select(Listing).order_by(Listing.created_at.desc(), Listing.id.desc())
-    return _paginate(session, stmt, limit, offset)
+    return listings.admin_list_listings(session, limit, offset)
 
 
 @admin_router.post("/listings/{listing_id}/hide", response_model=SellerListingOut)
 def hide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> Listing:
-    listing = session.get(Listing, listing_id)
-    if listing is None:
-        raise HTTPException(status_code=404, detail="listing not found")
-    listing.hidden = True
-    audit(session, admin_id, "hide_listing", str(listing_id), {})
-    session.flush()
-    return listing
+    return listings.hide_listing(session, admin_id, listing_id)
 
 
 @admin_router.post("/listings/{listing_id}/unhide", response_model=SellerListingOut)
 def unhide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> Listing:
-    listing = session.get(Listing, listing_id)
-    if listing is None:
-        raise HTTPException(status_code=404, detail="listing not found")
-    listing.hidden = False
-    audit(session, admin_id, "unhide_listing", str(listing_id), {})
-    session.flush()
-    return listing
+    return listings.unhide_listing(session, admin_id, listing_id)
 
 
 @admin_router.post("/reviews/{kind}/{review_id}/hide", response_model=AdminReviewOut)
