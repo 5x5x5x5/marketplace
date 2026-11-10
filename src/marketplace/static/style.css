@@ -510,3 +510,23 @@ textarea {
     padding: 0.2rem 0.85rem;
   }
 }
+
+.card-title a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.card-title a:hover {
+  text-decoration: underline;
+}
+
+/* The whole card is the click target; the title link stays the accessible name. */
+.card {
+  position: relative;
+}
+
+.card-title a::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}

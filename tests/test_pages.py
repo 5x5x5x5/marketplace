@@ -444,3 +444,13 @@ def test_xss_on_booking_and_seller_pages(client: TestClient, basic_service: str)
     assert '"><script>' not in tag
     assert 'value="&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in tag
     assert "</textarea><script>" not in edit  # the description's textarea
+
+
+def test_catalog_cards_link_to_their_listing(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """Try-out finding T1: the cards had no link, so a browser could not get
+    from the catalog to a listing (and so to booking) at all."""
+    listing = _listed_seller(client, auth, basic_service)
+    assert f'href="/listings/{listing["id"]}"' in client.get("/").text
+    assert f'href="/listings/{listing["id"]}"' in client.get("/sellers/s1").text
