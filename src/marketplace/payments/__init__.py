@@ -17,7 +17,9 @@ def get_provider() -> PaymentProvider:
             from .stripe_provider import StripeProvider  # lazy: SDK only when configured
 
             _stripe_provider = StripeProvider(
-                settings.stripe_secret_key, settings.stripe_webhook_secret
+                settings.stripe_secret_key,
+                settings.stripe_webhook_secret,
+                settings.stripe_publishable_key,
             )
         return _stripe_provider
     return fake_provider

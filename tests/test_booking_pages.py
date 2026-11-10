@@ -9,13 +9,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Job, Quote
-from marketplace.models import JobStatus
+from marketplace.entities import Job, Payment, Quote
+from marketplace.models import JobStatus, PaymentStatus
 from marketplace.pages import is_page_post
 from marketplace.settings import settings
 from tests.conftest import AuthFactory, Header
 from tests.page_helpers import csrf_from, csrf_of, page_user
 from tests.test_payments import onboard_and_avail
+from tests.webhook_helpers import post_event
 
 
 def listed(client: TestClient, auth: AuthFactory, sid: str, **over: object) -> str:
@@ -237,3 +238,104 @@ def test_bookings_list_needs_a_buyer(client: TestClient) -> None:
     buyer = page_user("buyer")
     assert "No bookings yet" in buyer.get("/bookings").text
     assert csrf_from(buyer.get("/bookings").text)
+
+
+# ---------- the payment step ----------
+
+
+def _awaiting_payment(
+    client: TestClient, auth: AuthFactory, sid: str, fake_payments: Any
+) -> tuple[TestClient, str, str]:
+    """A booking the seller accepted whose charge is still pending.
+    Returns (buyer client, job id, provider payment id)."""
+    lid = listed(client, auth, sid)
+    buyer = page_user("buyer")
+    jid = booked(buyer, lid)
+    fake_payments.next_charge_status = PaymentStatus.PENDING
+    seller = auth("seller", "s1")
+    r = client.post(f"/v1/seller/offers/{offer_id(client, seller)}/accept", headers=seller)
+    assert r.json()["status"] == "awaiting_payment", r.text
+    with SessionLocal() as s:
+        payment = s.scalar(select(Payment))
+        assert payment is not None and payment.client_secret
+        return buyer, jid, payment.provider_payment_id
+
+
+def test_fake_pending_payment_shows_the_pending_state_without_stripe(
+    client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: Any
+) -> None:
+    buyer, jid, pay_id = _awaiting_payment(client, auth, basic_service, fake_payments)
+    html = buyer.get(f"/bookings/{jid}").text
+    assert "Accepted, waiting for payment" in html
+    assert "being confirmed by the payment provider" in html
+    assert "js.stripe.com" not in html
+    assert "payment.js" not in html
+    assert "cs_fake" not in html  # nothing to mount, so the secret stays server-side
+    assert f'action="/bookings/{jid}/cancel"' in html
+    post_event(client, event_id="evt-pay-1", kind="payment_succeeded", object_id=pay_id)
+    assert (
+        buyer.get(f"/bookings/{jid}/status?shown=awaiting_payment").headers.get("HX-Refresh")
+        == "true"
+    )
+    html = buyer.get(f"/bookings/{jid}").text
+    assert "Confirmed" in html
+    assert "being confirmed" not in html
+
+
+def test_stripe_payment_element_reaches_only_the_owner_while_pending(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    fake_payments: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Script the singleton as a provider with a browser-side step (Stripe).
+    monkeypatch.setattr(fake_payments, "browser_key", "pk_test_page")
+    buyer, jid, pay_id = _awaiting_payment(client, auth, basic_service, fake_payments)
+    with SessionLocal() as s:
+        payment = s.scalar(select(Payment))
+        assert payment is not None
+        secret = payment.client_secret
+    assert secret
+    html = buyer.get(f"/bookings/{jid}").text
+    assert '<script src="https://js.stripe.com/endive/stripe.js"></script>' in html
+    assert '<script src="/static/payment.js" defer></script>' in html
+    assert 'data-publishable-key="pk_test_page"' in html
+    assert f'data-client-secret="{secret}"' in html
+    assert f'data-return-url="{settings.base_url}/bookings/{jid}"' in html
+
+    other = page_user("buyer")
+    assert secret not in other.get(f"/bookings/{jid}").text
+    assert secret not in buyer.get(f"/bookings/{jid}/status").text  # fragment never carries it
+    assert secret not in buyer.get("/bookings").text
+
+    post_event(client, event_id="evt-pay-2", kind="payment_succeeded", object_id=pay_id)
+    html = buyer.get(f"/bookings/{jid}").text
+    assert "js.stripe.com" not in html
+    assert secret not in html
+    assert "pk_test_page" not in html
+
+
+def test_no_stripe_script_before_acceptance_even_with_a_browser_key(
+    client: TestClient,
+    basic_service: str,
+    auth: AuthFactory,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_payments: Any,
+) -> None:
+    monkeypatch.setattr(fake_payments, "browser_key", "pk_test_page")
+    lid = listed(client, auth, basic_service)
+    buyer = page_user("buyer")
+    jid = booked(buyer, lid)
+    html = buyer.get(f"/bookings/{jid}").text
+    assert "js.stripe.com" not in html
+    assert "pk_test_page" not in html
+
+
+def test_payment_script_is_served() -> None:
+    from marketplace import api
+
+    r = TestClient(api.app).get("/static/payment.js")
+    assert r.status_code == 200
+    assert "confirmPayment" in r.text
+    assert "replaceState" in r.text  # strips Stripe's return parameters

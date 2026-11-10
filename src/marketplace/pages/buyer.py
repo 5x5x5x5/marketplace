@@ -172,7 +172,7 @@ def _payment_context(job: BuyerJobView, provider: ProviderDep) -> dict[str, obje
     )
     return {
         "payment_pending": pending,
-        "browser_key": None,
+        "browser_key": provider.browser_key if pending else None,
         "client_secret": job.client_secret if pending else None,
         "return_url": f"{settings.base_url}/bookings/{job.id}",
     }

@@ -43,6 +43,7 @@ def _stripe(*, webhook_secret: str, allow_unsigned: bool) -> Settings:
         stripe_secret_key="sk_test_x",
         stripe_webhook_secret=webhook_secret,
         allow_unsigned_webhooks=allow_unsigned,
+        stripe_publishable_key="pk_test_x",
     )
 
 
