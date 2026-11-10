@@ -266,4 +266,10 @@ Self-review of the whole branch against `money-path-reviewer` and
 Deviations from the plan: the payment step's port change is one attribute,
 `browser_key`; `tests/test_capacity.py` patches the page size where it now
 lives; the CSRF allowlist check landed in two steps (Task 3 without, Task 8
-with, the "every allowlisted path exists" assertion).
+with, the "every allowlisted path exists" assertion); the settings validator
+tests live in `tests/test_payment_settings.py`, not the file the plan named; an
+extra module, `pages/interrupts.py`, holds the page interrupt types and their
+handler, so `csrf.py` can raise one without importing `common`; `nav_context`
+takes no `request` argument; and the Task 2 test was first written as a
+predicate check on the exemption and completed as an end-to-end test in the
+review fix wave.

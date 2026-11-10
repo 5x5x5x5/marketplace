@@ -64,3 +64,43 @@ scroll at phone width.
   `payment_intent.succeeded` webhook against real Stripe have not been run.
 - Postgres for the browser run (the suite itself runs on Postgres too); the
   pages add no new locking, so SQLite was used for the walk-through.
+
+## Review
+
+Three independent reviews of the merged phase (money path, information
+asymmetry, spec compliance) found nothing critical or important. They found
+seven minor items, all fixed in one fix wave, one commit each, with the full
+gate before every commit:
+
+1. **Onboarding link failure was an unlogged 500.** `onboard_payments` wrapped
+   `create_seller_account` but not `onboarding_link`; a `PaymentError` there
+   was not a domain error, so the JSON route answered a bare 500 and the page
+   showed a 500 page. It is now logged and answered as the 502 "provider
+   unavailable" error, and the page shows its provider notice. The fake
+   provider's scripted outage now also covers `onboarding_link`.
+2. **No static check that a page handler rolls back on a domain error.** A
+   page POST answers 303, which `CommitRoute` commits. New architecture test:
+   every `except` clause on a write route in the pages package that catches
+   `DomainError` or a subclass must call `redirect_after_error` or
+   `session.rollback()`, or re-raise. Confirmed to fail when one handler was
+   temporarily broken.
+3. **Complete answered differently for "not yours" and "no such job".** The
+   seller complete page redirected with `forbidden` for another seller's job
+   and `not_found` for a missing one, so job ids could be probed. The page now
+   answers `not_found` for both, as accept, decline and listing edit already
+   did. The service and the JSON API's status codes are unchanged.
+4. **Templates received the viewer's whole `User` row.** `nav_context` put the
+   ORM row (email, password hash) in every page's context, though `base.html`
+   reads only the display name. It now passes a one-field `NavUser` view. A
+   test spies on the context of a public page viewed while logged in.
+5. **Page-source scans missed three cases.** Added: the seller dashboard after
+   a job is completed; `buyer_id` and the buyer's id value in the forbidden set
+   for seller pages; the public landing, listing and seller pages viewed by a
+   logged-in seller.
+6. **The planned end-to-end idempotency test was missing.** Only the
+   exemption predicate was tested. Added a test that a logged-in buyer's page
+   POST carrying an `Idempotency-Key` header leaves no `IdempotencyRecord`
+   row; it fails if the exemption is removed.
+7. **The plan's deviations paragraph was incomplete.** It now also records the
+   settings test file, the `pages/interrupts.py` module, `nav_context` taking
+   no `request`, and the Task 2 test's two-step history.
