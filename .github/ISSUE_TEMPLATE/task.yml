@@ -1,0 +1,58 @@
+name: Feature task
+description: A scoped change with checkable acceptance criteria.
+title: "task: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form doubles as a specification an agent can execute. Every
+        acceptance criterion must be something a test, a command, or a diff
+        can confirm. Anything bigger than a single focused change should be
+        a feature phase (spec and plan) instead of an issue.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: One paragraph. What should be true after this change, and why it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: One checkable statement per line. "Done" means every line holds.
+      placeholder: |
+        - [ ] GET /v1/... returns ... for a buyer token
+        - [ ] A seller token never receives the buyer price (asymmetry test added)
+        - [ ] The full gate passes
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What the change must not touch. An agent will treat this list as a hard boundary.
+    validations:
+      required: true
+  - type: dropdown
+    id: skill
+    attributes:
+      label: Which skill applies
+      description: The procedure under `.claude/skills/` that governs this kind of change.
+      options:
+        - endpoint-or-page (new route, response field, template, notification)
+        - money-path (charges, payouts, refunds, status changes)
+        - migration (schema change)
+        - pricing-extension (new adjuster or matching strategy)
+        - feature-phase (bigger than one focused change)
+        - none of these
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Pointers
+      description: Optional. Related issues, files, or prior art. Describe where to look rather than pasting instructions.
+    validations:
+      required: false

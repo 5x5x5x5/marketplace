@@ -1,0 +1,131 @@
+name: Weekly maintenance
+
+# Unattended upkeep that is safe because it runs no agent and changes nothing:
+# it runs the full gate on the default branch, reads the latest result of the
+# scheduled security scans, and opens (or updates) one issue if anything is red.
+# It never pushes, never edits code, and holds no secrets.
+
+on:
+  schedule:
+    # Monday, after the Security workflow's own 05:23 run, whose result is read below.
+    - cron: "41 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: maintenance
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  UV_FROZEN: "1"
+
+jobs:
+  gate:
+    # The schedule only fires on the default branch; refuse manual runs elsewhere.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write # open or update the report issue
+      actions: read # read the latest Security workflow run
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: marketplace
+          POSTGRES_PASSWORD: marketplace
+          POSTGRES_DB: marketplace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketplace -d marketplace_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # Every check runs even if an earlier one fails, so one report lists all breakage.
+      - id: ruff
+        continue-on-error: true
+        run: uv run ruff check .
+      - id: format
+        continue-on-error: true
+        run: uv run ruff format --check .
+      - id: pyright
+        continue-on-error: true
+        run: uv run pyright
+      - id: pytest_sqlite
+        continue-on-error: true
+        run: uv run pytest -q
+      - id: pytest_postgres
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql+psycopg://marketplace:marketplace@localhost:5432/marketplace_test
+        run: uv run pytest -q
+      - id: hooks
+        continue-on-error: true
+        run: uv run pytest .claude/hooks/test_hooks.py -q
+      - id: demo
+        continue-on-error: true
+        run: uv run python scripts/demo.py
+      - id: security
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # semgrep, pip-audit and gitleaks are owned by security.yml; reading its
+          # last scheduled result avoids a second copy of their pinned versions.
+          read -r conclusion url < <(gh run list --repo "$REPO" --workflow security.yml --branch main \
+            --event schedule --limit 1 --json conclusion,url --jq '.[0] | "\(.conclusion) \(.url)"')
+          echo "latest scheduled Security run: $conclusion $url"
+          test "$conclusion" = "success"
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          R_RUFF: ${{ steps.ruff.outcome }}
+          R_FORMAT: ${{ steps.format.outcome }}
+          R_PYRIGHT: ${{ steps.pyright.outcome }}
+          R_SQLITE: ${{ steps.pytest_sqlite.outcome }}
+          R_POSTGRES: ${{ steps.pytest_postgres.outcome }}
+          R_HOOKS: ${{ steps.hooks.outcome }}
+          R_DEMO: ${{ steps.demo.outcome }}
+          R_SECURITY: ${{ steps.security.outcome }}
+        run: |
+          set -euo pipefail
+          title="Weekly maintenance: failing checks on main"
+          failed=0
+          table="| check | result |\n|---|---|\n"
+          for pair in "ruff:$R_RUFF" "ruff format:$R_FORMAT" "pyright:$R_PYRIGHT" \
+                      "pytest (SQLite):$R_SQLITE" "pytest (Postgres):$R_POSTGRES" \
+                      "hook self-tests:$R_HOOKS" "demo:$R_DEMO" "security scans (latest scheduled run):$R_SECURITY"; do
+            name="${pair%%:*}"; res="${pair##*:}"
+            [ "$res" = "success" ] || failed=1
+            table+="| $name | $res |\n"
+          done
+          body="$(printf '%b' "Commit \`${SHA}\`. Run: ${RUN_URL}\n\n${table}\nThis issue is opened by the weekly maintenance workflow. It is updated on each run and closed when everything is green again.")"
+          existing="$(gh issue list --repo "$REPO" --state open --label maintenance --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ "$failed" = 1 ]; then
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --repo "$REPO" --body "$body"
+            else
+              gh issue create --repo "$REPO" --title "$title" --label maintenance --body "$body"
+            fi
+            exit 1
+          elif [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "All checks green again. $RUN_URL"
+            gh issue close "$existing" --repo "$REPO" --reason completed
+          fi

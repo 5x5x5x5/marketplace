@@ -1,0 +1,70 @@
+name: Bug report
+description: Something behaves differently from what the code, docs, or an invariant says it should.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form doubles as a specification an agent can execute. Be concrete:
+        a maintainer may hand this issue to a coding agent, and the agent can
+        only fix what it can reproduce. Do not paste secrets, tokens, or real
+        customer data.
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happens. Include status codes, response bodies, or log lines (redacted).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen, and where that is written down (a test, a doc, `CLAUDE.md`).
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Numbered steps or a failing test, starting from an empty SQLite database (`uv run python scripts/seed.py`).
+      placeholder: |
+        1. uv run python scripts/seed.py
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area involved
+      description: Which invariant or view family is closest to the problem.
+      multiple: true
+      options:
+        - Money (charge, payout, refund, dispute, ledger)
+        - Job / offer status or capacity
+        - Webhooks or the notification outbox
+        - Buyer view
+        - Seller view
+        - Admin view
+        - Public catalog or server-rendered pages
+        - Authentication or sessions
+        - Pricing or matching
+        - Migrations
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: invariant
+    attributes:
+      label: Invariant or view at stake
+      description: Quote the `CLAUDE.md` non-negotiable this may violate, or name the view model that returns the wrong field. Write "none known" if unsure.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: "output of: git rev-parse --short HEAD"
+    validations:
+      required: false
