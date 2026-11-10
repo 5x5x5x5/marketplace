@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "marketplace-ops": {
+      "command": "uv",
+      "args": ["run", "--group", "mcp", "python", "-m", "marketplace_mcp"],
+      "env": {
+        "MARKETPLACE_API_URL": "${MARKETPLACE_API_URL:-http://localhost:8000}",
+        "MARKETPLACE_ADMIN_TOKEN": "${MARKETPLACE_ADMIN_TOKEN}",
+        "MARKETPLACE_MCP_ENABLE_WRITES": "${MARKETPLACE_MCP_ENABLE_WRITES:-}"
+      }
+    }
+  }
+}
