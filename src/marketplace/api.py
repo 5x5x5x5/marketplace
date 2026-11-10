@@ -26,8 +26,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import delete, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
@@ -47,14 +46,12 @@ from .db import CommitRoute, get_session, init_db
 from .entities import (
     Adjustment,
     AuditLog,
-    Availability,
     BuyerProfile,
     Dispute,
     IdempotencyRecord,
     Job,
     Listing,
     Notification,
-    NotificationMute,
     Offer,
     Payment,
     Payout,
@@ -151,12 +148,13 @@ from .services import (
     maintenance,
     moderation,
     payouts,
+    preferences,
+    profiles,
     reviews,
     webhooks,
 )
 from .services.common import now as _now
 from .services.common import paginate as _paginate
-from .services.common import require_active as _require_active
 from .services.webhooks import process_webhook as _process_webhook
 from .settings import settings
 
@@ -208,54 +206,18 @@ def my_reports(session: SessionDep, claims: ParticipantClaims) -> list[Report]:
 prefs_router = APIRouter(prefix="/v1", tags=["preferences"], route_class=CommitRoute)
 
 
-def _pref_rows(session: Session, claims: Claims) -> list[NotificationPreferenceOut]:
-    kinds = [k for k, role in notifications.KIND_ROLES.items() if role is claims.role]
-    muted = set(
-        session.scalars(
-            select(NotificationMute.kind).where(NotificationMute.user_id == claims.sub)
-        ).all()
-    )
-    return [
-        NotificationPreferenceOut(
-            kind=k,
-            muted=k in muted and k not in notifications.MUST_SEND,
-            locked=k in notifications.MUST_SEND,
-        )
-        for k in kinds
-    ]
-
-
 @prefs_router.get("/notification-preferences", response_model=list[NotificationPreferenceOut])
 def get_notification_preferences(
     session: SessionDep, claims: Principal
 ) -> list[NotificationPreferenceOut]:
-    return _pref_rows(session, claims)
+    return preferences.get_notification_preferences(session, claims.sub, claims.role)
 
 
 @prefs_router.put("/notification-preferences", response_model=list[NotificationPreferenceOut])
 def put_notification_preferences(
     body: NotificationPreferencesUpdate, session: SessionDep, claims: Principal
 ) -> list[NotificationPreferenceOut]:
-    wanted = set(body.muted)
-    for kind in wanted:
-        if kind in notifications.MUST_SEND:
-            raise HTTPException(status_code=422, detail=f"{kind} cannot be muted")
-        if notifications.KIND_ROLES[kind] is not claims.role:
-            raise HTTPException(status_code=422, detail=f"{kind} is not a {claims.role} kind")
-    # Serialize concurrent PUTs for the same user: naive delete-then-insert
-    # under READ COMMITTED unions both sets (each DELETE misses the other's
-    # uncommitted rows). The row lock makes replace-set last-writer-wins.
-    session.get(User, claims.sub, with_for_update=True)
-    session.execute(delete(NotificationMute).where(NotificationMute.user_id == claims.sub))
-    for kind in sorted(wanted):
-        session.add(NotificationMute(user_id=claims.sub, kind=kind))
-    try:
-        session.flush()
-    except IntegrityError:
-        raise HTTPException(
-            status_code=409, detail="preferences changed concurrently, retry"
-        ) from None
-    return _pref_rows(session, claims)
+    return preferences.put_notification_preferences(session, claims.sub, claims.role, body)
 
 
 # ---------- Buyer router ----------
@@ -309,7 +271,7 @@ def cancel_job(job_id: UUID, session: SessionDep, buyer_id: BuyerId, provider: P
 
 @buyer_router.get("/profile", response_model=BuyerProfileOut)
 def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
-    return repo.get_or_create_buyer(session, buyer_id)
+    return profiles.get_buyer_profile(session, buyer_id)
 
 
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut, status_code=201)
@@ -345,15 +307,12 @@ seller_router = APIRouter(prefix="/v1/seller", tags=["seller"], route_class=Comm
 def update_profile(
     body: SellerProfileUpdate, session: SessionDep, seller_id: SellerId
 ) -> SellerProfile:
-    seller = repo.get_or_create_seller(session, seller_id)
-    seller.capacity = body.capacity
-    session.flush()
-    return seller
+    return profiles.update_profile(session, seller_id, body)
 
 
 @seller_router.get("/profile", response_model=SellerProfileOut)
 def get_profile(session: SessionDep, seller_id: SellerId) -> SellerProfile:
-    return repo.get_or_create_seller(session, seller_id)
+    return profiles.get_profile(session, seller_id)
 
 
 @seller_router.post("/payments/onboard", response_model=OnboardingOut)
@@ -371,18 +330,7 @@ def onboard_payments(
 def post_availability(
     req: AvailabilityRequest, session: SessionDep, seller_id: SellerId
 ) -> dict[str, str]:
-    _require_active(session, seller_id)
-    if session.get(ServiceType, req.service_type_id) is None:
-        raise HTTPException(status_code=404, detail="unknown service_type_id")
-    repo.get_or_create_seller(session, seller_id)
-    existing = session.scalar(
-        select(Availability).where(
-            Availability.seller_id == seller_id,
-            Availability.service_type_id == req.service_type_id,
-        )
-    )
-    if existing is None:
-        session.add(Availability(seller_id=seller_id, service_type_id=req.service_type_id))
+    profiles.post_availability(session, seller_id, req)
     return {"status": "ok"}
 
 
@@ -390,15 +338,7 @@ def post_availability(
 def delete_availability(
     service_type_id: str, session: SessionDep, seller_id: SellerId
 ) -> dict[str, str]:
-    row = session.scalar(
-        select(Availability).where(
-            Availability.seller_id == seller_id,
-            Availability.service_type_id == service_type_id,
-        )
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="availability not found")
-    session.delete(row)
+    profiles.delete_availability(session, seller_id, service_type_id)
     return {"status": "ok"}
 
 
@@ -608,20 +548,7 @@ def update_adjuster_params(
 def admin_update_seller(
     seller_id: str, body: AdminSellerBody, session: SessionDep, admin_id: AdminId
 ) -> SellerProfile:
-    seller = repo.get_or_create_seller(session, seller_id)
-    if body.tier is not None:
-        seller.tier = body.tier
-    if body.capacity is not None:
-        seller.capacity = body.capacity
-    audit(
-        session,
-        admin_id,
-        "update_seller",
-        seller_id,
-        body.model_dump(mode="json", exclude_none=True),
-    )
-    session.flush()
-    return seller
+    return profiles.admin_update_seller(session, admin_id, seller_id, body)
 
 
 @admin_router.post("/users/{user_id}/suspend", response_model=UserModerationOut)
@@ -705,7 +632,7 @@ def resolve_report(
 def admin_list_buyers(
     session: SessionDep, admin_id: AdminId, limit: Limit = 100, offset: Offset = 0
 ) -> list[BuyerProfile]:
-    return _paginate(session, select(BuyerProfile).order_by(BuyerProfile.id), limit, offset)
+    return profiles.admin_list_buyers(session, limit, offset)
 
 
 @admin_router.get("/transactions", response_model=list[TransactionOut])
