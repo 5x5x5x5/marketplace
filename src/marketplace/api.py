@@ -251,13 +251,19 @@ def _match_and_offer(session: Session, job: Job) -> None:
 
 def _sweep_expired_offers(session: Session) -> None:
     """Lazy sweep: expire timed-out offers and re-match their jobs. Called on reads."""
+    # SKIP LOCKED: concurrent sweeps (many read paths, more than one
+    # maintenance runner) each claim distinct offers, so one expired offer is
+    # never re-matched twice into two live offers. Offer -> Job lock order
+    # matches accept/decline.
     stale = session.scalars(
-        select(Offer).where(Offer.status == OfferStatus.OFFERED, Offer.expires_at < _now())
+        select(Offer)
+        .where(Offer.status == OfferStatus.OFFERED, Offer.expires_at < _now())
+        .with_for_update(skip_locked=True)
     ).all()
     for offer in stale:
         offer.status = OfferStatus.EXPIRED
         offer.responded_at = _now()
-        job = session.get(Job, offer.job_id)
+        job = session.get(Job, offer.job_id, with_for_update=True, populate_existing=True)
         if job is not None and job.status == JobStatus.PENDING:
             _match_and_offer(session, job)
 
@@ -340,9 +346,18 @@ def _sweep_retention(session: Session) -> None:
 
 
 def _sweep(session: Session, provider: PaymentProvider) -> None:
-    """Everything lazy maintenance does on reads: offers, payments, auth."""
+    """Lazy-on-read state transitions: expired offers re-match and stale
+    payments release their capacity slot, so state is correct even with no
+    scheduler running. Housekeeping deletes are NOT here — see below."""
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
+
+
+def _housekeeping(session: Session) -> None:
+    """Deletes of rows nothing can observe any more (expired quotes, sessions,
+    email tokens, aged retention rows). Correctness never depends on them, so
+    they run only from the maintenance loop and the admin sweep endpoint,
+    never on a request's read path."""
     _sweep_expired_quotes(session)
     _sweep_expired_auth(session)
     _sweep_retention(session)
@@ -356,6 +371,7 @@ def _run_drain_once() -> None:
 def _run_sweep_once() -> None:
     with SessionLocal() as session:
         _sweep(session, get_provider())
+        _housekeeping(session)
         session.commit()
 
 
@@ -2125,6 +2141,7 @@ def admin_cancel_job(
 @admin_router.post("/jobs/sweep")
 def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict[str, str]:
     _sweep(session, provider)
+    _housekeeping(session)
     audit(session, admin_id, "sweep", "jobs", {})
     return {"status": "ok"}
 
@@ -2357,6 +2374,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         init_db()
     bootstrap_admin()
     logger.info("marketplace starting (db=%s)", settings.database_url.split("://", 1)[0])
+    if not settings.maintenance_enabled:
+        logger.info("maintenance loop disabled (MAINTENANCE_ENABLED=false) on this instance")
+        yield
+        return
     maintenance = asyncio.create_task(_maintenance_loop())
     yield
     maintenance.cancel()

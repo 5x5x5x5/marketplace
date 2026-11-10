@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,8 +15,8 @@ from sqlalchemy.pool import NullPool, QueuePool
 
 from marketplace import api, db, pages, repo
 from marketplace.db import SessionLocal, engine, engine_options
-from marketplace.entities import Availability, Job, Listing, Quote, SellerProfile
-from marketplace.models import JobStatus
+from marketplace.entities import Availability, Job, Listing, Offer, Quote, SellerProfile
+from marketplace.models import JobStatus, OfferStatus
 from marketplace.settings import Settings
 from tests.conftest import AuthFactory, Header
 from tests.test_migrations import _alembic  # pyright: ignore[reportPrivateUsage]
@@ -347,3 +347,59 @@ def test_migrations_create_hot_path_indexes(tmp_path: Path) -> None:
     assert quotes["ix_quotes_expires_at"] == ["expires_at"]
     assert jobs["ix_jobs_service_type_id_status"] == ["service_type_id", "status"]
     assert jobs["ix_jobs_seller_id_status"] == ["seller_id", "status"]
+
+
+# ---------- sweeps and the maintenance loop ----------
+
+
+def test_read_path_sweep_skips_housekeeping(client: TestClient, auth: AuthFactory) -> None:
+    seller = auth("seller", "poller")
+    with record_queries() as log:
+        assert client.get("/v1/seller/offers", headers=seller).status_code == 200
+    deletes = [s for s in log.statements if s.lstrip().upper().startswith("DELETE")]
+    assert deletes == []
+
+
+def test_read_path_still_expires_offers_lazily(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """The lazy offer-expiry sweep is correctness, not housekeeping: a read
+    must still walk an expired offer on to the next seller."""
+    _insert_sellers(auth, basic_service, "lazy", 2)
+    buyer = auth("buyer", "lazy-buyer")
+    qid = client.post("/v1/quotes", json={"service_type_id": basic_service}, headers=buyer).json()[
+        "id"
+    ]
+    job = client.post("/v1/jobs", json={"quote_id": qid}, headers=buyer).json()
+    with SessionLocal() as s:
+        offer = s.scalar(select(Offer).where(Offer.job_id == UUID(job["id"])))
+        assert offer is not None
+        first = offer.seller_id
+        offer.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        s.commit()
+    client.get("/v1/seller/offers", headers=auth("seller", first))
+    with SessionLocal() as s:
+        offers = s.scalars(select(Offer).where(Offer.job_id == UUID(job["id"]))).all()
+    assert sorted(o.status for o in offers) == sorted([OfferStatus.EXPIRED, OfferStatus.OFFERED])
+
+
+def _lifespan_starts_loop(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> bool:
+    started: list[bool] = []
+
+    async def fake_loop() -> None:
+        started.append(True)
+
+    monkeypatch.setattr(api, "_maintenance_loop", fake_loop)
+    monkeypatch.setattr(api.settings, "maintenance_enabled", enabled)
+    with TestClient(api.app) as c:
+        assert c.get("/healthz").status_code == 200
+    return bool(started)
+
+
+def test_maintenance_enabled_gates_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _lifespan_starts_loop(monkeypatch, enabled=True)
+    assert not _lifespan_starts_loop(monkeypatch, enabled=False)
+
+
+def test_maintenance_enabled_defaults_on() -> None:
+    assert _settings().maintenance_enabled is True

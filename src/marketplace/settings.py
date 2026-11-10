@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     notify_drain_seconds: int = 5
     notify_max_attempts: int = 5
     sweep_interval_seconds: int = 60
+    # Gates the in-process maintenance loop (outbox drain, sweeps,
+    # housekeeping). With several replicas, leave it on for exactly one; every
+    # job in it is safe to run concurrently, but N runners is N times the work.
+    maintenance_enabled: bool = True
 
     # Mail delivery: SMTP_HOST set -> stdlib SMTP adapter (any provider's SMTP
     # endpoint, or Mailpit locally); empty -> console adapter (logs only).
