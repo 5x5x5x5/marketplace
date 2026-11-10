@@ -986,8 +986,15 @@ seller_router = APIRouter(prefix="/v1/seller", tags=["seller"], route_class=Comm
 
 
 def _expire_open_offers(session: Session, job_id: UUID) -> None:
+    # Callers already hold the Job lock, and accept/decline/the offer sweep
+    # lock Offer -> Job: waiting here for an offer one of them holds is a
+    # deadlock. SKIP LOCKED leaves that offer to its holder, which finds the
+    # job no longer PENDING once we commit (accept 409s, decline and the
+    # sweep do not re-match).
     for offer in session.scalars(
-        select(Offer).where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+        select(Offer)
+        .where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+        .with_for_update(skip_locked=True)
     ).all():
         offer.status = OfferStatus.EXPIRED
         offer.responded_at = _now()
