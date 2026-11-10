@@ -1,0 +1,42 @@
+id = "ops-pagination-in-python"
+kind = "bug"
+class = "operational/pagination"
+origin = "e53860e 'Paginate the catalog and list endpoints in SQL' (SECURITY.md M7: pagination applied in SQL)."
+synthetic = false
+invariant = "List endpoints paginate in SQL: never fetch all rows and slice in Python."
+location = "src/marketplace/services/common.py: paginate (every list endpoint)"
+reviewer = "spec-compliance-reviewer"
+reviewer_fit = "weak: no narrow reviewer lists this class; spec-compliance reviews it against the commit message and CLAUDE.md with no plan task"
+removes_explanatory_comment = true
+commit_message = '''
+Slice pages after the query
+
+Large OFFSETs make Postgres walk and discard every skipped row anyway;
+slicing the ordered result gives identical pages on SQLite and Postgres and
+keeps one statement shape for every page.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at services.common.paginate stating
+that every list endpoint now loads the entire matching table into memory per
+request and slices in Python, so cost grows with table size (unbounded memory
+and pool-held time, a cheap DoS on large lists), contrary to the
+paginate-in-SQL rule.
+PARTIAL: flags performance vaguely without the load-everything consequence,
+or only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/services/common.py"
+old = '''
+    """LIMIT/OFFSET in SQL: list endpoints never load a whole table to return
+    one page. `stmt` must carry a total order (a unique tie-breaker) or rows
+    can repeat/skip across pages."""
+    return list(session.scalars(stmt.limit(limit).offset(offset)).all())
+'''
+new = '''
+    """One page of an ordered statement. `stmt` must carry a total order (a
+    unique tie-breaker) or rows can repeat/skip across pages."""
+    rows = list(session.scalars(stmt).all())
+    return rows[offset : offset + limit]
+'''

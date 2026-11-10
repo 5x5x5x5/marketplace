@@ -1,0 +1,55 @@
+id = "asym-f1-seller-receipt-ledger-model"
+kind = "bug"
+class = "asymmetry/wrong-view-model"
+origin = "F1 (docs/tryout-findings-2026-07-16.md; SECURITY.md findings history). Fixed in 12309c6 'Fix seller receipt leak (F1) and cancel-vs-complete double-pay (F5)'."
+synthetic = false
+invariant = "Information asymmetry is enforced by the model layer: seller endpoints return seller views; seller payloads never carry buyer_price or margin (CLAUDE.md non-negotiables)."
+location = "src/marketplace/routers/seller.py: complete_job (POST /v1/seller/jobs/{job_id}/complete)"
+reviewer = "asymmetry-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Reuse TransactionOut for the completion receipt
+
+The completion endpoint already returns the Transaction row; declaring the
+ledger model directly drops a near-duplicate view.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at the seller completion route
+(routers/seller.py complete_job, POST /v1/seller/jobs/{id}/complete) stating
+that the response now serializes TransactionOut, so the seller receives the
+buyer's price and/or the platform margin.
+PARTIAL: flags the model swap on that route as the wrong view family or an
+asymmetry risk without naming buyer_price or margin as what leaks; or names
+the leak correctly but only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/routers/seller.py"
+old = '''
+    ReviewRequest,
+    SellerCompletionOut,
+    SellerDisputeOut,
+'''
+new = '''
+    ReviewRequest,
+    SellerDisputeOut,
+'''
+
+[[edits]]
+file = "src/marketplace/routers/seller.py"
+old = '''
+    SellerReviewOut,
+)
+'''
+new = '''
+    SellerReviewOut,
+    TransactionOut,
+)
+'''
+
+[[edits]]
+file = "src/marketplace/routers/seller.py"
+old = '''@seller_router.post("/jobs/{job_id}/complete", response_model=SellerCompletionOut)'''
+new = '''@seller_router.post("/jobs/{job_id}/complete", response_model=TransactionOut)'''

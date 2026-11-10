@@ -1,0 +1,41 @@
+id = "ops-webhook-db-on-event-loop"
+kind = "bug"
+class = "operational/event-loop-blocking"
+origin = "df4b9c0 'Add retention sweeps, move webhook DB work off the event loop'."
+synthetic = false
+invariant = "Sync DB work stays off the event loop: process_webhook runs via asyncio.to_thread; nothing calls a session inline in an async def."
+location = "src/marketplace/routers/payments.py: payments_webhook"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope (item 7: DB work on the coroutine)"
+removes_explanatory_comment = false
+commit_message = '''
+Call the webhook processor directly
+
+The dedup insert and apply are a couple of indexed statements; the thread
+hop cost more than the work and made tracebacks harder to read.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at payments_webhook stating that the
+async handler now runs synchronous session work (process_webhook's dedup,
+row locks, commit) on the event loop, so a slow or lock-blocked webhook stalls
+every other in-flight request in the process.
+PARTIAL: says it should stay on a thread without the stall consequence, or
+only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/routers/payments.py"
+old = '''
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Request
+'''
+new = '''
+from fastapi import APIRouter, HTTPException, Request
+'''
+
+[[edits]]
+file = "src/marketplace/routers/payments.py"
+old = '''    return await asyncio.to_thread(_process_webhook, event)'''
+new = '''    return _process_webhook(event)'''

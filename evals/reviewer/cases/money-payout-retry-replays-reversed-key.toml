@@ -1,0 +1,49 @@
+id = "money-payout-retry-replays-reversed-key"
+kind = "bug"
+class = "money-path/idempotency-key-reuse"
+origin = "b41be67 'Apply final-review fix wave: ... reversed-transfer retry keys ...' (retry_payout must not replay the key of a reversed transfer)."
+synthetic = false
+invariant = "A retry that would replay a key whose original result was reversed must use a fresh, derived key (money-path-reviewer item 4)."
+location = "src/marketplace/services/payouts.py: retry_payout"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Derive the payout retry key from the job like every other key
+
+Outbound keys are derived from the job id so a retry replays the original
+operation. retry_payout was the one call site minting a second key shape.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at retry_payout stating that when the
+original transfer was created and later reversed/failed, replaying
+transfer:{job_id} returns that same reversed transfer from the provider, so
+the payout is recorded PAID while no money reaches the seller.
+PARTIAL: says reversed transfers need a fresh key without the
+recorded-PAID-but-unpaid consequence, or only at Minor severity.
+MISSED: anything else, including agreeing the key should always be replayed.
+'''
+
+[[edits]]
+file = "src/marketplace/services/payouts.py"
+old = '''
+    # If no transfer was ever created (plain outage), replaying the original key
+    # is the safe retry — it can never double-pay. But if a transfer WAS created
+    # and later reversed (transfer.reversed → FAILED), replaying that key would
+    # return the same reversed transfer and record PAID with no money moved, so
+    # the retry must force a new transfer under a fresh key.
+    retry_key = (
+        f"transfer:{payout.job_id}"
+        if payout.provider_transfer_id is None
+        else f"transfer:{payout.job_id}:retry:{payout.provider_transfer_id}"
+    )
+'''
+new = '''
+    # Same key as the original transfer: a retry replays rather than
+    # double-paying.
+'''
+
+[[edits]]
+file = "src/marketplace/services/payouts.py"
+old = '''            idempotency_key=retry_key,'''
+new = '''            idempotency_key=f"transfer:{payout.job_id}",'''

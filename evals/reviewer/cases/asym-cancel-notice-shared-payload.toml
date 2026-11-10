@@ -1,0 +1,62 @@
+id = "asym-cancel-notice-shared-payload"
+kind = "bug"
+class = "asymmetry/notification-payload"
+origin = "Synthetic: no historical instance. The rule it breaks is the notifications design's role-safe payload rule (CLAUDE.md 'Notifications are enqueue-only'; asymmetry-reviewer item 5 names exactly this shape)."
+synthetic = true
+invariant = "Notification payloads are role-safe snapshots: seller payloads never carry buyer_price, buyer payloads never carry seller_payout."
+location = "src/marketplace/services/jobs.py: _notify_cancelled"
+reviewer = "asymmetry-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Build the cancel notices from one job snapshot
+
+Both notices described the same job with hand-copied keys; one snapshot
+keeps them consistent and each renderer picks the fields it needs.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at _notify_cancelled stating that the
+shared payload puts buyer_price into the seller's JOB_CANCELLED_SELLER
+notification and/or seller_payout into the buyer's REFUND_ISSUED_BUYER
+notification (stored in the outbox row and visible to that party).
+PARTIAL: objects to the shared dict as role-unsafe without naming which
+amount reaches which party, or names it only at Minor severity.
+MISSED: anything else (for example "renderers ignore extra keys, so fine").
+'''
+
+[[edits]]
+file = "src/marketplace/services/jobs.py"
+old = '''
+    receipt when money actually moved back (never a notice of their own action)."""
+    if job.seller_id is not None:
+        notifications.enqueue(
+            session,
+            EventKind.JOB_CANCELLED_SELLER,
+            job.seller_id,
+            {
+                "job_id": str(job.id),
+                "service_type_id": job.service_type_id,
+                "seller_payout": str(job.seller_payout),
+            },
+        )
+    if refunded:
+        notifications.enqueue(
+            session,
+            EventKind.REFUND_ISSUED_BUYER,
+            job.buyer_id,
+            {"job_id": str(job.id), "buyer_price": str(job.buyer_price)},
+        )
+'''
+new = '''
+    receipt when money actually moved back (never a notice of their own action)."""
+    snapshot = {
+        "job_id": str(job.id),
+        "service_type_id": job.service_type_id,
+        "buyer_price": str(job.buyer_price),
+        "seller_payout": str(job.seller_payout),
+    }
+    if job.seller_id is not None:
+        notifications.enqueue(session, EventKind.JOB_CANCELLED_SELLER, job.seller_id, snapshot)
+    if refunded:
+        notifications.enqueue(session, EventKind.REFUND_ISSUED_BUYER, job.buyer_id, snapshot)
+'''
