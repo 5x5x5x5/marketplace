@@ -1,6 +1,6 @@
 """Real-user auth: mail port, signup/login/sessions, verify + reset flows."""
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -315,7 +315,7 @@ def test_wrong_scheme_still_401s(client: TestClient, auth: AuthFactory) -> None:
 # ---------- Cookie sessions (pages.py's POST /signup, /login, /logout) ----------
 
 
-def _signup_form(client: TestClient, role: str, email: str, name: str = "Kim") -> httpx.Response:
+def _signup_form(client: TestClient, role: str, email: str, name: str = "Kim") -> httpx2.Response:
     return client.post(
         "/signup",
         data={"email": email, "password": TEST_PASSWORD, "role": role, "display_name": name},
@@ -323,7 +323,7 @@ def _signup_form(client: TestClient, role: str, email: str, name: str = "Kim") -
     )
 
 
-def _login_form(client: TestClient, role: str, email: str) -> httpx.Response:
+def _login_form(client: TestClient, role: str, email: str) -> httpx2.Response:
     return client.post(
         "/login",
         data={"email": email, "password": TEST_PASSWORD, "role": role},

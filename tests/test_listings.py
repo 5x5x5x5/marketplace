@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx2 import Response
 
 from tests.conftest import AuthFactory, Header
 from tests.test_payments import onboard_and_avail
