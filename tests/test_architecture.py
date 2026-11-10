@@ -994,3 +994,27 @@ def test_pyright_stays_strict() -> None:
     assert cfg["typeCheckingMode"] == "strict"
     assert {"src", "tests"} <= set(cfg["include"])
     assert not cfg.get("exclude"), "pyright must not exclude paths from strict checking"
+
+
+def test_mcp_server_is_an_http_only_client() -> None:
+    """INVARIANT: `marketplace_mcp` reaches the marketplace only over HTTP.
+
+    Authentication, role checks, audit rows and commit ordering live in the
+    admin API. A tool that imported the app or its database layer would skip
+    all of them. Fix: call the `/v1/admin/*` endpoint through
+    `marketplace_mcp.client` instead of importing from `marketplace`.
+    """
+    mcp_src = ROOT / "src" / "marketplace_mcp"
+    bad: list[str] = []
+    for path in sorted(mcp_src.rglob("*.py")):
+        for node in ast.walk(_parse(path)):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                if name.split(".")[0] in {PKG, "sqlalchemy"}:
+                    bad.append(f"{path.relative_to(ROOT)}:{node.lineno} imports {name}")
+    assert not bad, "marketplace_mcp must not import the app or the DB layer:\n" + "\n".join(bad)
