@@ -43,6 +43,17 @@ def post_availability(session: Session, seller_id: str, req: AvailabilityRequest
         session.add(Availability(seller_id=seller_id, service_type_id=req.service_type_id))
 
 
+def availability_by_service_type(session: Session, seller_id: str) -> list[tuple[str, bool]]:
+    """Every service type, and whether this seller is available for it."""
+    available = set(
+        session.scalars(
+            select(Availability.service_type_id).where(Availability.seller_id == seller_id)
+        ).all()
+    )
+    types = session.scalars(select(ServiceType.id).order_by(ServiceType.id)).all()
+    return [(sid, sid in available) for sid in types]
+
+
 def delete_availability(session: Session, seller_id: str, service_type_id: str) -> None:
     row = session.scalar(
         select(Availability).where(

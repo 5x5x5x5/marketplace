@@ -6,8 +6,9 @@ from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from ..entities import User
-from ..errors import ForbiddenError
+from ..errors import EmailNotVerifiedError, ForbiddenError
 from ..models import UserStatus
+from ..settings import settings
 
 
 def now() -> datetime:
@@ -20,6 +21,17 @@ def require_active(session: Session, user_id: str) -> None:
     user = session.get(User, user_id)
     if user is not None and user.status is UserStatus.SUSPENDED:
         raise ForbiddenError("account suspended")
+
+
+def require_verified_email(session: Session, user_id: str) -> None:
+    """Verb gate for `REQUIRE_VERIFIED_EMAIL`: booking, accepting and listing
+    call this after `require_active`, before any lock or write. A missing
+    user row fails closed (unlike suspension, there is nothing to assume)."""
+    if not settings.require_verified_email:
+        return
+    user = session.get(User, user_id)
+    if user is None or not user.email_verified:
+        raise EmailNotVerifiedError("verify your email address first")
 
 
 def paginate[T](session: Session, stmt: Select[tuple[T]], limit: int, offset: int) -> list[T]:

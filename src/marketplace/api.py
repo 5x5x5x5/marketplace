@@ -34,7 +34,7 @@ from .db import CommitRoute, init_db
 from .errors import DomainError
 from .idempotency import IdempotencyMiddleware
 from .observability import BodySizeLimitMiddleware, RequestIdMiddleware, configure_logging
-from .pages import pages_router
+from .pages import PageInterrupt, is_page_post, page_interrupt_handler, pages_router
 from .routers.admin import admin_router
 from .routers.buyer import buyer_router
 from .routers.catalog import catalog_router
@@ -86,7 +86,7 @@ def _add_hardening_middleware(app: FastAPI) -> None:
 
 configure_logging()
 app = FastAPI(title="Marketplace", version="1.0.0", lifespan=_lifespan)
-app.add_middleware(IdempotencyMiddleware)
+app.add_middleware(IdempotencyMiddleware, exempt=is_page_post)
 _add_hardening_middleware(app)
 app.add_middleware(RequestIdMiddleware)  # outermost, unchanged
 
@@ -102,6 +102,9 @@ async def _domain_error_response(request: Request, exc: Exception) -> Response:
 
 
 app.add_exception_handler(DomainError, _domain_error_response)
+# Page dependencies (login required, wrong role, CSRF) raise before the
+# handler runs; the pages package renders the response.
+app.add_exception_handler(PageInterrupt, page_interrupt_handler)
 
 
 @app.get("/healthz")

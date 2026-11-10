@@ -308,6 +308,40 @@ def test_session_cookie_is_httponly_and_samesite() -> None:
     assert not bad, "\n  ".join(bad)
 
 
+def _depends_on(dependant: Any, target: object) -> bool:
+    return any(dep.call is target or _depends_on(dep, target) for dep in dependant.dependencies)
+
+
+def test_every_page_post_requires_csrf_except_the_allowlist() -> None:
+    """INVARIANT: every authenticated page form carries a session-bound CSRF token.
+
+    Every POST route served by the `pages` package must depend on
+    `pages.csrf.require_csrf`, except the unauthenticated forms named in
+    `CSRF_EXEMPT_POSTS` (they have no session to bind a token to). Fix: add
+    `dependencies=[Depends(require_csrf)]` to the route and render
+    `_csrf.html` inside its form; extending the allowlist is a security
+    decision, not a fix.
+    """
+    from marketplace.pages.csrf import CSRF_EXEMPT_POSTS, require_csrf
+
+    page_posts = [
+        r
+        for r in _api_routes()
+        if "POST" in r.methods and r.endpoint.__module__.startswith(f"{PKG}.pages")
+    ]
+    assert len(page_posts) > 10, "no page POST routes found; route discovery is broken"
+    paths = {r.path for r in page_posts}
+    assert paths >= CSRF_EXEMPT_POSTS, (
+        f"allowlist names unknown routes: {CSRF_EXEMPT_POSTS - paths}"
+    )
+    bad = [
+        r.path
+        for r in page_posts
+        if r.path not in CSRF_EXEMPT_POSTS and not _depends_on(r.dependant, require_csrf)
+    ]
+    assert not bad, f"page POST without the CSRF dependency:\n  {_fmt(bad)}"
+
+
 # ------------------------------------------------- information asymmetry
 
 

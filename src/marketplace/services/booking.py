@@ -9,6 +9,7 @@ be honoured consumes it too, committing before it raises."""
 import math
 from datetime import timedelta
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from ..pricing import PricingContext, run_pipeline
 from ..settings import settings
 from .common import now as _now
 from .common import require_active as _require_active
+from .common import require_verified_email as _require_verified_email
 from .offers import create_offer as _create_offer
 from .offers import match_and_offer as _match_and_offer
 
@@ -135,8 +137,24 @@ def create_quote(session: Session, buyer_id: str, req: QuoteRequest) -> Quote:
     return quote
 
 
+def get_quote(session: Session, buyer_id: str, quote_id: UUID) -> Quote:
+    """A buyer's own live-or-expired quote. Same 404 for missing and
+    not-yours, as `create_job` answers."""
+    quote = session.get(Quote, quote_id)
+    if quote is None or quote.buyer_id != buyer_id:
+        raise NotFoundError("quote not found")
+    return quote
+
+
+def job_for_quote(session: Session, buyer_id: str, quote_id: UUID) -> Job | None:
+    """The job this buyer created from `quote_id`, if any. Quotes are deleted
+    when consumed, so a repeated booking submit finds its job here."""
+    return session.scalar(select(Job).where(Job.quote_id == quote_id, Job.buyer_id == buyer_id))
+
+
 def create_job(session: Session, buyer_id: str, req: JobCreateRequest) -> Job:
     _require_active(session, buyer_id)
+    _require_verified_email(session, buyer_id)
     quote = session.get(Quote, req.quote_id, with_for_update=True)
     # Same 404 whether missing or not-yours — don't confirm someone else's quote.
     if quote is None or quote.buyer_id != buyer_id:

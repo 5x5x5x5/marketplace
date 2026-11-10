@@ -271,3 +271,15 @@ def test_store_failure_never_fails_a_committed_operation(
         )
     assert r.status_code == 201, r.text  # the job was created and committed
     assert any("idempotency store failed" in rec.getMessage() for rec in caplog.records)
+
+
+def test_page_posts_are_exempt_by_router_membership() -> None:
+    """Every POST route of the pages router answers with a redirect or HTML,
+    which the JSON replay store cannot represent; the exemption is decided by
+    router membership, so a JSON route is never exempt by accident."""
+    from marketplace.pages import is_page_post
+
+    for path in ("/signup", "/login", "/logout"):
+        assert is_page_post(path), path
+    for path in ("/v1/jobs", "/v1/quotes", "/", "/listings/x"):
+        assert not is_page_post(path), path

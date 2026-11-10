@@ -170,6 +170,7 @@ class BuyerJobView(BaseModel):
     service_type_id: str
     buyer_price: Decimal
     seller_id: str | None
+    pinned_seller_id: str | None = None  # the seller the buyer chose from a listing
     status: JobStatus
     created_at: datetime
     accepted_at: datetime | None
@@ -485,6 +486,7 @@ class SellerProfileOut(BaseModel):
     rating: float | None
     rating_count: int
     completed_jobs: int
+    payments_ready: bool  # the seller's own onboarding state; never on a public view
 
 
 class BuyerProfileOut(BaseModel):

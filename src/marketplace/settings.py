@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # in-memory fake (dev/tests, no account needed).
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # Browser-side key for Stripe.js (the Payment Element on the booking
+    # page). Required with STRIPE_SECRET_KEY; must be a pk_ key, since it is
+    # published in page source.
+    stripe_publishable_key: str = ""
+    # Dev/demo only: the fake provider leaves every charge PENDING so the
+    # browser flow shows the payment step and the dev webhook settles it.
+    # Refused alongside a Stripe key.
+    fake_charges_pending: bool = False
     # The fake provider's webhooks are unsigned JSON with guessable ids, so
     # POST /v1/payments/webhook 404s in fake mode unless this is on. Dev,
     # tests and demos only: refused at startup alongside a Stripe key.
@@ -61,6 +69,9 @@ class Settings(BaseSettings):
     admin_password: str = ""
     base_url: str = "http://localhost:8000"  # used in verification/reset links
     cookie_secure: bool = False  # set True behind TLS in production
+    # When on, creating a job, accepting an offer and creating a listing need
+    # a verified email (enforced in the services, so API and pages agree).
+    require_verified_email: bool = False
 
     # Notifications: transactional outbox drained by the in-process loop.
     notify_drain_seconds: int = 5
@@ -107,6 +118,16 @@ class Settings(BaseSettings):
             raise ValueError("STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not")
         if self.stripe_secret_key and self.allow_unsigned_webhooks:
             raise ValueError("ALLOW_UNSIGNED_WEBHOOKS must be off when STRIPE_SECRET_KEY is set")
+        if self.stripe_secret_key and not self.stripe_publishable_key:
+            # Charges wait for confirmation in the buyer's browser; without
+            # the browser key no buyer could ever pay.
+            raise ValueError("STRIPE_SECRET_KEY is set but STRIPE_PUBLISHABLE_KEY is not")
+        if self.stripe_publishable_key and not self.stripe_publishable_key.startswith("pk_"):
+            # It is rendered into page source: a secret (sk_) or restricted
+            # (rk_) key pasted here would be published to every buyer.
+            raise ValueError("STRIPE_PUBLISHABLE_KEY must be a publishable key (pk_...)")
+        if self.stripe_secret_key and self.fake_charges_pending:
+            raise ValueError("FAKE_CHARGES_PENDING is a fake-provider demo switch; unset it")
         return self
 
 

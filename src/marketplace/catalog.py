@@ -119,6 +119,18 @@ def seller_publicly_visible(user: User | None, seller: SellerProfile | None) -> 
     )
 
 
+def public_seller(session: Session, seller_id: str) -> CatalogSellerOut | None:
+    """The public summary of one seller, or None when they are not publicly
+    visible (the same rule as `/sellers/{id}`). For pages that name a seller
+    outside the catalog grid, such as a buyer's booking."""
+    user = session.get(User, seller_id)
+    seller = session.get(SellerProfile, seller_id)
+    if not seller_publicly_visible(user, seller):
+        return None
+    assert user is not None and seller is not None
+    return catalog_seller_out(user, seller)
+
+
 def catalog_seller_out(user: User, seller: SellerProfile) -> CatalogSellerOut:
     return CatalogSellerOut(
         seller_id=user.id,

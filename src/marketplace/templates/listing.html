@@ -26,9 +26,15 @@
     <p class="listing-price">from <strong>${{ listing.price_from }}</strong></p>
     <p class="listing-description">{{ listing.description }}</p>
 
-    <section class="booking-stub">
-      {% if claims %}
-      <p class="booking-note">Booking arrives in phase 3.</p>
+    <section class="booking-panel">
+      {% if claims and claims.role == "buyer" %}
+      <form method="post" action="/listings/{{ listing.id }}/quote">
+        {% include "_csrf.html" %}
+        <button type="submit" class="button">Get a price</button>
+      </form>
+      <p class="booking-note">You'll see your exact price before you book.</p>
+      {% elif claims %}
+      <p class="booking-note">Booking needs a buyer account. You're logged in as a {{ claims.role }}.</p>
       {% else %}
       <a class="button" href="/login">Log in to book</a>
       {% endif %}

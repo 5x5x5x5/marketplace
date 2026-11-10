@@ -5,10 +5,14 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import SellerProfile
+from marketplace.entities import Listing, Offer, SellerProfile
+from marketplace.models import PaymentStatus
+from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
+from tests.page_helpers import csrf_of, page_user
 from tests.test_payments import onboard_and_avail
 
 
@@ -330,3 +334,123 @@ def test_commit_route_invariant_covers_pages() -> None:
     rogue_app.include_router(rogue)
     with pytest.raises(RuntimeError, match="CommitRoute"):
         api._assert_commit_routes(rogue_app)  # pyright: ignore[reportPrivateUsage]
+
+
+# ---------- booking pages: the same asymmetry doctrine, page by page ----------
+#
+# Base prices are buyer 20.00 / seller 14.00 (basic_service). A buyer page
+# must never show the payout figure or the payout/margin vocabulary; a seller
+# page must never show the buyer's price, the buyer's identity, or the
+# buyer's payment secret.
+
+_BUYER_FORBIDDEN = ("seller_payout", "margin", "payout", "14.00", "capacity", "payments_ready")
+_SELLER_FORBIDDEN = ("buyer_price", "margin", "20.00", "cs_fake", "bea buyerton", "bea@")
+_XSS_TITLE = '"><script>alert(1)</script>'
+_XSS_NAME = '<img src=x onerror="alert(2)">'
+
+
+def _scan(html: str, forbidden: tuple[str, ...], where: str) -> None:
+    low = html.lower()
+    for word in forbidden:
+        assert word.lower() not in low, (where, word)
+
+
+def _form(c: TestClient, path: str, page: str, **data: str) -> Any:
+    return c.post(path, data={"csrf_token": csrf_of(c, page), **data}, follow_redirects=False)
+
+
+def _market(sid: str, title: str) -> tuple[TestClient, TestClient, str, str]:
+    """A page seller (hostile display name) with one listing, and a page buyer
+    with an identifiable name holding a quote on it. Returns
+    (seller, buyer, listing id, quote path)."""
+    seller = page_user("seller", name=_XSS_NAME)
+    for path, data in (
+        ("/seller/payments/onboard", {}),
+        ("/seller/availability", {"service_type_id": sid, "on": "true"}),
+        ("/seller/listings", {"service_type_id": sid, "title": title, "description": title}),
+    ):
+        assert _form(seller, path, "/seller", **data).status_code == 303
+    buyer = page_user("buyer", name="Bea Buyerton", email="bea@example.test")
+    with SessionLocal() as s:
+        listing = s.scalar(select(Listing))
+        assert listing is not None
+        lid = str(listing.id)
+    quote = _form(buyer, f"/listings/{lid}/quote", f"/listings/{lid}")
+    return seller, buyer, lid, quote.headers["location"]
+
+
+def _offer_id() -> str:
+    with SessionLocal() as s:
+        offer = s.scalar(select(Offer))
+        assert offer is not None
+        return str(offer.id)
+
+
+def test_buyer_pages_never_show_the_payout(client: TestClient, basic_service: str) -> None:
+    seller, buyer, lid, qpath = _market(basic_service, "Rides")
+    _scan(buyer.get(f"/listings/{lid}").text, _BUYER_FORBIDDEN, "listing")
+    _scan(buyer.get(qpath).text, _BUYER_FORBIDDEN, "quote")
+    bpath = _form(buyer, f"{qpath}/book", qpath).headers["location"]
+    _scan(buyer.get(bpath).text, _BUYER_FORBIDDEN, "booking pending")
+    _form(seller, f"/seller/offers/{_offer_id()}/accept", "/seller")
+    _scan(buyer.get(bpath).text, _BUYER_FORBIDDEN, "booking accepted")
+    jid = bpath.rsplit("/", 1)[1]
+    _form(seller, f"/seller/jobs/{jid}/complete", "/seller")
+    _scan(buyer.get(bpath).text, _BUYER_FORBIDDEN, "booking completed")
+    _scan(buyer.get(f"{bpath}/status").text, _BUYER_FORBIDDEN, "status fragment")
+    _scan(buyer.get("/bookings").text, _BUYER_FORBIDDEN, "bookings")
+
+
+def test_seller_pages_never_show_the_buyer_price_or_identity(
+    client: TestClient, basic_service: str, fake_payments: FakeProvider
+) -> None:
+    seller, buyer, _, qpath = _market(basic_service, "Rides")
+    _form(buyer, f"{qpath}/book", qpath)
+    html = seller.get("/seller").text
+    assert "$14.00" in html  # the offer is there, with the seller's own number
+    _scan(html, _SELLER_FORBIDDEN, "dashboard with offer")
+    fake_payments.next_charge_status = PaymentStatus.PENDING  # a buyer payment secret exists
+    _form(seller, f"/seller/offers/{_offer_id()}/accept", "/seller")
+    _scan(seller.get("/seller").text, _SELLER_FORBIDDEN, "dashboard awaiting payment")
+    with SessionLocal() as s:
+        listing = s.scalar(select(Listing))
+        assert listing is not None
+        listing_id = listing.id
+    _scan(seller.get(f"/seller/listings/{listing_id}/edit").text, _SELLER_FORBIDDEN, "edit")
+    _scan(seller.get("/seller/listings/new").text, _SELLER_FORBIDDEN, "new listing")
+
+
+def test_xss_on_booking_and_seller_pages(client: TestClient, basic_service: str) -> None:
+    seller, buyer, _, qpath = _market(basic_service, _XSS_TITLE)
+    quote_html = buyer.get(qpath).text
+    assert "<script>alert(1)</script>" not in quote_html
+    assert _XSS_NAME not in quote_html
+    assert "&lt;img src=x onerror=&#34;alert(2)&#34;&gt;" in quote_html
+    booking_html = buyer.get(_form(buyer, f"{qpath}/book", qpath).headers["location"]).text
+    assert _XSS_NAME not in booking_html
+    assert "<script>alert(1)</script>" not in booking_html
+    dashboard = seller.get("/seller").text
+    assert "<script>alert(1)</script>" not in dashboard
+    assert "&lt;script&gt;" in dashboard
+    with SessionLocal() as s:
+        listing = s.scalar(select(Listing))
+        assert listing is not None
+        listing_id = listing.id
+    # Attribute-context sink: the title lands in <input value="...">, where a
+    # raw double quote would end the attribute and open a new tag.
+    edit = seller.get(f"/seller/listings/{listing_id}/edit").text
+    start = edit.index('name="title"')
+    tag = edit[edit.rindex("<input", 0, start) : edit.index("/>", start)]
+    assert '"><script>' not in tag
+    assert 'value="&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"' in tag
+    assert "</textarea><script>" not in edit  # the description's textarea
+
+
+def test_catalog_cards_link_to_their_listing(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """Try-out finding T1: the cards had no link, so a browser could not get
+    from the catalog to a listing (and so to booking) at all."""
+    listing = _listed_seller(client, auth, basic_service)
+    assert f'href="/listings/{listing["id"]}"' in client.get("/").text
+    assert f'href="/listings/{listing["id"]}"' in client.get("/sellers/s1").text

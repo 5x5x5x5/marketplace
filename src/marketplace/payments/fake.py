@@ -13,6 +13,7 @@ from itertools import count
 from typing import Any
 
 from ..models import PaymentStatus, PayoutStatus
+from ..settings import settings
 from .port import (
     AccountResult,
     ChargeResult,
@@ -36,6 +37,7 @@ class FakeProvider:
     """
 
     name = "fake"
+    browser_key: str | None = None  # no browser-side step; tests may script one
 
     def __init__(self) -> None:
         self._seq = count(1)
@@ -92,6 +94,10 @@ class FakeProvider:
         self._maybe_fail_key(idempotency_key)
         status = self.next_charge_status
         self.next_charge_status = PaymentStatus.SUCCEEDED  # scripted statuses are one-shot
+        if settings.fake_charges_pending:
+            # Dev/demo mode: every charge waits for the (unsigned) dev
+            # webhook, so a browser walk-through shows the payment step.
+            status = PaymentStatus.PENDING
         n = next(self._seq)
         return ChargeResult(
             provider_payment_id=f"pay_fake_{n}",

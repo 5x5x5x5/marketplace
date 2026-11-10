@@ -74,6 +74,10 @@ class PaymentEvent:
 
 class PaymentProvider(Protocol):
     name: str
+    # The key a browser-side payment step needs (Stripe's publishable key),
+    # or None when the provider has no browser step (the fake). Pages pass it
+    # to the template; nothing else about the provider reaches a page.
+    browser_key: str | None
 
     def create_seller_account(self, seller_id: str, *, idempotency_key: str) -> AccountResult: ...
 
