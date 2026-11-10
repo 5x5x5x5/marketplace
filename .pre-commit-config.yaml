@@ -1,0 +1,28 @@
+# Local hooks run the project's pinned tool versions (uv.lock), so editor, hook
+# and CI agree. gitleaks must be on PATH (brew/apt/go install).
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        entry: gitleaks git --pre-commit --staged --redact --no-banner
+        language: system
+        pass_filenames: false
+      - id: architecture
+        name: architecture invariants
+        entry: uv run pytest tests/test_architecture.py -q
+        language: system
+        pass_filenames: false
+        files: ^(src/|tests/|migrations/|pyproject\.toml$)

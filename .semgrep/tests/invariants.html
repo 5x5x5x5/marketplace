@@ -1,0 +1,11 @@
+<!-- Test corpus for marketplace-template-unsafe-output. -->
+<!-- ruleid: marketplace-template-unsafe-output -->
+<p>{{ listing.description|safe }}</p>
+<!-- ruleid: marketplace-template-unsafe-output -->
+<p>{{ listing.description | safe }}</p>
+<!-- ruleid: marketplace-template-unsafe-output -->
+{% autoescape false %}
+<!-- ok: marketplace-template-unsafe-output -->
+<p>{{ listing.description }}</p>
+<!-- ok: marketplace-template-unsafe-output -->
+<p>{{ listing.title|truncate(40) }}</p>
