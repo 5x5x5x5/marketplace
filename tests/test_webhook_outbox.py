@@ -30,7 +30,7 @@ from marketplace.models import EventKind, JobStatus, PaymentStatus, WebhookEvent
 from marketplace.notifications import drain_once
 from marketplace.payments.fake import FakeProvider
 from marketplace.payments.port import PaymentEvent
-from marketplace.services import webhooks
+from marketplace.services import maintenance, webhooks
 from marketplace.settings import settings
 from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.test_payments import pending_accept
@@ -481,7 +481,7 @@ def test_retention_spares_failed_rows_and_reaps_terminal_ones() -> None:
             )
         s.commit()
     with SessionLocal() as s:
-        api._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
+        maintenance._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
         s.commit()
     with SessionLocal() as s:
         kept = {r.provider_event_id for r in s.scalars(select(WebhookEvent)).all()}

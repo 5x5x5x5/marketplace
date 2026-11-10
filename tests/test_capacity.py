@@ -18,6 +18,7 @@ from marketplace import api, db, idempotency, pages, repo
 from marketplace.db import SessionLocal, engine, engine_options
 from marketplace.entities import Availability, Job, Listing, Offer, Quote, SellerProfile
 from marketplace.models import JobStatus, OfferStatus
+from marketplace.services import maintenance
 from marketplace.settings import Settings
 from tests.conftest import AuthFactory, Header
 from tests.test_migrations import _alembic  # pyright: ignore[reportPrivateUsage]
@@ -390,7 +391,7 @@ def _lifespan_starts_loop(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> boo
     async def fake_loop() -> None:
         started.append(True)
 
-    monkeypatch.setattr(api, "_maintenance_loop", fake_loop)
+    monkeypatch.setattr(maintenance, "maintenance_loop", fake_loop)
     monkeypatch.setattr(api.settings, "maintenance_enabled", enabled)
     with TestClient(api.app) as c:
         assert c.get("/healthz").status_code == 200
