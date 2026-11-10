@@ -18,11 +18,12 @@ from fastapi import Request
 from fastapi.routing import APIRoute
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
 from .entities import Base
-from .settings import settings
+from .settings import Settings, settings
 
 
 def _connect_args(url: str) -> dict[str, object]:
@@ -30,11 +31,32 @@ def _connect_args(url: str) -> dict[str, object]:
     return {"check_same_thread": False} if url.startswith("sqlite") else {}
 
 
-engine = create_engine(
-    settings.database_url,
-    pool_pre_ping=True,
-    connect_args=_connect_args(settings.database_url),
-)
+def engine_options(cfg: Settings) -> dict[str, Any]:
+    """Pool arguments for `create_engine`, sized on purpose rather than left at
+    SQLAlchemy's 5+10 / 30 s defaults (which, against Starlette's 40-token
+    threadpool, collapsed into 30 s timeouts at ~100 concurrent requests).
+
+    SQLite keeps SQLAlchemy's own pool choice untouched: it is the local/test
+    backend and has no server-side connection cap to size against. `DB_POOL=
+    null` opens a fresh connection per checkout, for deployments behind an
+    external pooler (PgBouncer and friends) that already owns pooling."""
+    opts: dict[str, Any] = {"connect_args": _connect_args(cfg.database_url)}
+    if cfg.database_url.startswith("sqlite"):
+        opts["pool_pre_ping"] = True
+        return opts
+    if cfg.db_pool == "null":
+        opts["poolclass"] = NullPool
+        return opts
+    opts.update(
+        pool_pre_ping=True,
+        pool_size=cfg.db_pool_size,
+        max_overflow=cfg.db_max_overflow,
+        pool_timeout=cfg.db_pool_timeout_seconds,
+    )
+    return opts
+
+
+engine = create_engine(settings.database_url, **engine_options(settings))
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
