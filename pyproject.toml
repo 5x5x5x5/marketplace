@@ -24,6 +24,9 @@ dev = [
     "ruff>=0.6",
     "pyright>=1.1.380",
 ]
+loadtest = [
+    "locust>=2.32",
+]
 
 [build-system]
 requires = ["hatchling"]

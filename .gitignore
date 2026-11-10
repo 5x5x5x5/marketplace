@@ -10,3 +10,7 @@ build/
 *.db
 .env
 .claude/settings.local.json
+
+# load-test harness output and token cache
+loadtest/results/
+loadtest/.tokens.json
