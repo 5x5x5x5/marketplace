@@ -18,7 +18,7 @@ from marketplace import api, db, idempotency, pages, repo
 from marketplace.db import SessionLocal, engine, engine_options
 from marketplace.entities import Availability, Job, Listing, Offer, Quote, SellerProfile
 from marketplace.models import JobStatus, OfferStatus
-from marketplace.services import maintenance
+from marketplace.services import booking, maintenance
 from marketplace.settings import Settings
 from tests.conftest import AuthFactory, Header
 from tests.test_migrations import _alembic  # pyright: ignore[reportPrivateUsage]
@@ -297,7 +297,7 @@ def test_quote_query_count_does_not_grow_with_sellers(
 def test_quote_cap_counts_live_quotes_only(
     client: TestClient, basic_service: str, auth: AuthFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(api, "MAX_ACTIVE_QUOTES", 2)
+    monkeypatch.setattr(booking, "MAX_ACTIVE_QUOTES", 2)
     past = datetime.now(UTC) - timedelta(hours=1)
     with SessionLocal() as s:
         for _ in range(3):

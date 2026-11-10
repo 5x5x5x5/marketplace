@@ -14,11 +14,9 @@ models that omit the other side's number (`models.py`).
 
 import asyncio
 import logging
-import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import timedelta
-from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -46,7 +44,6 @@ from .auth import (
     current_seller,
     require_admin,
 )
-from .config import Candidate, PricingConfig
 from .db import CommitRoute, get_session, init_db
 from .entities import (
     Adjustment,
@@ -76,7 +73,7 @@ from .entities import (
 from .errors import DomainError
 from .idempotency import IdempotencyMiddleware
 from .mail import get_mail_sender
-from .matching import STRATEGIES, estimated_fee, passes_floor, required_spread, seller_payout_for
+from .matching import STRATEGIES, estimated_fee
 from .models import (
     AdjustmentKind,
     AdminDisputeOut,
@@ -134,7 +131,6 @@ from .models import (
     SellerReviewOut,
     ServiceTypeBody,
     ServiceTypeOut,
-    Side,
     StatsOut,
     SuspendRequest,
     TransactionOut,
@@ -149,14 +145,13 @@ from .observability import BodySizeLimitMiddleware, RequestIdMiddleware, configu
 from .pages import pages_router
 from .payments import get_provider
 from .payments.port import PaymentError, PaymentProvider, WebhookSignatureError
-from .pricing import REGISTRY, PricingContext, run_pipeline
+from .pricing import REGISTRY
 from .repo import audit
-from .services import maintenance, webhooks
+from .services import booking, maintenance, webhooks
 from .services.common import now as _now
 from .services.common import paginate as _paginate
 from .services.common import require_active as _require_active
 from .services.maintenance import sweep as _sweep
-from .services.offers import create_offer as _create_offer
 from .services.offers import expire_open_offers as _expire_open_offers
 from .services.offers import match_and_offer as _match_and_offer
 from .services.webhooks import process_webhook as _process_webhook
@@ -164,7 +159,6 @@ from .settings import settings
 
 logger = logging.getLogger("marketplace")
 
-MAX_ACTIVE_QUOTES = 100_000  # ponytail: crude OOM backstop; real limits at the gateway.
 MAX_PAGE = 200
 
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -387,186 +381,12 @@ _catalog_listings_for_rows = catalog.catalog_listings_for_rows
 
 @buyer_router.post("/quotes", response_model=QuoteOut, status_code=201)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
-    _require_active(session, buyer_id)
-    listing: Listing | None = None
-    if req.listing_id is not None:
-        listing = session.get(Listing, req.listing_id)
-        if listing is None or not _listing_bookable(session, listing):
-            raise HTTPException(status_code=409, detail="listing unavailable")
-        # I1: a listing whose seller has NO Availability row is otherwise
-        # fully visible/bookable (`_listing_bookable` never checks
-        # Availability) -- every booking against it would consume the quote
-        # and 410 at job time with nothing to fall back to. Reject here,
-        # before anything is consumed, instead of at job time.
-        if (
-            session.scalar(
-                select(Availability).where(
-                    Availability.seller_id == listing.seller_id,
-                    Availability.service_type_id == listing.service_type_id,
-                )
-            )
-            is None
-        ):
-            raise HTTPException(status_code=409, detail="listing unavailable")
-        if req.service_type_id is not None and req.service_type_id != listing.service_type_id:
-            raise HTTPException(status_code=422, detail="listing_id and service_type_id disagree")
-        service_type_id = listing.service_type_id
-    elif req.service_type_id is not None:
-        service_type_id = req.service_type_id
-    else:
-        raise HTTPException(status_code=422, detail="listing_id or service_type_id required")
-    cfg = repo.load_pricing_config(session, service_type_id)
-    if cfg is None:
-        raise HTTPException(status_code=404, detail="unknown service_type_id")
-
-    # Count live quotes only (index range on expires_at, capped at the limit);
-    # expired rows are reaped by housekeeping, not deleted here — concurrent
-    # quote writers deleting the same expired rows would block on each other.
-    live = select(Quote.id).where(Quote.expires_at > _now()).limit(MAX_ACTIVE_QUOTES).subquery()
-    if (session.scalar(select(func.count()).select_from(live)) or 0) >= MAX_ACTIVE_QUOTES:
-        raise HTTPException(status_code=503, detail="quote capacity reached, retry shortly")
-
-    supply = repo.available_count(session, cfg.service.id)
-    demand = repo.active_demand(session, cfg.service.id) + 1
-    buyer = repo.get_or_create_buyer(session, buyer_id)
-
-    # Cross-reference: mirrors _indicative_buyer_price (catalog's pre-floor
-    # "from" price) above — keep both computations in sync.
-    ctx = PricingContext(
-        side=Side.BUYER,
-        buyer_completed_jobs=buyer.completed_jobs,
-        live_supply=supply,
-        live_demand=demand,
-    )
-    buyer_price = to_money(
-        run_pipeline(
-            float(cfg.service.base_buyer_price), cfg.buyer_pipeline, ctx, cfg.adjuster_params
-        )
-    )
-
-    if listing is not None:
-        # Pinned: probe the CHOSEN seller's payout, not the market minimum —
-        # the buyer picked this seller, so the floor check must reflect what
-        # the platform would actually pay them, not whoever is cheapest.
-        pinned_candidate = repo.candidate_for_seller(session, listing.seller_id)
-        if pinned_candidate is None:
-            raise HTTPException(status_code=409, detail="listing unavailable")
-        probe = seller_payout_for(pinned_candidate, cfg, supply, demand)
-    else:
-        payouts = [
-            seller_payout_for(c, cfg, supply, demand)
-            for c in repo.eligible_candidates(session, cfg.service.id, set())
-        ]
-        probe = min(payouts) if payouts else None
-    if probe is not None:
-        required = required_spread(buyer_price, cfg.margin_floor, cfg.fees)
-        if buyer_price - probe < required:
-            # Round the corrected price UP to a whole unit so it isn't pinned to
-            # exactly probe + required (which would leak the seller's payout).
-            # Both the pct floor and the fee grow with the bumped price, so one
-            # ceil can undershoot — walk whole units until the invariant holds,
-            # bounded by the ceiling.
-            ceiling = to_money(cfg.service.base_buyer_price * cfg.margin_floor.ceiling_multiplier)
-            target = to_money(math.ceil(probe + required))
-            while target <= ceiling and target - probe < required_spread(
-                target, cfg.margin_floor, cfg.fees
-            ):
-                target += 1
-            if target > ceiling:
-                raise HTTPException(
-                    status_code=422,
-                    detail="cannot quote: required margin exceeds the configured price ceiling",
-                )
-            buyer_price = target
-
-    quote = Quote(
-        buyer_id=buyer_id,
-        service_type_id=cfg.service.id,
-        buyer_price=buyer_price,
-        expires_at=_now() + timedelta(minutes=settings.quote_ttl_minutes),
-        listing_id=req.listing_id,
-        pinned_seller_id=(listing.seller_id if listing is not None else None),
-    )
-    session.add(quote)
-    session.flush()
-    return quote
+    return booking.create_quote(session, buyer_id, req)
 
 
 @buyer_router.post("/jobs", response_model=BuyerJobView, status_code=201)
 def create_job(req: JobCreateRequest, session: SessionDep, buyer_id: BuyerId) -> Job:
-    _require_active(session, buyer_id)
-    quote = session.get(Quote, req.quote_id, with_for_update=True)
-    # Same 404 whether missing or not-yours — don't confirm someone else's quote.
-    if quote is None or quote.buyer_id != buyer_id:
-        raise HTTPException(status_code=404, detail="quote not found")
-    if quote.expires_at < _now():
-        raise HTTPException(status_code=410, detail="quote expired")
-
-    cfg: PricingConfig | None = None
-    payout_candidate: Candidate | None = None
-    payout: Decimal | None = None
-    if quote.pinned_seller_id is not None:
-        listing = session.get(Listing, quote.listing_id) if quote.listing_id else None
-        has_availability = (
-            session.scalar(
-                select(Availability).where(
-                    Availability.seller_id == quote.pinned_seller_id,
-                    Availability.service_type_id == quote.service_type_id,
-                )
-            )
-            is not None
-        )
-        cfg = repo.load_pricing_config(session, quote.service_type_id)
-        payout_candidate = repo.candidate_for_seller(session, quote.pinned_seller_id)
-        if (
-            listing is None
-            or not _listing_bookable(session, listing)
-            or not has_availability
-            or cfg is None
-            or payout_candidate is None
-        ):
-            # Single-use regardless of booking outcome — the same contract as
-            # the unpinned no-seller-found case, which still consumes the
-            # quote and simply yields an EXPIRED job. A pinned failure has no
-            # rival to fall back to, so it 410s instead of returning a job;
-            # commit the consumption here because CommitRoute never persists
-            # a 4xx response, and a dead quote must not be retryable.
-            session.delete(quote)
-            session.commit()
-            raise HTTPException(status_code=410, detail="listing no longer available")
-        # C1: the quote-time probe checked the floor against the pinned
-        # seller's payout AS OF THE QUOTE. Tier/pricing can drift inside the
-        # quote's TTL window, so recompute the payout at JOB time here — before
-        # the Job row is built — and re-check the floor. Compute once and
-        # reuse below for `_create_offer` so the offer reflects the same
-        # payout the check approved.
-        supply = repo.available_count(session, quote.service_type_id)
-        demand = repo.active_demand(session, quote.service_type_id)
-        payout = seller_payout_for(payout_candidate, cfg, supply, demand)
-        if not passes_floor(quote.buyer_price, payout, cfg.margin_floor, cfg.fees):
-            # Same mid-commit-consume 410 contract as the guards above — never
-            # leak payout/floor numbers in the response.
-            session.delete(quote)
-            session.commit()
-            raise HTTPException(status_code=410, detail="listing no longer available")
-
-    job = Job(
-        quote_id=quote.id,
-        buyer_id=quote.buyer_id,
-        service_type_id=quote.service_type_id,
-        buyer_price=quote.buyer_price,
-    )
-    session.add(job)
-    session.delete(quote)  # quotes are single-use; deleting also blocks a racing reuse
-    session.flush()
-    if quote.pinned_seller_id is not None:
-        assert cfg is not None and payout_candidate is not None and payout is not None  # guarded
-        job.pinned_seller_id = quote.pinned_seller_id
-        _create_offer(session, job, quote.pinned_seller_id, payout)
-    else:
-        _match_and_offer(session, job)  # PENDING with an offer, or EXPIRED if no seller fits
-    session.flush()
-    return job
+    return booking.create_job(session, buyer_id, req)
 
 
 @buyer_router.get("/jobs", response_model=list[BuyerJobView])
