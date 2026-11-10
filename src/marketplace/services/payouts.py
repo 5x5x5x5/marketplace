@@ -36,12 +36,12 @@ def onboard_payments(session: Session, seller_id: str, provider: PaymentProvider
         seller.provider_account_id = acct.provider_account_id
         seller.payments_ready = acct.payments_ready
         session.flush()
-    return OnboardingOut(
-        onboarding_url=provider.onboarding_link(
-            seller.provider_account_id, settings.onboarding_return_url
-        ),
-        payments_ready=seller.payments_ready,
-    )
+    try:
+        url = provider.onboarding_link(seller.provider_account_id, settings.onboarding_return_url)
+    except PaymentError as exc:
+        logger.warning("onboarding link failed for seller %s: %s", seller_id, exc)
+        raise ProviderUnavailableError("payment provider unavailable, retry") from None
+    return OnboardingOut(onboarding_url=url, payments_ready=seller.payments_ready)
 
 
 def list_payouts(

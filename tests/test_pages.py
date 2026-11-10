@@ -4,15 +4,18 @@ shared-logic extraction, invariant."""
 from typing import Any
 from uuid import uuid4
 
+import pytest
+from fastapi.templating import Jinja2Templates
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Listing, Offer, SellerProfile
+from marketplace.entities import Listing, Offer, SellerProfile, User
 from marketplace.models import PaymentStatus
+from marketplace.pages.common import NavUser
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
-from tests.page_helpers import csrf_of, page_user
+from tests.page_helpers import csrf_of, page_user, user_id
 from tests.test_payments import onboard_and_avail
 
 
@@ -247,6 +250,40 @@ def test_nav_shows_display_name_and_logout_when_cookied(client: TestClient) -> N
     assert 'href="/login"' not in html
 
 
+def test_template_context_carries_no_email_or_password_hash(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """The nav gets the viewer's display name only: the User row (email,
+    password hash) must not be reachable from any template on a public page."""
+    _listed_seller(client, auth, basic_service)
+    viewer = page_user("buyer", name="Nav Viewer", email="viewer-secret@example.test")
+    with SessionLocal() as db:
+        row = db.scalar(select(User).where(User.email == "viewer-secret@example.test"))
+        assert row is not None
+        password_hash = row.password_hash
+    assert password_hash
+    seen: list[object] = []
+
+    def spy(self: Any, request: Any, name: str, context: Any = None, *a: Any, **kw: Any) -> Any:
+        seen.append(context)
+        return original(self, request, name, context, *a, **kw)
+
+    original = Jinja2Templates.TemplateResponse
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Jinja2Templates, "TemplateResponse", spy)
+        r = viewer.get("/")
+    assert r.status_code == 200 and "Nav Viewer" in r.text
+    assert len(seen) == 1 and isinstance(seen[0], dict)
+    ctx: dict[str, Any] = seen[0]  # pyright: ignore[reportUnknownVariableType]
+    assert not any(isinstance(v, User) for v in ctx.values())
+    nav_user = ctx["current_user"]
+    assert isinstance(nav_user, NavUser)
+    assert set(nav_user.model_dump()) == {"display_name"}  # all a template can reach
+    flat = repr(ctx)
+    assert "viewer-secret@example.test" not in flat
+    assert password_hash not in flat
+
+
 def test_login_page_rejects_admin_role(client: TestClient, monkeypatch: Any) -> None:
     # The login FORM only offers buyer/seller, but the POST target must not
     # forward a wider role to auth.login than the form advertises — even
@@ -344,7 +381,16 @@ def test_commit_route_invariant_covers_pages() -> None:
 # buyer's payment secret.
 
 _BUYER_FORBIDDEN = ("seller_payout", "margin", "payout", "14.00", "capacity", "payments_ready")
-_SELLER_FORBIDDEN = ("buyer_price", "margin", "20.00", "cs_fake", "bea buyerton", "bea@")
+_SELLER_FORBIDDEN = (
+    "buyer_price",
+    "buyer_id",
+    "margin",
+    "20.00",
+    "cs_fake",
+    "bea buyerton",
+    "bea@",
+)
+_PUBLIC_FORBIDDEN = ("seller_payout", "margin", "capacity", "payments_ready", "@")
 _XSS_TITLE = '"><script>alert(1)</script>'
 _XSS_NAME = '<img src=x onerror="alert(2)">'
 
@@ -408,16 +454,44 @@ def test_seller_pages_never_show_the_buyer_price_or_identity(
     _form(buyer, f"{qpath}/book", qpath)
     html = seller.get("/seller").text
     assert "$14.00" in html  # the offer is there, with the seller's own number
-    _scan(html, _SELLER_FORBIDDEN, "dashboard with offer")
+    buyer_ids = (user_id(buyer),)  # the buyer's id value, not just its field name
+    _scan(html, _SELLER_FORBIDDEN + buyer_ids, "dashboard with offer")
     fake_payments.next_charge_status = PaymentStatus.PENDING  # a buyer payment secret exists
     _form(seller, f"/seller/offers/{_offer_id()}/accept", "/seller")
-    _scan(seller.get("/seller").text, _SELLER_FORBIDDEN, "dashboard awaiting payment")
+    _scan(seller.get("/seller").text, _SELLER_FORBIDDEN + buyer_ids, "dashboard awaiting payment")
     with SessionLocal() as s:
         listing = s.scalar(select(Listing))
         assert listing is not None
         listing_id = listing.id
     _scan(seller.get(f"/seller/listings/{listing_id}/edit").text, _SELLER_FORBIDDEN, "edit")
     _scan(seller.get("/seller/listings/new").text, _SELLER_FORBIDDEN, "new listing")
+
+
+def test_seller_dashboard_after_completion_shows_no_buyer_data(
+    client: TestClient, basic_service: str
+) -> None:
+    """The jobs table is where the payout sits next to the buyer's booking."""
+    seller, buyer, _, qpath = _market(basic_service, "Rides")
+    bpath = _form(buyer, f"{qpath}/book", qpath).headers["location"]
+    _form(seller, f"/seller/offers/{_offer_id()}/accept", "/seller")
+    jid = bpath.rsplit("/", 1)[1]
+    done = _form(seller, f"/seller/jobs/{jid}/complete", "/seller")
+    assert done.headers["location"] == "/seller?notice=completed"
+    html = seller.get("/seller").text
+    assert "$14.00" in html  # the completed job's payout, the seller's own number
+    _scan(html, (*_SELLER_FORBIDDEN, user_id(buyer)), "dashboard after completion")
+
+
+def test_public_pages_viewed_by_a_logged_in_seller_stay_public(
+    client: TestClient, basic_service: str
+) -> None:
+    seller, _, lid, _ = _market(basic_service, "Rides")
+    sid = user_id(seller)
+    for url in ("/", f"/listings/{lid}", f"/sellers/{sid}"):
+        r = seller.get(url)
+        assert r.status_code == 200, url
+        assert "Rides" in r.text, url
+        _scan(r.text, _PUBLIC_FORBIDDEN, f"{url} as a logged-in seller")
 
 
 def test_xss_on_booking_and_seller_pages(client: TestClient, basic_service: str) -> None:

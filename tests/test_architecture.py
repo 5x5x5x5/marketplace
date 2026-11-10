@@ -927,6 +927,95 @@ def test_get_session_teardown_does_not_commit() -> None:
     assert not bad, f"commit in get_session teardown:\n  {_fmt(bad)}"
 
 
+def _except_type_names(handler: ast.ExceptHandler) -> set[str]:
+    if handler.type is None:
+        return set()
+    nodes = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return {
+        n.id if isinstance(n, ast.Name) else n.attr
+        for n in nodes
+        if isinstance(n, (ast.Name, ast.Attribute))
+    }
+
+
+def test_page_handlers_roll_back_before_answering_a_domain_error() -> None:
+    """INVARIANT: a page form handler that catches a `DomainError` rolls the
+    session back before it answers.
+
+    A page POST answers 303, which is under 400, so `CommitRoute` commits; a
+    handler that caught the error and redirected without rolling back would
+    commit whatever the service wrote before it raised (the JSON API discards
+    that by answering 4xx).
+
+    Fix: answer through `pages.common.redirect_after_error`, or call
+    `session.rollback()` in the `except` body, or re-raise. Only POST/PUT/
+    PATCH/DELETE handlers are checked: a GET handler writes nothing.
+    """
+    from marketplace import errors
+
+    domain = {
+        name
+        for name, obj in vars(errors).items()
+        if isinstance(obj, type) and issubclass(obj, errors.DomainError)
+    }
+    assert {"DomainError", "NotFoundError"} <= domain
+    writes = {"post", "put", "patch", "delete"}
+    checked = 0
+    bad: list[str] = []
+    for path in sorted((SRC / "pages").glob("*.py")):
+        for fn in ast.walk(_parse(path)):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            is_write = any(
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and d.func.attr in writes
+                for d in fn.decorator_list
+            )
+            if not is_write:
+                continue
+            handlers = [n for n in ast.walk(fn) if isinstance(n, ast.ExceptHandler)]
+            # A handler nested in another handler runs after the outer one's
+            # rollback (which is itself checked), so it is covered by it.
+            nested = {
+                id(inner)
+                for outer in handlers
+                for stmt in outer.body
+                for inner in ast.walk(stmt)
+                if isinstance(inner, ast.ExceptHandler)
+            }
+            for handler in handlers:
+                if id(handler) in nested or not _except_type_names(handler) & domain:
+                    continue
+                checked += 1
+                ok = any(
+                    isinstance(n, ast.Raise)
+                    or (isinstance(n, ast.Call) and _calls_named(n, "redirect_after_error"))
+                    or (
+                        isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "rollback"
+                    )
+                    for stmt in handler.body
+                    for n in ast.walk(stmt)
+                )
+                if not ok:
+                    bad.append(f"{path.relative_to(ROOT)}:{handler.lineno} in {fn.name}()")
+    assert checked, "no DomainError handlers found in pages/; update this test if they moved"
+    assert not bad, (
+        "page handler catches a DomainError without rolling back (a 303 would commit the "
+        "service's partial writes); use redirect_after_error, session.rollback(), or "
+        f"re-raise:\n  {_fmt(bad)}"
+    )
+
+
+def _calls_named(call: ast.Call, name: str) -> bool:
+    f = call.func
+    return (isinstance(f, ast.Name) and f.id == name) or (
+        isinstance(f, ast.Attribute) and f.attr == name
+    )
+
+
 def test_every_route_uses_commit_route() -> None:
     """INVARIANT: every router sets `route_class=CommitRoute`.
 

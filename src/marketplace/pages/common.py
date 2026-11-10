@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import auth
@@ -81,10 +82,18 @@ def notice_message(code: str | None) -> str | None:
     return NOTICES.get(code) if code else None
 
 
+class NavUser(BaseModel):
+    """What base.html knows about the viewer: a display name and nothing else
+    (the User row also carries the email and the password hash)."""
+
+    display_name: str
+
+
 def nav_context(session: Session, claims: auth.Claims | None) -> dict[str, object]:
-    """Context for base.html's nav: the claims (role/sub) plus the viewer's own
-    User row for its display name, since Claims carries neither."""
-    current_user = session.get(User, claims.sub) if claims is not None else None
+    """Context for base.html's nav: the claims (role/sub) plus the viewer's
+    display name, since Claims carries neither."""
+    row = session.get(User, claims.sub) if claims is not None else None
+    current_user = NavUser(display_name=row.display_name) if row is not None else None
     return {"claims": claims, "current_user": current_user}
 
 
