@@ -2267,7 +2267,12 @@ def _process_webhook(event: PaymentEvent) -> dict[str, str]:
 @payments_router.post("/webhook")
 async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str, str]:
     """Provider event sink. Unauthenticated by design — authenticity comes from
-    the provider's signature, verified in parse_webhook. Duplicates no-op."""
+    the provider's signature, verified in parse_webhook. Duplicates no-op.
+
+    The fake provider verifies nothing, so without Stripe the route does not
+    exist (404) unless `settings.allow_unsigned_webhooks` is on."""
+    if provider.name == "fake" and not settings.allow_unsigned_webhooks:
+        raise HTTPException(status_code=404, detail="Not Found")
     payload = await request.body()
     try:
         event = provider.parse_webhook(payload, request.headers.get("stripe-signature"))
