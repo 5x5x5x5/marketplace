@@ -15,7 +15,7 @@ from marketplace.models import PaymentStatus
 from marketplace.pages.common import NavUser
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
-from tests.page_helpers import csrf_of, page_user
+from tests.page_helpers import csrf_of, page_user, user_id
 from tests.test_payments import onboard_and_avail
 
 
@@ -381,7 +381,16 @@ def test_commit_route_invariant_covers_pages() -> None:
 # buyer's payment secret.
 
 _BUYER_FORBIDDEN = ("seller_payout", "margin", "payout", "14.00", "capacity", "payments_ready")
-_SELLER_FORBIDDEN = ("buyer_price", "margin", "20.00", "cs_fake", "bea buyerton", "bea@")
+_SELLER_FORBIDDEN = (
+    "buyer_price",
+    "buyer_id",
+    "margin",
+    "20.00",
+    "cs_fake",
+    "bea buyerton",
+    "bea@",
+)
+_PUBLIC_FORBIDDEN = ("seller_payout", "margin", "capacity", "payments_ready", "@")
 _XSS_TITLE = '"><script>alert(1)</script>'
 _XSS_NAME = '<img src=x onerror="alert(2)">'
 
@@ -445,16 +454,44 @@ def test_seller_pages_never_show_the_buyer_price_or_identity(
     _form(buyer, f"{qpath}/book", qpath)
     html = seller.get("/seller").text
     assert "$14.00" in html  # the offer is there, with the seller's own number
-    _scan(html, _SELLER_FORBIDDEN, "dashboard with offer")
+    buyer_ids = (user_id(buyer),)  # the buyer's id value, not just its field name
+    _scan(html, _SELLER_FORBIDDEN + buyer_ids, "dashboard with offer")
     fake_payments.next_charge_status = PaymentStatus.PENDING  # a buyer payment secret exists
     _form(seller, f"/seller/offers/{_offer_id()}/accept", "/seller")
-    _scan(seller.get("/seller").text, _SELLER_FORBIDDEN, "dashboard awaiting payment")
+    _scan(seller.get("/seller").text, _SELLER_FORBIDDEN + buyer_ids, "dashboard awaiting payment")
     with SessionLocal() as s:
         listing = s.scalar(select(Listing))
         assert listing is not None
         listing_id = listing.id
     _scan(seller.get(f"/seller/listings/{listing_id}/edit").text, _SELLER_FORBIDDEN, "edit")
     _scan(seller.get("/seller/listings/new").text, _SELLER_FORBIDDEN, "new listing")
+
+
+def test_seller_dashboard_after_completion_shows_no_buyer_data(
+    client: TestClient, basic_service: str
+) -> None:
+    """The jobs table is where the payout sits next to the buyer's booking."""
+    seller, buyer, _, qpath = _market(basic_service, "Rides")
+    bpath = _form(buyer, f"{qpath}/book", qpath).headers["location"]
+    _form(seller, f"/seller/offers/{_offer_id()}/accept", "/seller")
+    jid = bpath.rsplit("/", 1)[1]
+    done = _form(seller, f"/seller/jobs/{jid}/complete", "/seller")
+    assert done.headers["location"] == "/seller?notice=completed"
+    html = seller.get("/seller").text
+    assert "$14.00" in html  # the completed job's payout, the seller's own number
+    _scan(html, (*_SELLER_FORBIDDEN, user_id(buyer)), "dashboard after completion")
+
+
+def test_public_pages_viewed_by_a_logged_in_seller_stay_public(
+    client: TestClient, basic_service: str
+) -> None:
+    seller, _, lid, _ = _market(basic_service, "Rides")
+    sid = user_id(seller)
+    for url in ("/", f"/listings/{lid}", f"/sellers/{sid}"):
+        r = seller.get(url)
+        assert r.status_code == 200, url
+        assert "Rides" in r.text, url
+        _scan(r.text, _PUBLIC_FORBIDDEN, f"{url} as a logged-in seller")
 
 
 def test_xss_on_booking_and_seller_pages(client: TestClient, basic_service: str) -> None:
