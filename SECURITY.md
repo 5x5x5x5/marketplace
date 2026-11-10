@@ -448,11 +448,12 @@ app unless stated.
 - **The fake provider must never serve real traffic.** Selection is by
   environment (`STRIPE_SECRET_KEY`) with no runtime switch, so this is a
   deployment risk, not a code path a caller can toggle.
-- **Dependency advisories.** When this document was last revised, running
-  `pip-audit` against `uv.lock` reported published advisories against the
-  pinned versions of `starlette`, `anyio`, `urllib3`, `idna`, `certifi` and
-  `dnspython`, all with fixed versions available. Check the latest run of
-  the security workflow for the current state.
+- **Dependency advisories.** The first run of `pip-audit` against `uv.lock`
+  (2026-11) reported published advisories against the pinned versions of
+  `starlette`, `anyio`, `urllib3`, `idna`, `certifi` and `dnspython`. All
+  were bumped to fixed releases and the audit was clean afterwards. That is
+  a point-in-time result: the weekly security workflow is what keeps it
+  true, so check its latest run for the current state.
 
 ## Findings history
 
