@@ -157,7 +157,10 @@ def complete(
     try:
         jobs.complete_job(session, seller_id, job_id, provider)
     except DomainError as exc:
-        return redirect_after_error(session, _DASHBOARD, exc, {409: "complete_conflict"})
+        # 403 (not your job) answers like 404 (no such job), so a seller can't
+        # probe which job ids exist; accept, decline and edit already do.
+        notices = {403: "not_found", 409: "complete_conflict"}
+        return redirect_after_error(session, _DASHBOARD, exc, notices)
     return redirect(_DASHBOARD, "completed")
 
 

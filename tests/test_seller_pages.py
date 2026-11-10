@@ -192,6 +192,22 @@ def test_accept_then_complete(client: TestClient, basic_service: str, auth: Auth
     assert again.headers["location"] == "/seller?notice=complete_conflict"
 
 
+def test_complete_answers_alike_for_another_sellers_job_and_a_missing_one(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    owner = ready_seller(basic_service)
+    jid = book(client, auth, listing_id_of(owner))
+    assert post(owner, f"/seller/offers/{only_offer().id}/accept").status_code == 303
+    other = ready_seller(basic_service)
+    theirs = post(other, f"/seller/jobs/{jid}/complete")
+    missing = post(other, "/seller/jobs/00000000-0000-4000-8000-000000000000/complete")
+    assert theirs.status_code == missing.status_code == 303
+    assert theirs.headers["location"] == missing.headers["location"] == "/seller?notice=not_found"
+    with SessionLocal() as db:  # and nothing happened to the job
+        job = db.get(Job, UUID(jid))
+        assert job is not None and job.status is JobStatus.ACCEPTED
+
+
 def test_accept_with_a_pending_charge(
     client: TestClient, basic_service: str, auth: AuthFactory, fake_payments: Any
 ) -> None:
