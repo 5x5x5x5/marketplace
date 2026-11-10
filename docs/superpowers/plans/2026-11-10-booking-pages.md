@@ -245,4 +245,25 @@ fix wave; `gate.sh --pg`.
 
 ## Final-review amendments
 
-(Appended after the self-review against the reviewer checklists.)
+Self-review of the whole branch against `money-path-reviewer` and
+`asymmetry-reviewer` (the coordinator runs the reviewers independently):
+
+1. **Concurrent double confirm had only a sequential test.** The page's
+   fallback (a confirm that finds its quote gone redirects to the job made
+   from it) depends on the second submit blocking on the quote's row lock and
+   then reading the committed job. Added the Postgres-only
+   `test_concurrent_double_confirm_lands_both_on_one_booking` (threads, a
+   barrier, five attempts); without the fallback the loser lands on "no
+   longer available" and the test fails.
+2. **Try-out T1** (catalog cards had no link to the listing) fixed with
+   `test_catalog_cards_link_to_their_listing`; see
+   `docs/tryout-findings-2026-11-10.md`.
+3. **Accepted, not changed:** the booking page's 4 s status poll calls
+   `jobs.get_job_buyer`, which runs the lazy sweep, exactly as a JSON client
+   polling `GET /v1/jobs/{id}` does; the seller dashboard shows the newest 24
+   jobs without paging (offers and listings are complete).
+
+Deviations from the plan: the payment step's port change is one attribute,
+`browser_key`; `tests/test_capacity.py` patches the page size where it now
+lives; the CSRF allowlist check landed in two steps (Task 3 without, Task 8
+with, the "every allowlisted path exists" assertion).

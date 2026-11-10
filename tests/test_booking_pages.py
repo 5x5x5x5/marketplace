@@ -1,8 +1,10 @@
 """Buyer booking pages, driven through forms the way a browser would."""
 
 import re
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +15,7 @@ from marketplace.entities import Job, Payment, Quote
 from marketplace.models import JobStatus, PaymentStatus
 from marketplace.pages import is_page_post
 from marketplace.settings import settings
-from tests.conftest import AuthFactory, Header
+from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.page_helpers import csrf_from, csrf_of, page_user
 from tests.test_payments import onboard_and_avail
 from tests.webhook_helpers import post_event
@@ -339,3 +341,46 @@ def test_payment_script_is_served() -> None:
     assert r.status_code == 200
     assert "confirmPayment" in r.text
     assert "replaceState" in r.text  # strips Stripe's return parameters
+
+
+def _race_confirm(client: TestClient, qid: str, token: str, cookie: str) -> list[tuple[int, str]]:
+    """Submit the same confirm form twice at once, as a double click does."""
+    barrier = threading.Barrier(2)
+    results: list[tuple[int, str]] = []
+
+    def submit() -> None:
+        c = TestClient(client.app)
+        c.cookies.set("session_token", cookie)
+        barrier.wait()
+        r = c.post(f"/quotes/{qid}/book", data={"csrf_token": token}, follow_redirects=False)
+        results.append((r.status_code, r.headers.get("location", r.text[:200])))
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+
+@pytest.mark.skipif(not IS_POSTGRES, reason="true-parallel writes are only real on Postgres")
+def test_concurrent_double_confirm_lands_both_on_one_booking(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """Two confirm submits racing (a double click): one consumes the quote
+    under its row lock, the other blocks on it, finds it gone, and is sent to
+    the job the first created. Never two jobs, never an error page."""
+    for attempt in range(5):
+        lid = listed(client, auth, basic_service, title=f"Rides {attempt}")
+        buyer = page_user("buyer")
+        qid = quote_via_page(buyer, lid)
+        token = csrf_of(buyer, f"/quotes/{qid}")
+        results = _race_confirm(client, qid, token, buyer.cookies["session_token"])
+        assert [status for status, _ in results] == [303, 303], results
+        locations = [location for _, location in results]
+        assert len(locations) == 2
+        assert locations[0] == locations[1], locations
+        assert locations[0].startswith("/bookings/")
+        with SessionLocal() as s:
+            jobs = s.scalars(select(Job).where(Job.quote_id == UUID(qid))).all()
+            assert len(jobs) == 1
