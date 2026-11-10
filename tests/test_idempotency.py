@@ -283,3 +283,26 @@ def test_page_posts_are_exempt_by_router_membership() -> None:
         assert is_page_post(path), path
     for path in ("/v1/jobs", "/v1/quotes", "/", "/listings/x"):
         assert not is_page_post(path), path
+
+
+def test_page_post_with_an_idempotency_key_stores_no_record(
+    client: TestClient, basic_service: str
+) -> None:
+    """End to end: a cookie-session buyer posts a page form carrying the header.
+    The page answers 303, which a stored replay could not reproduce, so nothing
+    may be captured, however the exemption is decided."""
+    from tests.page_helpers import csrf_of
+    from tests.test_pages import _market  # pyright: ignore[reportPrivateUsage]
+
+    _, buyer, lid, _ = _market(basic_service, "Rides")
+    with SessionLocal() as s:  # the market setup itself posted no keyed request
+        assert s.scalar(select(func.count()).select_from(IdempotencyRecord)) == 0
+    r = buyer.post(
+        f"/listings/{lid}/quote",
+        data={"csrf_token": csrf_of(buyer, f"/listings/{lid}")},
+        headers={"Idempotency-Key": "page-quote-1"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and r.headers["location"].startswith("/quotes/")
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count()).select_from(IdempotencyRecord)) == 0
