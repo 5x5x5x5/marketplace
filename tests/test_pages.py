@@ -4,12 +4,15 @@ shared-logic extraction, invariant."""
 from typing import Any
 from uuid import uuid4
 
+import pytest
+from fastapi.templating import Jinja2Templates
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from marketplace.db import SessionLocal
-from marketplace.entities import Listing, Offer, SellerProfile
+from marketplace.entities import Listing, Offer, SellerProfile, User
 from marketplace.models import PaymentStatus
+from marketplace.pages.common import NavUser
 from marketplace.payments.fake import FakeProvider
 from tests.conftest import AuthFactory, Header
 from tests.page_helpers import csrf_of, page_user
@@ -245,6 +248,40 @@ def test_nav_shows_display_name_and_logout_when_cookied(client: TestClient) -> N
     assert "Log out" in html
     assert 'href="/signup"' not in html
     assert 'href="/login"' not in html
+
+
+def test_template_context_carries_no_email_or_password_hash(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """The nav gets the viewer's display name only: the User row (email,
+    password hash) must not be reachable from any template on a public page."""
+    _listed_seller(client, auth, basic_service)
+    viewer = page_user("buyer", name="Nav Viewer", email="viewer-secret@example.test")
+    with SessionLocal() as db:
+        row = db.scalar(select(User).where(User.email == "viewer-secret@example.test"))
+        assert row is not None
+        password_hash = row.password_hash
+    assert password_hash
+    seen: list[object] = []
+
+    def spy(self: Any, request: Any, name: str, context: Any = None, *a: Any, **kw: Any) -> Any:
+        seen.append(context)
+        return original(self, request, name, context, *a, **kw)
+
+    original = Jinja2Templates.TemplateResponse
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(Jinja2Templates, "TemplateResponse", spy)
+        r = viewer.get("/")
+    assert r.status_code == 200 and "Nav Viewer" in r.text
+    assert len(seen) == 1 and isinstance(seen[0], dict)
+    ctx: dict[str, Any] = seen[0]  # pyright: ignore[reportUnknownVariableType]
+    assert not any(isinstance(v, User) for v in ctx.values())
+    nav_user = ctx["current_user"]
+    assert isinstance(nav_user, NavUser)
+    assert set(nav_user.model_dump()) == {"display_name"}  # all a template can reach
+    flat = repr(ctx)
+    assert "viewer-secret@example.test" not in flat
+    assert password_hash not in flat
 
 
 def test_login_page_rejects_admin_role(client: TestClient, monkeypatch: Any) -> None:
