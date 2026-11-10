@@ -23,6 +23,7 @@ os.environ.setdefault("NOTIFY_DRAIN_SECONDS", "1")  # fast maintenance-loop tick
 # fake provider onto the live API.
 os.environ.setdefault("STRIPE_SECRET_KEY", "")
 os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
+os.environ.setdefault("ALLOW_UNSIGNED_WEBHOOKS", "true")  # fake-provider webhooks
 
 import email_validator
 from fastapi.testclient import TestClient

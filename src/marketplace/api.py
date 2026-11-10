@@ -13,6 +13,7 @@ models that omit the other side's number (`models.py`).
 """
 
 import asyncio
+import dataclasses
 import logging
 import math
 import time
@@ -23,7 +24,7 @@ from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -141,6 +142,8 @@ from .models import (
     UserModerationOut,
     UserRole,
     UserStatus,
+    WebhookEventOut,
+    WebhookEventStatus,
     to_money,
 )
 from .observability import BodySizeLimitMiddleware, RequestIdMiddleware, configure_logging
@@ -325,7 +328,8 @@ def _sweep_expired_auth(session: Session) -> None:
 
 def _sweep_retention(session: Session) -> None:
     """Bounded tables: reap replay/dedup rows and delivered mail past their
-    windows. PENDING outbox rows are immortal — the outbox contract holds."""
+    windows. PENDING outbox rows are immortal — the outbox contract holds —
+    and so are FAILED webhook rows: they are still owed a retry."""
     now = _now()
     session.execute(
         delete(IdempotencyRecord).where(
@@ -334,7 +338,8 @@ def _sweep_retention(session: Session) -> None:
     )
     session.execute(
         delete(WebhookEvent).where(
-            WebhookEvent.received_at < now - timedelta(days=settings.retention_webhooks_days)
+            WebhookEvent.status != WebhookEventStatus.FAILED,
+            WebhookEvent.received_at < now - timedelta(days=settings.retention_webhooks_days),
         )
     )
     session.execute(
@@ -393,6 +398,10 @@ async def _maintenance_loop() -> None:
                 await asyncio.to_thread(_run_sweep_once)
             except Exception:
                 logger.exception("sweep tick failed")
+            try:
+                await asyncio.to_thread(_run_webhook_retry_once)
+            except Exception:
+                logger.exception("webhook retry tick failed")
 
 
 def _paginate[T](session: Session, stmt: Select[tuple[T]], limit: int, offset: int) -> list[T]:
@@ -2151,12 +2160,87 @@ def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict
 payments_router = APIRouter(prefix="/v1/payments", tags=["payments"], route_class=CommitRoute)
 
 
+def _applied_elsewhere(session: Session, event: PaymentEvent) -> bool:
+    """Was an event of this kind for this same provider object already applied
+    under a different event id? Only meaningful while that ledger row is
+    inside the retention window, so money-moving branches pair it with a
+    permanent marker of their own."""
+    return (
+        session.scalar(
+            select(WebhookEvent.id)
+            .where(
+                WebhookEvent.kind == event.kind,
+                WebhookEvent.object_id == event.object_id,
+                WebhookEvent.provider_event_id != event.event_id,
+                WebhookEvent.status == WebhookEventStatus.APPLIED,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _superseded(session: Session, event: PaymentEvent) -> bool:
+    """Has a NEWER event of this kind for this object (by arrival) already
+    applied? A retried event can land long after later events for the same
+    object; for last-value-wins state it must not overwrite them."""
+    received = session.scalar(
+        select(WebhookEvent.received_at).where(WebhookEvent.provider_event_id == event.event_id)
+    )
+    if received is None:
+        return False
+    return (
+        session.scalar(
+            select(WebhookEvent.id)
+            .where(
+                WebhookEvent.kind == event.kind,
+                WebhookEvent.object_id == event.object_id,
+                WebhookEvent.provider_event_id != event.event_id,
+                WebhookEvent.status == WebhookEventStatus.APPLIED,
+                WebhookEvent.received_at > received,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _record_chargeback(
+    session: Session, payment: Payment, existing: Dispute | None, event: PaymentEvent
+) -> Dispute:
+    """One dispute per job: create the provider-sourced row, or annotate the
+    existing (buyer-opened, or earlier-chargeback) one."""
+    if existing is not None:
+        existing.provider_dispute_id = event.object_id
+        return existing
+    dispute = Dispute(
+        job_id=payment.job_id,
+        source=DisputeSource.PROVIDER,
+        buyer_id=payment.buyer_id,
+        reason="provider chargeback",
+        provider_dispute_id=event.object_id,
+    )
+    session.add(dispute)
+    session.flush()
+    return dispute
+
+
 def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
     """Route a normalized provider event to the row it affects.
 
     Unknown kinds and unknown ids are recorded (dedup) and ignored — providers
-    emit dozens of event types this app doesn't act on."""
+    emit dozens of event types this app doesn't act on.
+
+    The outbox retry job re-runs this for events whose first apply failed, so
+    every branch must be safe to apply twice (the same economic event under
+    another event id, or a replay) and safe to apply late (after the job or
+    payment moved on, and after later events for the same object applied).
+    Each branch says what makes it so."""
     if event.kind in ("payment_succeeded", "payment_failed"):
+        # Replay/late safety: the payment status lattice. PENDING -> FAILED ->
+        # SUCCEEDED is allowed (decline then retry on the same PI); SUCCEEDED
+        # is never undone by a failure; REFUNDED is terminal; a success after
+        # a void never resurrects a dead job.
         payment = session.scalar(
             select(Payment).where(Payment.provider_payment_id == event.object_id).with_for_update()
         )
@@ -2182,6 +2266,10 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         elif payment.status is not PaymentStatus.SUCCEEDED:
             payment.status = PaymentStatus.FAILED  # late failures never undo a success
     elif event.kind == "account_updated":
+        # Last value wins, by arrival: a retried older update must not
+        # overwrite a newer one that already applied.
+        if _superseded(session, event):
+            return
         seller = session.scalar(
             select(SellerProfile).where(SellerProfile.provider_account_id == event.object_id)
         )
@@ -2193,19 +2281,31 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
         if payout is not None:
             if event.kind == "transfer_failed":
-                payout.status = PayoutStatus.FAILED
-                notifications.enqueue_admins(
-                    session,
-                    EventKind.PAYOUT_FAILED_ADMIN,
-                    {
-                        "job_id": str(payout.job_id),
-                        "payout_id": str(payout.id),
-                        "seller_id": payout.seller_id,
-                        "amount": str(payout.amount),
-                    },
-                )
-            else:
+                # A failed/reversed transfer is terminal for that transfer id,
+                # so applying it late is truthful; notify only on the
+                # transition so a replay doesn't re-page admins.
+                if payout.status is not PayoutStatus.FAILED:
+                    payout.status = PayoutStatus.FAILED
+                    notifications.enqueue_admins(
+                        session,
+                        EventKind.PAYOUT_FAILED_ADMIN,
+                        {
+                            "job_id": str(payout.job_id),
+                            "payout_id": str(payout.id),
+                            "seller_id": payout.seller_id,
+                            "amount": str(payout.amount),
+                        },
+                    )
+            elif payout.status is PayoutStatus.PENDING:
                 payout.status = PayoutStatus.PAID
+            elif payout.status is PayoutStatus.FAILED:
+                # Late success for a transfer that has since failed/reversed:
+                # the money came back, so PAID would be a lie.
+                logger.warning(
+                    "ignoring late transfer_paid for failed payout %s (transfer %s)",
+                    payout.id,
+                    event.object_id,
+                )
     elif event.kind == "chargeback_opened":
         if event.related_id is None:
             logger.warning(
@@ -2217,21 +2317,16 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
         if payment is None:
             return  # unknown charge: recorded by dedup, nothing to apply
-        dispute = session.scalar(
+        existing = session.scalar(
             select(Dispute).where(Dispute.job_id == payment.job_id).with_for_update()
         )
-        if dispute is None:
-            dispute = Dispute(
-                job_id=payment.job_id,
-                source=DisputeSource.PROVIDER,
-                buyer_id=payment.buyer_id,
-                reason="provider chargeback",
-                provider_dispute_id=event.object_id,
-            )
-            session.add(dispute)
-            session.flush()
-        else:
-            dispute.provider_dispute_id = event.object_id  # annotate, don't duplicate
+        if existing is not None and (
+            existing.provider_dispute_id == event.object_id or _applied_elsewhere(session, event)
+        ):
+            # Already recorded (by an earlier apply, or by a chargeback_closed
+            # that arrived first): re-annotating or re-notifying is the replay.
+            return
+        dispute = _record_chargeback(session, payment, existing, event)
         amount = to_money(Decimal(event.amount_minor or 0) / 100)
         notifications.enqueue_admins(
             session,
@@ -2243,15 +2338,47 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
             select(Dispute).where(Dispute.provider_dispute_id == event.object_id).with_for_update()
         )
         if dispute is None:
-            return
+            # The close can be applied before its open (the open is still
+            # waiting on a retry, or never arrived): map it through the
+            # disputed payment the same way the open would, rather than
+            # dropping the loss on the floor.
+            payment = (
+                session.scalar(
+                    select(Payment).where(Payment.provider_payment_id == event.related_id)
+                )
+                if event.related_id is not None
+                else None
+            )
+            if payment is None:
+                return
+            existing = session.scalar(
+                select(Dispute).where(Dispute.job_id == payment.job_id).with_for_update()
+            )
+            dispute = _record_chargeback(session, payment, existing, event)
         won = event.outcome == "won"
+        amount = to_money(Decimal(event.amount_minor or 0) / 100)
+        # Replay marker: a lost close always books a CHARGEBACK_FEE row stamped
+        # with this dispute object's id (permanent, survives retention); a won
+        # close moves no money, so the webhook ledger is its marker.
+        already_booked = (
+            not won
+            and session.scalar(
+                select(Adjustment.id).where(
+                    Adjustment.dispute_id == dispute.id,
+                    Adjustment.kind == AdjustmentKind.CHARGEBACK_FEE,
+                    Adjustment.provider_ref == event.object_id,
+                )
+            )
+            is not None
+        )
+        if already_booked or _applied_elsewhere(session, event):
+            return
         if dispute.status is not DisputeStatus.RESOLVED:
             # The status field records arbitration when an admin has ruled
             # (RESOLVED is preserved); otherwise the latest provider outcome
             # wins — repeat chargebacks on one job re-adjudicate the same row.
             dispute.status = DisputeStatus.CHARGEBACK_WON if won else DisputeStatus.CHARGEBACK_LOST
             dispute.resolved_at = _now()
-        amount = to_money(Decimal(event.amount_minor or 0) / 100)
         if not won:
             if amount > 0:  # a zero/absent amount_minor books no $0.00 loss row
                 session.add(
@@ -2269,6 +2396,7 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
                     dispute_id=dispute.id,
                     kind=AdjustmentKind.CHARGEBACK_FEE,
                     amount=to_money(settings.chargeback_fee_usd),
+                    provider_ref=event.object_id,
                 )
             )
         notifications.enqueue_admins(
@@ -2282,24 +2410,228 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
 
 
-def _process_webhook(event: PaymentEvent) -> dict[str, str]:
-    """Dedup + apply on a worker thread — sync Session stays off the loop."""
-    with SessionLocal() as session:
-        duplicate = session.scalar(
-            select(WebhookEvent).where(WebhookEvent.provider_event_id == event.event_id)
+# Backoff: webhook_retry_base_seconds * 5**(attempts-1) -> 1m, 5m, 25m, ...
+_WEBHOOK_BACKOFF_FACTOR = 5
+_WEBHOOK_RETRY_BATCH = 100  # bounds how long one retry transaction holds its locks
+
+
+def _payment_event_payload(event: PaymentEvent) -> dict[str, Any]:
+    """JSON-safe snapshot for replay: `PaymentEvent` is a flat frozen
+    dataclass of scalars, so this round-trips through `PaymentEvent(**p)`.
+    The raw body and signature are never captured at all."""
+    return dataclasses.asdict(event)
+
+
+def _error_summary(exc: Exception) -> str:
+    """Exception type plus the first line of its message. Driver errors put
+    the SQL statement and its bound parameters on later lines; those stay in
+    the server log (logger.exception) and out of the row and admin mail."""
+    lines = str(exc).strip().splitlines()
+    return f"{type(exc).__name__}: {lines[0] if lines else ''}"[:512]
+
+
+def _record_webhook_failure(session: Session, row: WebhookEvent, exc: Exception) -> None:
+    """Advance a FAILED row's backoff, or dead-letter it at the attempt cap.
+
+    An APPLIED row is left alone: the event succeeded in a concurrent
+    delivery and this failure was the race, not the event. A DEAD_LETTER row
+    is terminal and admins were already told."""
+    if row.status is not WebhookEventStatus.FAILED:
+        return
+    row.attempts += 1
+    row.last_error = _error_summary(exc)
+    if row.attempts >= settings.webhook_max_attempts:
+        row.status = WebhookEventStatus.DEAD_LETTER
+        row.next_attempt_at = None
+        notifications.enqueue_admins(
+            session,
+            EventKind.WEBHOOK_DEAD_LETTER_ADMIN,
+            {
+                "webhook_id": str(row.id),
+                "provider_event_id": row.provider_event_id,
+                "kind": row.kind,
+                "last_error": row.last_error,
+            },
         )
-        if duplicate is not None:
-            return {"status": "duplicate"}
-        session.add(WebhookEvent(provider_event_id=event.event_id, kind=event.kind))
-        _apply_payment_event(session, event)
+    else:
+        row.next_attempt_at = _now() + timedelta(
+            seconds=settings.webhook_retry_base_seconds
+            * _WEBHOOK_BACKOFF_FACTOR ** (row.attempts - 1)
+        )
+
+
+def _persist_failed_webhook(event: PaymentEvent, exc: Exception) -> None:
+    """Record a first-delivery failure in a FRESH session: the delivering
+    session is poisoned by the exception, and its insert of this row rolled
+    back with everything else.
+
+    A concurrent delivery of the same event may own the row by now: if it
+    applied, the row is APPLIED and stays so; if it is mid-insert, our insert
+    loses the unique constraint and we re-select its row instead."""
+    with SessionLocal() as session:
+        row = session.scalar(
+            select(WebhookEvent)
+            .where(WebhookEvent.provider_event_id == event.event_id)
+            .with_for_update()
+        )
+        if row is None:
+            row = WebhookEvent(
+                id=uuid4(),  # set now: the dead-letter notice may need it pre-flush
+                provider_event_id=event.event_id,
+                kind=event.kind,
+                object_id=event.object_id,
+                status=WebhookEventStatus.FAILED,
+                attempts=0,
+                payload=_payment_event_payload(event),
+            )
+            session.add(row)
+            _record_webhook_failure(session, row, exc)
+            try:
+                session.commit()
+                return
+            except IntegrityError:
+                session.rollback()
+                # One re-select, not a loop: the row exists once the winner's
+                # insert committed, which is what raised this.
+                row = session.scalar(
+                    select(WebhookEvent)
+                    .where(WebhookEvent.provider_event_id == event.event_id)
+                    .with_for_update()
+                )
+                assert row is not None
+        _record_webhook_failure(session, row, exc)
         session.commit()
+
+
+def _webhook_seen(session: Session, event_id: str) -> bool:
+    return (
+        session.scalar(select(WebhookEvent.id).where(WebhookEvent.provider_event_id == event_id))
+        is not None
+    )
+
+
+def _process_webhook(event: PaymentEvent) -> dict[str, str]:
+    """Dedup + apply on a worker thread — sync Session stays off the loop.
+
+    Any existing row for the event id, whatever its status, makes this a
+    `duplicate`: a FAILED event's recovery belongs to the retry job, never to
+    a redelivery racing it. The dedup row is flushed before the apply so two
+    concurrent first deliveries meet at the unique constraint: the loser
+    waits for the winner and answers `duplicate`, never a 500.
+
+    A handler failure never 500s the provider (which would only invite
+    redelivery storms): the row is persisted FAILED with backoff fields and
+    the answer is 200 `deferred`."""
+    with SessionLocal() as session:
+        if _webhook_seen(session, event.event_id):
+            return {"status": "duplicate"}
+        session.add(
+            WebhookEvent(
+                provider_event_id=event.event_id,
+                kind=event.kind,
+                object_id=event.object_id,
+                status=WebhookEventStatus.APPLIED,
+                attempts=0,
+                payload=_payment_event_payload(event),
+            )
+        )
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            return {"status": "duplicate"}
+        try:
+            _apply_payment_event(session, event)
+            session.commit()
+        except Exception as exc:
+            logger.exception(
+                "webhook %s (%s) failed to apply; deferred to the retry job",
+                event.event_id,
+                event.kind,
+            )
+            session.rollback()
+            _persist_failed_webhook(event, exc)
+            return {"status": "deferred"}
     return {"status": "ok"}
+
+
+def _run_webhook_retry_once() -> None:
+    """One outbox retry pass on a worker thread (the maintenance loop's sweep
+    cadence). Claims due FAILED rows with SKIP LOCKED so two app instances
+    never retry the same row, and re-applies each stored event through the
+    same `_apply_payment_event` under its own savepoint, so one row's failure
+    rolls back only that row's effects."""
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(WebhookEvent)
+            .where(
+                WebhookEvent.status == WebhookEventStatus.FAILED,
+                WebhookEvent.next_attempt_at <= _now(),
+            )
+            .order_by(WebhookEvent.next_attempt_at)
+            .limit(_WEBHOOK_RETRY_BATCH)
+            .with_for_update(skip_locked=True)
+        ).all()
+        for row in rows:
+            try:
+                with session.begin_nested():
+                    if row.payload is None:
+                        raise ValueError("no stored payload to replay")
+                    _apply_payment_event(session, PaymentEvent(**row.payload))
+            except Exception as exc:
+                logger.exception(
+                    "webhook retry failed for %s (%s)", row.provider_event_id, row.kind
+                )
+                _record_webhook_failure(session, row, exc)
+                continue
+            row.status = WebhookEventStatus.APPLIED
+            row.next_attempt_at = None
+        session.commit()
+
+
+@admin_router.get("/webhooks", response_model=list[WebhookEventOut])
+def list_webhooks(
+    session: SessionDep,
+    status: WebhookEventStatus | None = None,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[WebhookEvent]:
+    stmt = select(WebhookEvent)
+    if status is not None:
+        stmt = stmt.where(WebhookEvent.status == status)
+    stmt = stmt.order_by(WebhookEvent.received_at.desc(), WebhookEvent.id.desc())
+    return _paginate(session, stmt, limit, offset)
+
+
+@admin_router.post("/webhooks/{webhook_id}/retry", response_model=WebhookEventOut)
+def retry_webhook(webhook_id: UUID, session: SessionDep, admin_id: AdminId) -> WebhookEvent:
+    """Re-queue a FAILED or DEAD_LETTER event for the retry job: attempts
+    reset, due now. The job applies it on its next tick; this endpoint never
+    applies it inline, so there is one apply path."""
+    row = session.get(WebhookEvent, webhook_id, with_for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="webhook event not found")
+    if row.status is WebhookEventStatus.APPLIED:
+        raise HTTPException(status_code=409, detail="webhook event already applied")
+    if row.payload is None:
+        raise HTTPException(status_code=409, detail="webhook event has no stored payload")
+    row.status = WebhookEventStatus.FAILED
+    row.attempts = 0
+    row.next_attempt_at = _now()
+    audit(session, admin_id, "retry_webhook", str(webhook_id), {})
+    session.flush()
+    return row
 
 
 @payments_router.post("/webhook")
 async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str, str]:
     """Provider event sink. Unauthenticated by design — authenticity comes from
-    the provider's signature, verified in parse_webhook. Duplicates no-op."""
+    the provider's signature, verified in parse_webhook. Duplicates no-op.
+
+    The fake provider verifies nothing, so without Stripe the route does not
+    exist (404) unless `settings.allow_unsigned_webhooks` is on."""
+    if provider.name == "fake" and not settings.allow_unsigned_webhooks:
+        raise HTTPException(status_code=404, detail="Not Found")
     payload = await request.body()
     try:
         event = provider.parse_webhook(payload, request.headers.get("stripe-signature"))

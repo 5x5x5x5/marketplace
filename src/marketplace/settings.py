@@ -7,6 +7,7 @@ in the test suite (no Docker needed). SQLAlchemy keeps the schema portable.
 from decimal import Decimal
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -40,9 +41,18 @@ class Settings(BaseSettings):
     # in-memory fake (dev/tests, no account needed).
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # The fake provider's webhooks are unsigned JSON with guessable ids, so
+    # POST /v1/payments/webhook 404s in fake mode unless this is on. Dev,
+    # tests and demos only: refused at startup alongside a Stripe key.
+    allow_unsigned_webhooks: bool = False
     currency: str = "usd"  # ponytail: single currency; multi-currency is a fork concern
     payment_ttl_minutes: int = 30  # AWAITING_PAYMENT older than this expires on sweep
     onboarding_return_url: str = "http://localhost:8000/onboarded"
+    # Webhook outbox: a handler failure is persisted FAILED and retried by the
+    # maintenance loop after webhook_retry_base_seconds * 5**(attempts-1); at
+    # webhook_max_attempts the event is dead-lettered and admins notified.
+    webhook_retry_base_seconds: int = 60
+    webhook_max_attempts: int = 5
 
     # Auth. Sessions are DB-backed and revocable; the admin account is seeded
     # from these two settings at startup (empty -> no admin, logged).
@@ -88,6 +98,16 @@ class Settings(BaseSettings):
     trusted_hosts: list[str] = ["*"]
     cors_origins: list[str] = []
     max_body_bytes: int = 1_048_576
+
+    @model_validator(mode="after")
+    def _webhooks_are_verifiable(self) -> "Settings":
+        if self.stripe_secret_key and not self.stripe_webhook_secret:
+            # Every real webhook would fail its signature check: charges
+            # would be taken and never settle.
+            raise ValueError("STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not")
+        if self.stripe_secret_key and self.allow_unsigned_webhooks:
+            raise ValueError("ALLOW_UNSIGNED_WEBHOOKS must be off when STRIPE_SECRET_KEY is set")
+        return self
 
 
 settings = Settings()
