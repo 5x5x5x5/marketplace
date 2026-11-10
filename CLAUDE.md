@@ -1,35 +1,32 @@
-# market-platform — browse marketplace on the platform-margin template
+# marketplace — two-sided marketplace with platform margin
 
 FastAPI · Pydantic v2 · SQLAlchemy 2.0 + Alembic · Postgres (SQLite for
 local/tests). Buyer-facing price and seller payout are computed independently by
 pluggable pricing pipelines; the platform keeps the spread on every matched pair.
 
-This is a **private fork** (`github.com/5x5x5x5/market-platform`, remote
-`origin`) of the public feature-complete template
-(`github.com/5x5x5x5/marketplace`, remote `upstream`). The fork is
-specializing the template into a **browse marketplace**: a public catalog of
-seller listings that buyers browse before booking, for a browse-family
-vertical with a few big sellers per market (the specific vertical is TBD —
-`rideshare`/`cleaning` in the seed/demo data are placeholders, not the
-committed vertical). Phase 1 (browse core: listings, public catalog, pinned
-chosen-seller booking — branch `browse-core`) and Phase 2 (pages foundation:
-server-rendered catalog/listing/seller pages plus cookie-backed signup/login,
-this branch, `pages-foundation`) are both done; see `ROADMAP.md`'s fork
-section for phase 3. The template's own dispatch mode (quote →
-platform-matched offer, no listing) still works underneath and is exercised
-by demo acts 1-8; browse/pinned booking is additive, not a replacement.
+Two booking modes share one job lifecycle. **Dispatch**: a buyer asks for a
+quote on a service type and the platform matches a seller. **Browse**: sellers
+publish listings in a public catalog, a buyer picks one, and the job is pinned
+to that seller. Server-rendered pages (`pages.py`) sit over the same catalog
+and session machinery as the JSON API. `rideshare`/`cleaning` in the seed and
+demo data are placeholders, not a committed vertical.
 
-The pivot from `auction` → `marketplace` happened on 2026-04-23, upstream. The
-auction work is preserved at github.com/5x5x5x5/auction, untouched.
+How the repo is meant to be worked on (skills, reviewers, hooks) is in
+`AGENTS.md` and `docs/agent-setup.md`. This file is the source of truth for
+invariants.
 
 ## Commands
 
 - `uv sync` — install
 - `uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest`
+  — the gate (`just gate` wraps exactly this; `.claude/skills/gate/gate.sh --pg`
+  adds the Postgres suite, the migration round trip and a model-drift check)
 - `uv run python scripts/demo.py` — full lifecycle, headless (SQLite)
 - `uv run python scripts/seed.py` — seed service types + demo users, print bearer tokens for /docs
-- `uv run uvicorn marketplace.api:app --reload` — API (SQLite by default)
+- `uv run uvicorn marketplace.api:app --reload` — API (SQLite by default;
+  `ALLOW_UNSIGNED_WEBHOOKS=true` to post fake-provider webhooks)
 - Postgres: `docker compose up -d db && uv run alembic upgrade head` (see `.env.example`)
+- `bash loadtest/run_baseline.sh` — capacity harness (`uv sync --group loadtest` first; see `loadtest/README.md`)
 
 ## Non-negotiables
 
@@ -152,15 +149,45 @@ auction work is preserved at github.com/5x5x5x5/auction, untouched.
 - **`AWAITING_PAYMENT` holds a capacity slot.** A job parked there while a charge
   settles still counts against the seller's capacity — it is not free
   availability. Don't change `repo.active_job_count` to exclude it.
-- **Webhook handling stays dedup-idempotent.** Every inbound event is recorded
-  in `WebhookEvent` keyed on the provider's event id before it's applied; a
-  replay must no-op, never re-apply.
+- **Webhook handling stays dedup-idempotent, and failures go to an outbox.**
+  Every inbound event is recorded in `WebhookEvent` keyed on the provider's
+  event id before it's applied. ANY existing row (APPLIED, FAILED or
+  DEAD_LETTER) makes a redelivery a `duplicate` no-op: a FAILED event's
+  recovery belongs to the retry job, never to a redelivery racing it. The
+  dedup row is flushed before the apply, so two concurrent first deliveries
+  meet at the unique constraint and the loser answers `duplicate`, never a
+  500. A handler failure is persisted FAILED in a fresh session (attempts,
+  one-line `last_error`, exponential `next_attempt_at`) and the endpoint
+  answers 200 `{"status": "deferred"}`. `_run_webhook_retry_once`
+  (maintenance loop) claims due rows with `SKIP LOCKED` and re-applies each
+  under its own savepoint until APPLIED or `settings.webhook_max_attempts`;
+  at the cap the row goes DEAD_LETTER and admins get the unmutable
+  `WEBHOOK_DEAD_LETTER_ADMIN`. Operators list rows via
+  `GET /v1/admin/webhooks` and re-queue via
+  `POST /v1/admin/webhooks/{id}/retry`. `payload` is the parsed
+  `PaymentEvent` fields only, never the raw body or signature.
+- **Every `_apply_payment_event` branch is safe to apply twice and safe to
+  apply late.** The retry job re-runs events after the job, payment or
+  dispute has moved on, and after later events for the same object applied.
+  A new branch needs a replay marker (a status lattice, a transition guard,
+  or a durable row) plus a twice-test and a late-test in
+  `tests/test_webhook_replay.py`. Money-moving markers must be permanent
+  rows (for example the `CHARGEBACK_FEE` adjustment's `provider_ref`), not
+  the reapable webhook ledger.
+- **The unsigned webhook is closed by default.** Without `STRIPE_SECRET_KEY`,
+  `POST /v1/payments/webhook` 404s unless `ALLOW_UNSIGNED_WEBHOOKS=true`
+  (dev, tests and demo only; `tests/conftest.py` and `scripts/demo.py` set
+  it). Startup refuses a Stripe key without `STRIPE_WEBHOOK_SECRET`, and
+  refuses `ALLOW_UNSIGNED_WEBHOOKS` alongside a Stripe key.
 - **Notifications are enqueue-only inside the domain transaction.** Write them
   via `notifications.enqueue`/`enqueue_admins` in the same transaction as the
   state change — never call the mail port from an endpoint. Sends happen only
   in `notifications.drain_once` (the maintenance loop / admin drain). Payloads
   are role-safe snapshots at enqueue time: seller payloads never carry
-  `buyer_price`, buyer payloads never carry `seller_payout`.
+  `buyer_price`, buyer payloads never carry `seller_payout`. The one
+  exception is `auth.py`'s verification and password-reset mail, sent
+  directly: those carry a raw single-use token, and the outbox would store
+  it in plaintext, which the sha256-only rule forbids.
 - **Access logs never carry headers, bodies, or query strings.** The access
   logger (`observability.py`) logs method/path/status/duration/request-id
   only; `path` is logged without its query component. Bearer tokens live in
@@ -168,15 +195,47 @@ auction work is preserved at github.com/5x5x5x5/auction, untouched.
   query string) — never add a field to the access log line without checking
   it can't carry one of those.
 - **PENDING outbox rows are never reaped.** The retention sweep ages out
-  `idempotency_keys`/`webhook_events`/terminal SENT-or-FAILED
-  `notifications`, but a `PENDING` notification is exempt at every age —
-  it still needs to send. Don't widen the notifications retention delete
-  to include `PENDING`.
-- **Webhook DB work stays off the event loop.** `_process_webhook` runs
-  synchronous session work via `asyncio.to_thread` (`api.py`), not inline
-  in the async handler — a slow/blocked DB call must never stall the event
-  loop for every other in-flight request. Keep new webhook-handling code in
-  that thread-offloaded function, not back on the coroutine.
+  `idempotency_keys`, terminal (APPLIED or DEAD_LETTER) `webhook_events` and
+  terminal SENT-or-FAILED `notifications`. A `PENDING` notification is
+  exempt at every age because it still needs to send, and a FAILED
+  `webhook_events` row is exempt the same way: it is still owed a retry.
+  Don't widen the notifications delete to include `PENDING`, or the webhook
+  delete to include `FAILED`.
+- **Sync DB work stays off the event loop.** `_process_webhook` and the
+  maintenance jobs run session work via `asyncio.to_thread` (`api.py`), and
+  `IdempotencyMiddleware` uses `run_in_threadpool`; nothing calls a session
+  inline in an `async def`. A slow or blocked DB call must never stall every
+  other in-flight request.
+- **The connection pool is sized against the threadpool, and exhaustion sheds
+  load.** `db.engine_options` builds the engine from `DB_POOL_SIZE`/
+  `DB_MAX_OVERFLOW`/`DB_POOL_TIMEOUT_SECONDS` (defaults 10 + 30 = 40, one per
+  default Starlette threadpool token, 5 s). A checkout timeout becomes a 503
+  with `Retry-After` in `RequestIdMiddleware`, never a 500, and is never
+  stored for idempotent replay. `DB_POOL=null` (NullPool) is for deployments
+  behind an external pooler; SQLite ignores all of these. If you raise the
+  threadpool, raise the pool with it; replicas × (size + overflow) must fit
+  Postgres `max_connections`.
+- **List endpoints paginate in SQL.** `api._paginate(session, stmt, limit,
+  offset)` takes a `Select` with a total order (a unique tie-breaker, usually
+  `id`). Never fetch all rows and slice in Python. Catalog pages go through
+  `catalog.visible_listings_page`.
+- **Read-path sweeps do only what correctness needs.** `_sweep` (offer expiry
+  with re-match, stale-payment release) stays lazy on reads. Deletes of rows
+  nothing can observe (expired quotes, sessions, email tokens, retention)
+  live in `_housekeeping`, run only by the maintenance loop and
+  `POST /v1/admin/jobs/sweep`. The offer-expiry sweep claims offers
+  `FOR UPDATE SKIP LOCKED` (Offer → Job, same order as accept and decline),
+  so concurrent sweeps never re-match one offer twice.
+- **The maintenance loop runs where `MAINTENANCE_ENABLED` is true** (default).
+  With replicas, enable it on exactly one instance. Every job in it is safe
+  to run concurrently, but N runners do N times the work.
+- **Candidate loading is batched.** `repo.eligible_candidates` uses a fixed
+  number of queries regardless of seller count; don't reintroduce per-seller
+  queries on the quote or re-match paths.
+- **Statically checkable rules are checked.** `tests/test_architecture.py`
+  and `.semgrep/rules/` encode the rules here that a machine can verify; each
+  failure names the rule and the fix. When you add a rule to this list, add
+  its check if one is expressible.
 - **Listings never carry prices.** Platform-set, independently-computed
   buyer price and seller payout are the differentiator (see the top of this
   file) — a `Listing` (`entities.py`) is title/description/photos/service
@@ -194,7 +253,7 @@ auction work is preserved at github.com/5x5x5x5/auction, untouched.
   `/v1/admin/listings/{id}/hide|unhide`) and never let an admin endpoint
   touch `active` (that's the seller's own on/off toggle,
   `PUT /v1/seller/listings/{id}`). Catalog visibility requires both
-  `active=true` and `hidden=false` (`api._listing_bookable`) — the two flags
+  `active=true` and `hidden=false` (`catalog.listing_bookable`) — the two flags
   are independent, not a shared boolean.
 - **Pinned jobs never re-match to another seller.** A quote created with
   `listing_id` stamps `pinned_seller_id` on both the quote and the resulting
@@ -230,15 +289,17 @@ auction work is preserved at github.com/5x5x5x5/auction, untouched.
   app imports). `UTCDateTime` (`entities.py`) keeps datetimes tz-aware on SQLite,
   which otherwise drops tzinfo. Migrations render it as plain `DateTime` (the tz
   coercion is app-side), so `migrations/versions/*` don't import app internals.
-- Quotes are single-use and swept on write (past-TTL rows deleted on the next
-  quote). `POST /jobs` deletes the quote under `FOR UPDATE`.
+- Quotes are single-use; past-TTL rows are reaped by housekeeping
+  (`ix_quotes_expires_at`), and the `MAX_ACTIVE_QUOTES` cap counts unexpired
+  rows only. `POST /jobs` deletes the quote under `FOR UPDATE`.
 - Offers are first-class rows. Re-match excludes any seller who already had an
   offer for that job (`repo.sellers_seen_for_job`), so decline/expiry walk the
   candidate list instead of looping. Offer expiry is a lazy sweep on reads plus
   `POST /v1/admin/jobs/sweep`.
 - Seller **capacity** = accepted-but-not-completed jobs `< SellerProfile.capacity`,
   checked under a row lock on accept. Availability is not removed on accept.
-- `live_demand` = PENDING + ACCEPTED jobs for the service type + 1; `live_supply`
+- `live_demand` = PENDING + AWAITING_PAYMENT + ACCEPTED jobs for the service
+  type + 1; `live_supply`
   = available sellers at quote time.
 - The fake payment provider (`payments/fake.py`) is a module singleton
   (`payments.fake_provider`), so app code and test-scripted state see the same
@@ -276,16 +337,11 @@ auction work is preserved at github.com/5x5x5x5/auction, untouched.
 
 ## Explicit non-goals (fork work, not template)
 
-The template is feature-complete (10 migrations; every phase — payments,
-real-user auth, notifications + scheduler, disputes/chargebacks,
-seller→buyer reviews, moderation, notification preferences, fee-aware
-margin, observability & ops — ships; the full record lives in `ROADMAP.md`
-and the invariants above). This fork's browse-core phase adds an 11th
-(listings; see `ROADMAP.md`'s fork section) — an expected, ongoing count as
-fork phases land, not a template regression. Deliberately left to a fork, by
-maintainer
-decision (2026-07-15): notification digests and push/SMS channels, gateway
-rate-limiting, admin RBAC (one shared admin role here), OAuth/social login,
-and automatic abuse signals/limits (report-count thresholds, auto-suspend —
-fork-specific heuristics, not a generic default). Seller bidding stays out
-entirely: this is a managed marketplace, not an auction.
+Deliberately left to a fork, by maintainer decision (2026-07-15):
+notification digests and push/SMS channels, gateway rate-limiting (the
+argon2 surfaces especially: put a limit in front of signup, login and
+password reset), admin RBAC (one shared admin role here), OAuth/social
+login, and automatic abuse signals/limits (report-count thresholds,
+auto-suspend: fork-specific heuristics, not a generic default). Seller
+bidding stays out entirely: this is a managed marketplace, not an auction.
+The record of what shipped, phase by phase, is `ROADMAP.md`.
