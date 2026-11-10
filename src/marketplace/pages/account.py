@@ -12,9 +12,25 @@ from pydantic import ValidationError
 
 from .. import auth
 from ..db import CommitRoute
-from ..models import LoginRequest, SignupRequest
+from ..models import (
+    LoginRequest,
+    ResetConfirmRequest,
+    ResetRequest,
+    SignupRequest,
+    UserRole,
+    VerifyRequest,
+)
 from ..settings import settings
-from .common import SESSION_COOKIE, MailDep, OptionalClaims, SessionDep, nav_context, render
+from .common import (
+    SESSION_COOKIE,
+    MailDep,
+    OptionalClaims,
+    ParticipantPage,
+    SessionDep,
+    nav_context,
+    redirect,
+    render,
+)
 from .csrf import CSRF
 
 router = APIRouter(route_class=CommitRoute, tags=["pages"])
@@ -135,5 +151,159 @@ def logout_submit(
         with contextlib.suppress(HTTPException):
             auth.logout(session, credentials)
     response = RedirectResponse(url="/", status_code=303)
+    clear_session_cookie(response)
+    return response
+
+
+# ---------- verify email and password reset ----------
+#
+# The mailed links carry a raw single-use token in the query string. A GET
+# never consumes it (mail scanners prefetch links): it renders a form that
+# POSTs the token. The access log drops query strings and never logs bodies,
+# and these pages answer `Cache-Control: no-store` (render adds
+# `Referrer-Policy: same-origin`), so the token stays out of logs, caches and
+# Referer headers.
+
+_NO_STORE = {"Cache-Control": "no-store"}
+_BAD_LINK = "This link is invalid or has expired. Request a new one."
+
+
+def _message(
+    request: Request,
+    session: SessionDep,
+    claims: auth.Claims | None,
+    title: str,
+    body: str,
+    status_code: int = 200,
+) -> HTMLResponse:
+    return render(
+        request,
+        "message.html",
+        {**nav_context(session, claims), "title": title, "body": body},
+        status_code=status_code,
+        headers=_NO_STORE,
+    )
+
+
+@router.get("/verify", response_class=HTMLResponse)
+def verify_form(
+    request: Request, session: SessionDep, claims: OptionalClaims, token: str = ""
+) -> HTMLResponse:
+    return render(
+        request,
+        "verify.html",
+        {**nav_context(session, claims), "token": token},
+        headers=_NO_STORE,
+    )
+
+
+@router.post("/verify", response_class=HTMLResponse)
+def verify_submit(
+    request: Request,
+    session: SessionDep,
+    claims: OptionalClaims,
+    token: Annotated[str, Form()] = "",
+) -> Response:
+    try:
+        auth.verify_email(VerifyRequest(token=token), session)
+    except (ValidationError, HTTPException):
+        session.rollback()
+        return _message(request, session, claims, "Verification failed", _BAD_LINK, 400)
+    return RedirectResponse("/verify/done", status_code=303)
+
+
+@router.get("/verify/done", response_class=HTMLResponse)
+def verify_done(request: Request, session: SessionDep, claims: OptionalClaims) -> HTMLResponse:
+    return _message(
+        request, session, claims, "Email verified", "Thanks, your email address is verified."
+    )
+
+
+@router.post("/verify/resend", dependencies=[CSRF])
+def verify_resend(session: SessionDep, mail: MailDep, claims: ParticipantPage) -> Response:
+    sent = auth.resend_verification(session, mail, claims.sub)
+    home = "/bookings" if claims.role is UserRole.BUYER else "/seller"
+    return redirect(home, "verification_sent" if sent else "already_verified")
+
+
+@router.get("/password-reset", response_class=HTMLResponse)
+def reset_request_form(
+    request: Request, session: SessionDep, claims: OptionalClaims
+) -> HTMLResponse:
+    return render(request, "reset_request.html", nav_context(session, claims))
+
+
+@router.post("/password-reset/request")
+def reset_request_submit(
+    session: SessionDep,
+    mail: MailDep,
+    email: Annotated[str, Form()] = "",
+    role: Annotated[str, Form()] = "",
+) -> Response:
+    # Same redirect whatever the input, malformed included: the page never
+    # says whether an address has an account.
+    try:
+        auth.request_password_reset(ResetRequest(email=email, role=role), session, mail)  # pyright: ignore[reportArgumentType]
+    except ValidationError:
+        session.rollback()
+    return RedirectResponse("/password-reset/sent", status_code=303)
+
+
+@router.get("/password-reset/sent", response_class=HTMLResponse)
+def reset_sent(request: Request, session: SessionDep, claims: OptionalClaims) -> HTMLResponse:
+    return _message(
+        request,
+        session,
+        claims,
+        "Check your email",
+        "If an account exists for that address and role, we've sent a link to reset its "
+        "password. The link works once and expires in an hour.",
+    )
+
+
+def _reset_form(
+    request: Request,
+    session: SessionDep,
+    claims: auth.Claims | None,
+    token: str,
+    error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    return render(
+        request,
+        "reset_confirm.html",
+        {**nav_context(session, claims), "token": token, "error": error},
+        status_code=status_code,
+        headers=_NO_STORE,
+    )
+
+
+@router.get("/password-reset/confirm", response_class=HTMLResponse)
+def reset_confirm_form(
+    request: Request, session: SessionDep, claims: OptionalClaims, token: str = ""
+) -> HTMLResponse:
+    return _reset_form(request, session, claims, token)
+
+
+@router.post("/password-reset/confirm", response_class=HTMLResponse)
+def reset_confirm_submit(
+    request: Request,
+    session: SessionDep,
+    claims: OptionalClaims,
+    token: Annotated[str, Form()] = "",
+    new_password: Annotated[str, Form()] = "",
+) -> Response:
+    try:
+        body = ResetConfirmRequest(token=token, new_password=new_password)
+    except ValidationError:
+        error = "Choose a password of at least 8 characters."
+        return _reset_form(request, session, claims, token, error, status_code=400)
+    try:
+        auth.confirm_password_reset(body, session)
+    except HTTPException:
+        session.rollback()
+        return _message(request, session, claims, "Reset failed", _BAD_LINK, 400)
+    # Every session of the account was just revoked, this browser's included.
+    response = redirect("/login", "password_reset")
     clear_session_cookie(response)
     return response

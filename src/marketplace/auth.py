@@ -307,6 +307,17 @@ def verify_email(body: VerifyRequest, db: _SessionDep) -> dict[str, str]:
     return {"status": "verified"}
 
 
+def resend_verification(db: Session, mail: EmailSender, user_id: str) -> bool:
+    """Mail a fresh verification link to `user_id`'s own address. False (and
+    no mail) when already verified. The caller is the authenticated user, so
+    nothing here reveals anything about other accounts."""
+    user = db.get(User, user_id)
+    if user is None or user.email_verified:
+        return False
+    _issue_email_token(db, mail, user, EmailTokenPurpose.VERIFY)
+    return True
+
+
 @auth_router.post("/password-reset/request")
 def request_password_reset(body: ResetRequest, db: _SessionDep, mail: MailDep) -> dict[str, str]:
     user = db.scalar(select(User).where(User.email == body.email.lower(), User.role == body.role))

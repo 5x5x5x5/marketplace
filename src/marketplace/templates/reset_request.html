@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Reset your password — Marketplace{% endblock %}
+
+{% block content %}
+<section class="auth-form">
+  <h1>Reset your password</h1>
+  <p>We'll email you a link to choose a new password.</p>
+  <form method="post" action="/password-reset/request">
+    <label>
+      Email
+      <input type="email" name="email" required autocomplete="email" />
+    </label>
+    <fieldset>
+      <legend>Account type</legend>
+      <label><input type="radio" name="role" value="buyer" checked /> Buyer</label>
+      <label><input type="radio" name="role" value="seller" /> Seller</label>
+    </fieldset>
+    <button type="submit" class="button">Send reset link</button>
+  </form>
+  <p><a href="/login">Back to log in</a></p>
+</section>
+{% endblock %}

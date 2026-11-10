@@ -329,7 +329,11 @@ def test_every_page_post_requires_csrf_except_the_allowlist() -> None:
         for r in _api_routes()
         if "POST" in r.methods and r.endpoint.__module__.startswith(f"{PKG}.pages")
     ]
-    assert len(page_posts) >= 3, "no page POST routes found; route discovery is broken"
+    assert len(page_posts) > 10, "no page POST routes found; route discovery is broken"
+    paths = {r.path for r in page_posts}
+    assert paths >= CSRF_EXEMPT_POSTS, (
+        f"allowlist names unknown routes: {CSRF_EXEMPT_POSTS - paths}"
+    )
     bad = [
         r.path
         for r in page_posts
