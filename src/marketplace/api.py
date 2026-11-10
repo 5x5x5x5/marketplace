@@ -26,7 +26,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -88,7 +88,6 @@ from .models import (
     CatalogSellerProfileOut,
     DisputeRequest,
     DisputeStatus,
-    EventKind,
     FeesBody,
     JobCreateRequest,
     JobReviewOut,
@@ -114,7 +113,6 @@ from .models import (
     ReportOut,
     ReportRequest,
     ReportStatus,
-    ReportTargetKind,
     ResolveDisputeRequest,
     ResolveReportRequest,
     ReviewOut,
@@ -145,7 +143,7 @@ from .payments import get_provider
 from .payments.port import PaymentError, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY
 from .repo import audit
-from .services import booking, disputes, jobs, maintenance, payouts, reviews, webhooks
+from .services import booking, disputes, jobs, maintenance, moderation, payouts, reviews, webhooks
 from .services.common import now as _now
 from .services.common import paginate as _paginate
 from .services.common import require_active as _require_active
@@ -187,79 +185,12 @@ ParticipantClaims = Annotated[Claims, Depends(current_participant)]
 
 @reports_router.post("/reports", response_model=ReportOut, status_code=201)
 def file_report(body: ReportRequest, session: SessionDep, claims: ParticipantClaims) -> Report:
-    reporter_id = claims.sub
-    _require_active(session, reporter_id)
-    target_id = body.target_id
-    if body.target_kind is ReportTargetKind.USER:
-        target = session.get(User, body.target_id)
-        if target is None:
-            raise HTTPException(status_code=404, detail="target not found")
-        if target.id == reporter_id:
-            raise HTTPException(status_code=422, detail="cannot report yourself")
-        shared = session.scalar(
-            select(func.count())
-            .select_from(Job)
-            .where(
-                or_(
-                    and_(Job.buyer_id == reporter_id, Job.seller_id == target.id),
-                    and_(Job.seller_id == reporter_id, Job.buyer_id == target.id),
-                )
-            )
-        )
-        if not shared:
-            raise HTTPException(status_code=403, detail="not a counterparty")
-    else:
-        model = Review if body.target_kind is ReportTargetKind.REVIEW else SellerReview
-        try:
-            review_uuid = UUID(body.target_id)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="target not found") from None
-        row = session.get(model, review_uuid)
-        if row is None:
-            raise HTTPException(status_code=404, detail="target not found")
-        if reporter_id not in (row.buyer_id, row.seller_id):
-            raise HTTPException(status_code=403, detail="not a party to this review")
-        # Canonicalize: UUID() accepts many textual forms of the same value
-        # (case, hyphens, braces, urn:uuid:); storing the raw string would let
-        # each variant evade the (reporter, target) UNIQUE and re-notify admins.
-        target_id = str(review_uuid)
-
-    report = Report(
-        reporter_id=reporter_id,
-        target_kind=body.target_kind,
-        target_id=target_id,
-        reason=body.reason,
-    )
-    session.add(report)
-    try:
-        session.flush()
-    except IntegrityError:
-        # Duplicate (sequential or concurrent) loses the UNIQUE race — same
-        # answer either way, not a 500.
-        raise HTTPException(status_code=409, detail="already reported") from None
-    notifications.enqueue_admins(
-        session,
-        EventKind.REPORT_OPENED_ADMIN,
-        {
-            "report_id": str(report.id),
-            "target_kind": body.target_kind,
-            "target_id": target_id,
-            "reason": body.reason,
-            "reporter_id": reporter_id,
-        },
-    )
-    return report
+    return moderation.file_report(session, claims.sub, body)
 
 
 @reports_router.get("/reports", response_model=list[ReportOut])
 def my_reports(session: SessionDep, claims: ParticipantClaims) -> list[Report]:
-    return list(
-        session.scalars(
-            select(Report)
-            .where(Report.reporter_id == claims.sub)
-            .order_by(Report.created_at.desc())
-        ).all()
-    )
+    return moderation.my_reports(session, claims.sub)
 
 
 # ---------- Notification preferences router ----------
@@ -714,34 +645,12 @@ def admin_update_seller(
 def suspend_user(
     user_id: str, body: SuspendRequest, session: SessionDep, admin_id: AdminId
 ) -> User:
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    if user.role is UserRole.ADMIN:
-        raise HTTPException(status_code=422, detail="admins cannot be suspended")
-    if user.status is UserStatus.SUSPENDED:
-        raise HTTPException(status_code=409, detail="user already suspended")
-    user.status = UserStatus.SUSPENDED
-    user.suspended_reason = body.reason
-    user.suspended_at = _now()
-    audit(session, admin_id, "suspend_user", user_id, {"reason": body.reason})
-    session.flush()
-    return user
+    return moderation.suspend_user(session, admin_id, user_id, body)
 
 
 @admin_router.post("/users/{user_id}/reinstate", response_model=UserModerationOut)
 def reinstate_user(user_id: str, session: SessionDep, admin_id: AdminId) -> User:
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    if user.status is not UserStatus.SUSPENDED:
-        raise HTTPException(status_code=409, detail="user is not suspended")
-    user.status = UserStatus.ACTIVE
-    user.suspended_reason = None
-    user.suspended_at = None
-    audit(session, admin_id, "reinstate_user", user_id, {})
-    session.flush()
-    return user
+    return moderation.reinstate_user(session, admin_id, user_id)
 
 
 @admin_router.get("/reviews/{kind}", response_model=list[AdminReviewOut])
@@ -801,13 +710,7 @@ def admin_unhide_review(
 
 @admin_router.post("/users/{user_id}/reset_display_name", response_model=UserModerationOut)
 def admin_reset_display_name(user_id: str, session: SessionDep, admin_id: AdminId) -> User:
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
-    user.display_name = f"user-{user.id[:8]}"
-    audit(session, admin_id, "reset_display_name", user_id, {})
-    session.flush()
-    return user
+    return moderation.admin_reset_display_name(session, admin_id, user_id)
 
 
 @admin_router.get("/reports", response_model=list[AdminReportOut])
@@ -818,33 +721,14 @@ def admin_list_reports(
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[Report]:
-    q = select(Report).order_by(Report.created_at.desc(), Report.id.desc())
-    if status is not None:
-        q = q.where(Report.status == status)
-    return _paginate(session, q, limit, offset)
+    return moderation.admin_list_reports(session, status, limit, offset)
 
 
 @admin_router.post("/reports/{report_id}/resolve", response_model=AdminReportOut)
 def resolve_report(
     report_id: UUID, body: ResolveReportRequest, session: SessionDep, admin_id: AdminId
 ) -> Report:
-    report = session.get(Report, report_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail="report not found")
-    if report.status is not ReportStatus.OPEN:
-        raise HTTPException(status_code=409, detail="report already resolved")
-    report.status = body.status
-    report.resolution_note = body.note
-    report.resolved_at = _now()
-    audit(
-        session,
-        admin_id,
-        "resolve_report",
-        str(report_id),
-        {"status": body.status, "note": body.note or ""},
-    )
-    session.flush()
-    return report
+    return moderation.resolve_report(session, admin_id, report_id, body)
 
 
 @admin_router.get("/buyers", response_model=list[BuyerProfileOut])
