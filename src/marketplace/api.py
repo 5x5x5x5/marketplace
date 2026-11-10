@@ -145,7 +145,7 @@ from .payments import get_provider
 from .payments.port import PaymentError, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY
 from .repo import audit
-from .services import booking, disputes, jobs, maintenance, payouts, webhooks
+from .services import booking, disputes, jobs, maintenance, payouts, reviews, webhooks
 from .services.common import now as _now
 from .services.common import paginate as _paginate
 from .services.common import require_active as _require_active
@@ -320,36 +320,6 @@ def put_notification_preferences(
 # ---------- Buyer router ----------
 
 
-def _job_reviews(session: Session, job_id: UUID) -> list[JobReviewOut]:
-    """Both reviews for a job (0-2), explicitly constructed — no party ids,
-    and `comment` reads through `public_comment` so a hidden comment is null
-    even to the job's own parties."""
-    out: list[JobReviewOut] = []
-    review = session.scalar(select(Review).where(Review.job_id == job_id))
-    if review is not None:
-        out.append(
-            JobReviewOut(
-                id=review.id,
-                kind=ReportTargetKind.REVIEW.value,
-                rating=review.rating,
-                comment=review.public_comment,
-                created_at=review.created_at,
-            )
-        )
-    seller_review = session.scalar(select(SellerReview).where(SellerReview.job_id == job_id))
-    if seller_review is not None:
-        out.append(
-            JobReviewOut(
-                id=seller_review.id,
-                kind=ReportTargetKind.SELLER_REVIEW.value,
-                rating=seller_review.rating,
-                comment=seller_review.public_comment,
-                created_at=seller_review.created_at,
-            )
-        )
-    return out
-
-
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"], route_class=CommitRoute)
 
 # Moved to catalog.py (shared with the HTML pages layer); re-exported here
@@ -403,37 +373,7 @@ def get_buyer_profile(session: SessionDep, buyer_id: BuyerId) -> BuyerProfile:
 
 @buyer_router.post("/jobs/{job_id}/review", response_model=ReviewOut, status_code=201)
 def review_job(job_id: UUID, body: ReviewRequest, session: SessionDep, buyer_id: BuyerId) -> Review:
-    _require_active(session, buyer_id)
-    job = session.get(Job, job_id)
-    if job is None or job.buyer_id != buyer_id:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job.status != JobStatus.COMPLETED or job.seller_id is None:
-        raise HTTPException(status_code=409, detail="can only review a completed job")
-    if session.scalar(select(Review).where(Review.job_id == job_id)) is not None:
-        raise HTTPException(status_code=409, detail="job already reviewed")
-
-    seller = repo.get_or_create_seller(session, job.seller_id)
-    seller.rating_count += 1
-    seller.rating_sum += body.rating
-    # get_or_create_seller's session.get() autoflushes any pending INSERT, so
-    # the review is added only after it — otherwise the UNIQUE(job_id)
-    # violation would surface uncaught by that autoflush, not by the guarded
-    # flush() below.
-    review = Review(
-        job_id=job.id,
-        buyer_id=buyer_id,
-        seller_id=job.seller_id,
-        rating=body.rating,
-        comment=body.comment,
-    )
-    session.add(review)
-    try:
-        session.flush()
-    except IntegrityError:
-        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
-        # the sequential duplicate, not a 500.
-        raise HTTPException(status_code=409, detail="job already reviewed") from None
-    return review
+    return reviews.review_job(session, buyer_id, job_id, body)
 
 
 @buyer_router.post("/jobs/{job_id}/dispute", response_model=BuyerDisputeOut, status_code=201)
@@ -452,10 +392,7 @@ def get_dispute_buyer(job_id: UUID, session: SessionDep, buyer_id: BuyerId) -> D
 def list_job_reviews_buyer(
     job_id: UUID, session: SessionDep, buyer_id: BuyerId
 ) -> list[JobReviewOut]:
-    job = session.get(Job, job_id)
-    if job is None or job.buyer_id != buyer_id:
-        raise HTTPException(status_code=404, detail="job not found")
-    return _job_reviews(session, job_id)
+    return reviews.list_job_reviews_buyer(session, buyer_id, job_id)
 
 
 # ---------- Seller router ----------
@@ -556,47 +493,14 @@ def get_dispute_seller(job_id: UUID, session: SessionDep, seller_id: SellerId) -
 def list_job_reviews_seller(
     job_id: UUID, session: SessionDep, seller_id: SellerId
 ) -> list[JobReviewOut]:
-    job = session.get(Job, job_id)
-    if job is None or job.seller_id != seller_id:
-        raise HTTPException(status_code=404, detail="job not found")
-    return _job_reviews(session, job_id)
+    return reviews.list_job_reviews_seller(session, seller_id, job_id)
 
 
 @seller_router.post("/jobs/{job_id}/review", response_model=SellerReviewOut, status_code=201)
 def review_buyer(
     job_id: UUID, body: ReviewRequest, session: SessionDep, seller_id: SellerId
 ) -> SellerReview:
-    _require_active(session, seller_id)
-    job = session.get(Job, job_id)
-    if job is None or job.seller_id != seller_id:
-        raise HTTPException(status_code=404, detail="job not found")
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(status_code=409, detail="can only review a completed job")
-    if session.scalar(select(SellerReview).where(SellerReview.job_id == job_id)) is not None:
-        raise HTTPException(status_code=409, detail="job already reviewed")
-
-    buyer = repo.get_or_create_buyer(session, job.buyer_id)
-    buyer.rating_count += 1
-    buyer.rating_sum += body.rating
-    # get_or_create_buyer's session.get() autoflushes any pending INSERT, so
-    # the review is added only after it — otherwise the UNIQUE(job_id)
-    # violation would surface uncaught by that autoflush, not by the guarded
-    # flush() below.
-    review = SellerReview(
-        job_id=job.id,
-        seller_id=seller_id,
-        buyer_id=job.buyer_id,
-        rating=body.rating,
-        comment=body.comment,
-    )
-    session.add(review)
-    try:
-        session.flush()
-    except IntegrityError:
-        # Concurrent duplicate lost the UNIQUE(job_id) race — same answer as
-        # the sequential duplicate, not a 500.
-        raise HTTPException(status_code=409, detail="job already reviewed") from None
-    return review
+    return reviews.review_buyer(session, seller_id, job_id, body)
 
 
 @seller_router.post("/listings", response_model=SellerListingOut, status_code=201)
@@ -840,22 +744,6 @@ def reinstate_user(user_id: str, session: SessionDep, admin_id: AdminId) -> User
     return user
 
 
-def _admin_review_out(row: Review | SellerReview) -> AdminReviewOut:
-    author, subject = (
-        (row.buyer_id, row.seller_id) if isinstance(row, Review) else (row.seller_id, row.buyer_id)
-    )
-    return AdminReviewOut(
-        id=row.id,
-        job_id=row.job_id,
-        author_id=author,
-        subject_id=subject,
-        rating=row.rating,
-        comment=row.comment,
-        comment_hidden=row.comment_hidden,
-        created_at=row.created_at,
-    )
-
-
 @admin_router.get("/reviews/{kind}", response_model=list[AdminReviewOut])
 def admin_list_reviews(
     kind: Literal["buyer", "seller"],
@@ -864,9 +752,7 @@ def admin_list_reviews(
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[AdminReviewOut]:
-    model = Review if kind == "buyer" else SellerReview
-    stmt = select(model).order_by(model.created_at.desc(), model.id.desc())
-    return [_admin_review_out(r) for r in _paginate(session, stmt, limit, offset)]
+    return reviews.admin_list_reviews(session, kind, limit, offset)
 
 
 @admin_router.get("/listings", response_model=list[SellerListingOut])
@@ -899,43 +785,18 @@ def unhide_listing(listing_id: UUID, session: SessionDep, admin_id: AdminId) -> 
     return listing
 
 
-def _set_comment_hidden(
-    kind: Literal["buyer", "seller"],
-    review_id: UUID,
-    hidden: bool,
-    session: Session,
-    admin_id: str,
-) -> AdminReviewOut:
-    model = Review if kind == "buyer" else SellerReview
-    row = session.get(model, review_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="review not found")
-    if row.comment_hidden == hidden:
-        raise HTTPException(status_code=409, detail="review already in that state")
-    row.comment_hidden = hidden
-    audit(
-        session,
-        admin_id,
-        "hide_review" if hidden else "unhide_review",
-        f"{kind}:{review_id}",
-        {},
-    )
-    session.flush()
-    return _admin_review_out(row)
-
-
 @admin_router.post("/reviews/{kind}/{review_id}/hide", response_model=AdminReviewOut)
 def admin_hide_review(
     kind: Literal["buyer", "seller"], review_id: UUID, session: SessionDep, admin_id: AdminId
 ) -> AdminReviewOut:
-    return _set_comment_hidden(kind, review_id, True, session, admin_id)
+    return reviews.admin_hide_review(session, admin_id, kind, review_id)
 
 
 @admin_router.post("/reviews/{kind}/{review_id}/unhide", response_model=AdminReviewOut)
 def admin_unhide_review(
     kind: Literal["buyer", "seller"], review_id: UUID, session: SessionDep, admin_id: AdminId
 ) -> AdminReviewOut:
-    return _set_comment_hidden(kind, review_id, False, session, admin_id)
+    return reviews.admin_unhide_review(session, admin_id, kind, review_id)
 
 
 @admin_router.post("/users/{user_id}/reset_display_name", response_model=UserModerationOut)
