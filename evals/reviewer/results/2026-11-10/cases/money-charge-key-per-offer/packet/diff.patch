@@ -1,0 +1,13 @@
+diff --git a/src/marketplace/services/jobs.py b/src/marketplace/services/jobs.py
+index d77b263..41eb01c 100644
+--- a/src/marketplace/services/jobs.py
++++ b/src/marketplace/services/jobs.py
+@@ -210,7 +210,7 @@ def accept_offer(
+             amount=job.buyer_price,
+             currency=settings.currency,
+             job_id=str(job.id),
+-            idempotency_key=f"charge:{job.id}",
++            idempotency_key=f"charge:{offer.id}",
+         )
+     except PaymentError as exc:
+         logger.warning("charge failed for job %s: %s", job.id, exc)

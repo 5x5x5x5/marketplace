@@ -1,0 +1,49 @@
+{
+  "case": "money-floor-gross-not-net",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.97s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_matching.py::test_floor_filters_candidate_fee_aware": "AssertionError: assert 'early_seller' == 'late_seller'"
+    },
+    "summary": "1 failed, 488 passed, 11 skipped, 12 warnings in 73.30s (0:01:13)",
+    "seconds": 77,
+    "confirmed": [
+      "tests/test_matching.py::test_floor_filters_candidate_fee_aware"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_matching.py::test_floor_filters_candidate_fee_aware": "AssertionError: assert 'early_seller' == 'late_seller'"
+    },
+    "summary": "1 failed, 499 passed, 12 warnings in 90.48s (0:01:30)",
+    "seconds": 94,
+    "confirmed": [
+      "tests/test_matching.py::test_floor_filters_candidate_fee_aware"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 201,
+  "case_sha256": "4c2b66a0723ea488e5f4cdc43c5a716133d4de3fb75bbeb09c5f6c4738592b25"
+}

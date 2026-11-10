@@ -1,0 +1,4 @@
+Trim the admin cancel re-lock
+
+The FOR UPDATE get already locks the Job row, so the extra
+populate_existing option and its comment are redundant here.

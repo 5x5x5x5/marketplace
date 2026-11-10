@@ -1,0 +1,83 @@
+id = "money-f2-commit-in-teardown"
+kind = "bug"
+class = "money-path/commit-ordering"
+origin = "F2 (docs/tryout-findings-2026-07-16.md). Fixed by the commit-before-response branch (docs/superpowers/plans/2026-07-16-commit-before-response.md)."
+synthetic = false
+invariant = "Commits happen in db.CommitRoute, before the response is sent, never in get_session teardown."
+location = "src/marketplace/db.py: get_session and CommitRoute.get_route_handler"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Commit in the session dependency
+
+Committing inside a route-class wrapper meant every router had to opt in,
+and a session used outside a CommitRoute never committed. Commit where the
+session is created, after the handler returns, and keep CommitRoute as the
+router marker the startup check looks for.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at db.get_session / CommitRoute
+stating that the commit now runs in dependency teardown, which FastAPI runs
+after the response has been sent: a client can receive a 2xx and act on
+(chain a call against) state that is not committed yet, and a failing commit
+leaves a 2xx for work that never persisted.
+PARTIAL: objects to committing in teardown or to removing CommitRoute's
+commit without the after-the-response consequence, or only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/db.py"
+old = '''
+    try:
+        yield session
+    finally:
+'''
+new = '''
+    try:
+        yield session
+        session.commit()
+    finally:
+'''
+
+[[edits]]
+file = "src/marketplace/db.py"
+old = '''
+class CommitRoute(APIRoute):
+    """Commits the request's DB session BEFORE the response object reaches
+    the sender — never in dependency teardown, which runs after the response
+    is on the wire (finding F2). Streaming responses would need a rethink;
+    the app has none."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        original = super().get_route_handler()
+
+        async def commit_then_respond(request: Request) -> Response:
+            response = await original(request)
+            session: Session | None = getattr(request.state, "db_session", None)
+            if session is not None and response.status_code < 400:
+                # threadpool: a sync commit on the event loop would stall
+                # every in-flight request (same class as the webhook offload)
+                await run_in_threadpool(session.commit)
+            return response
+
+        return commit_then_respond
+'''
+new = '''
+class CommitRoute(APIRoute):
+    """Route class every router declares; `get_session` owns the commit."""
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        return super().get_route_handler()
+'''
+
+[[edits]]
+file = "src/marketplace/db.py"
+old = '''
+from sqlalchemy.pool import NullPool
+from starlette.concurrency import run_in_threadpool
+'''
+new = '''
+from sqlalchemy.pool import NullPool
+'''

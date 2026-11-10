@@ -1,0 +1,53 @@
+{
+  "case": "asym-availability-seller-id-in-body",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 36,
+    "failed": {
+      "tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id": "AssertionError: request bodies must not accept caller-supplied identity:"
+    },
+    "summary": "1 failed, 35 passed in 2.70s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id": "AssertionError: request bodies must not accept caller-supplied identity:"
+    },
+    "summary": "1 failed, 488 passed, 11 skipped, 12 warnings in 75.10s (0:01:15)",
+    "seconds": 79,
+    "confirmed": [
+      "tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id": "AssertionError: request bodies must not accept caller-supplied identity:"
+    },
+    "summary": "1 failed, 499 passed, 12 warnings in 92.99s (0:01:32)",
+    "seconds": 98,
+    "confirmed": [
+      "tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [
+      "marketplace-request-model-identity-field src/marketplace/models.py:665"
+    ],
+    "errors": []
+  },
+  "seconds": 215,
+  "case_sha256": "fc864fe92dedbb8f6d99eec695818c980a1d30c23e44d05f87ad2014b2ffabd9"
+}

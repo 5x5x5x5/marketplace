@@ -1,0 +1,4 @@
+Inline the floor check in _priced
+
+_priced runs once per candidate on every quote and re-match; compare the
+spread inline instead of going through two helper calls per candidate.

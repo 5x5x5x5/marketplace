@@ -1,0 +1,5 @@
+Drop the dispute lookup from the transfer_failed branch
+
+The payout row should mirror the provider's view of the transfer; the
+extra query on every transfer event special-cased one path and made the
+branch harder to reason about.

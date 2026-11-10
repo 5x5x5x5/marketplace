@@ -1,0 +1,5 @@
+Let a provider success settle the payment
+
+A success from the provider is authoritative: if the charge succeeded, the
+Payment row should say SUCCEEDED regardless of what we recorded earlier
+(decline-then-retry already relies on FAILED -> SUCCEEDED).

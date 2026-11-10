@@ -1,0 +1,5 @@
+Age out webhook ledger rows by time only
+
+The webhook ledger is a dedup window: once a row is older than the
+retention window the provider will not redeliver it, so its status doesn't
+matter for reaping. Simplifies the delete to one indexed range scan.

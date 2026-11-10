@@ -1,0 +1,59 @@
+{
+  "case": "asym-f1-seller-receipt-ledger-model",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 36,
+    "failed": {
+      "tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]": "AssertionError: seller-facing route exposes forbidden field:"
+    },
+    "summary": "1 failed, 35 passed in 2.78s",
+    "seconds": 8
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]": "AssertionError: seller-facing route exposes forbidden field:",
+      "tests/test_end_to_end.py::test_full_flow_books_correct_margin": "AssertionError: assert {'buyer_price...eller_payout'} == {'completed_a...eller_payout'}",
+      "tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped": "AssertionError: assert 'buyer_price' not in {'buyer_price': '20.00', 'completed_at': '2026-11-10T05:21:09.684411Z', 'job_id': '0e2a9701-b11d-4d3f-8800-bd5ab2c14c4f', 'margin': '6.00', ...}"
+    },
+    "summary": "3 failed, 486 passed, 11 skipped, 12 warnings in 65.76s (0:01:05)",
+    "seconds": 69,
+    "confirmed": [
+      "tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]",
+      "tests/test_end_to_end.py::test_full_flow_books_correct_margin",
+      "tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]": "AssertionError: seller-facing route exposes forbidden field:",
+      "tests/test_end_to_end.py::test_full_flow_books_correct_margin": "AssertionError: assert {'buyer_price...eller_payout'} == {'completed_a...eller_payout'}",
+      "tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped": "AssertionError: assert 'buyer_price' not in {'buyer_price': '20.00', 'completed_at': '2026-11-10T05:22:21.563432Z', 'job_id': '8119d1d3-3927-46cd-a1de-d900a1c90214', 'margin': '6.00', ...}"
+    },
+    "summary": "3 failed, 497 passed, 12 warnings in 79.40s (0:01:19)",
+    "seconds": 83,
+    "confirmed": [
+      "tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]",
+      "tests/test_end_to_end.py::test_full_flow_books_correct_margin",
+      "tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 191,
+  "case_sha256": "7bc475377773f34968b803344ac00d9189ba6a5151da8fb1728dbb587e668195"
+}

@@ -1,0 +1,4 @@
+Call the webhook processor directly
+
+The dedup insert and apply are a couple of indexed statements; the thread
+hop cost more than the work and made tracebacks harder to read.

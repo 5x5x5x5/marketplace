@@ -1,0 +1,51 @@
+id = "asym-seller-review-buyer-id"
+kind = "bug"
+class = "asymmetry/forbidden-field-in-role-view"
+origin = "95a459a 'Fix wave: withhold buyer identity from sellers, guard PI-less chargebacks' (SellerReviewOut was the first seller-facing view to leak buyer_id)."
+synthetic = false
+invariant = "Seller-facing views never carry buyer identity (asymmetry doctrine; .claude/agents/asymmetry-reviewer.md item 2)."
+location = "src/marketplace/models.py: SellerReviewOut (response of POST /v1/seller/jobs/{job_id}/review)"
+reviewer = "asymmetry-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Include the reviewed buyer in the seller review receipt
+
+Mirrors ReviewOut, which carries the reviewed seller's id, so clients can
+render both receipts with one component.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding on SellerReviewOut (or the seller
+review route that returns it) stating that sellers now receive the buyer's id
+(buyer identity), which seller views must never carry.
+PARTIAL: notes the new buyer_id field as questionable without saying it
+breaks the seller-side identity rule, or says so only at Minor severity.
+MISSED: anything else, including accepting the ReviewOut symmetry argument.
+'''
+
+[[edits]]
+file = "src/marketplace/models.py"
+old = '''
+class SellerReviewOut(BaseModel):
+    """Seller's view of their own review of a buyer. `buyer_id` withheld —
+    every other seller-facing view withholds buyer identity too (asymmetry
+    doctrine); the seller already knows the job, and echoing it back would be
+    the first surface that lets a seller correlate buyers across jobs."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    rating: int
+'''
+new = '''
+class SellerReviewOut(BaseModel):
+    """Seller's view of their own review of a buyer."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    job_id: UUID
+    buyer_id: str
+    rating: int
+'''

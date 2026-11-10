@@ -1,0 +1,42 @@
+Review the commit at HEAD in this repository (diff range `main...HEAD`, one commit).
+
+Commit message:
+
+> Reuse TransactionOut for the completion receipt
+>
+> The completion endpoint already returns the Transaction row; declaring the
+> ledger model directly drops a near-duplicate view.
+
+The diff follows. Read the touched code in full in its files, as your instructions say, and report in your standard output format.
+
+```diff
+diff --git a/src/marketplace/routers/seller.py b/src/marketplace/routers/seller.py
+index 350315d..35d9388 100644
+--- a/src/marketplace/routers/seller.py
++++ b/src/marketplace/routers/seller.py
+@@ -17,7 +17,6 @@ from ..models import (
+     OfferStatus,
+     OnboardingOut,
+     ReviewRequest,
+-    SellerCompletionOut,
+     SellerDisputeOut,
+     SellerJobView,
+     SellerListingOut,
+@@ -25,6 +24,7 @@ from ..models import (
+     SellerProfileOut,
+     SellerProfileUpdate,
+     SellerReviewOut,
++    TransactionOut,
+ )
+ from ..services import disputes, jobs, listings, payouts, profiles, reviews
+ from .deps import Limit, Offset, ProviderDep, SellerId, SessionDep
+@@ -143,7 +143,7 @@ def decline_offer(offer_id: UUID, session: SessionDep, seller_id: SellerId) -> d
+     return {"status": "ok"}
+ 
+ 
+-@seller_router.post("/jobs/{job_id}/complete", response_model=SellerCompletionOut)
++@seller_router.post("/jobs/{job_id}/complete", response_model=TransactionOut)
+ def complete_job(
+     job_id: UUID, session: SessionDep, seller_id: SellerId, provider: ProviderDep
+ ) -> Transaction:
+```

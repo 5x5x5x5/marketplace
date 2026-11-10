@@ -1,0 +1,49 @@
+{
+  "case": "asym-seller-review-buyer-id",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.92s",
+    "seconds": 8
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate": "AssertionError: assert 'buyer_id' not in {'buyer_id': 'alice', 'comment': 'prompt payment', 'created_at': '2026-11-10T05:21:42.459255Z', 'id': '928f6a9e-931b-4131-ba51-728ae9082e8f', ...}"
+    },
+    "summary": "1 failed, 488 passed, 11 skipped, 12 warnings in 65.78s (0:01:05)",
+    "seconds": 69,
+    "confirmed": [
+      "tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate": "AssertionError: assert 'buyer_id' not in {'buyer_id': 'alice', 'comment': 'prompt payment', 'created_at': '2026-11-10T05:23:05.220208Z', 'id': '87927c1b-244f-4275-bbc8-d2ee610cbeaa', ...}"
+    },
+    "summary": "1 failed, 499 passed, 12 warnings in 79.52s (0:01:19)",
+    "seconds": 83,
+    "confirmed": [
+      "tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 189,
+  "case_sha256": "9f81e3bf66ad22f5e22c630c4a6565b45b632b2edb488e7ec24c9a10cceae556"
+}

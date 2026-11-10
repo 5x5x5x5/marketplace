@@ -1,0 +1,39 @@
+id = "ctrl-stale-sweep-ordered"
+kind = "control"
+class = "control/money-path-correct-change"
+origin = "Control: the fix shape the money-path audit proposed for deferred item D6 (stale-payment sweep iterates without an order)."
+synthetic = true
+invariant = "None violated: Payment -> Job lock order per job is unchanged; a deterministic iteration order only makes concurrent sweeps take locks in the same order."
+location = "src/marketplace/services/maintenance.py: _sweep_stale_payments"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Sweep stale payments in a fixed order
+
+Concurrent sweeps lock each stale job's Payment and Job in the order the
+SELECT returns them; an explicit order keeps that order identical across
+runners.
+'''
+rubric = '''
+CLEAN: no Critical or Important finding attributed to this diff.
+FALSE POSITIVE: any Critical or Important finding about this diff (ordering
+by primary key changes only iteration order). Pre-existing issues in the
+function that the diff does not touch are not attributed to the diff. Minor
+notes (for example "add a test") are not false positives.
+'''
+
+[[edits]]
+file = "src/marketplace/services/maintenance.py"
+old = '''
+    stale = session.scalars(
+        select(Job).where(Job.status == JobStatus.AWAITING_PAYMENT, Job.accepted_at < deadline)
+    ).all()
+'''
+new = '''
+    stale = session.scalars(
+        select(Job)
+        .where(Job.status == JobStatus.AWAITING_PAYMENT, Job.accepted_at < deadline)
+        .order_by(Job.id)
+    ).all()
+'''

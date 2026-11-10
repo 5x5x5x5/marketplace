@@ -1,0 +1,50 @@
+id = "money-late-success-resurrects-void"
+kind = "bug"
+class = "money-path/resurrection"
+origin = "3c5d1af 'Never resurrect a voided payment: late success no-ops on dead jobs' (SECURITY.md later fixes: 'Late payment success')."
+synthetic = false
+invariant = "Every _apply_payment_event branch is safe to apply late: a success after a void never resurrects a dead job's payment."
+location = "src/marketplace/services/webhooks.py: _apply_payment_event, payment_succeeded branch"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Let a provider success settle the payment
+
+A success from the provider is authoritative: if the charge succeeded, the
+Payment row should say SUCCEEDED regardless of what we recorded earlier
+(decline-then-retry already relies on FAILED -> SUCCEEDED).
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at the payment_succeeded branch
+stating that a late or replayed success now flips a payment voided by a
+cancel or the stale-payment sweep (FAILED, job CANCELLED/EXPIRED) back to
+SUCCEEDED, leaving the forbidden pair dead job + succeeded charge: the buyer
+is charged for a job that will never run and no refund is booked.
+PARTIAL: says FAILED -> SUCCEEDED should be guarded on job state without the
+consequence, or only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/services/webhooks.py"
+old = '''
+            job = session.get(Job, payment.job_id, with_for_update=True)
+            if payment.status is PaymentStatus.FAILED and (
+                job is None or job.status != JobStatus.AWAITING_PAYMENT
+            ):
+                # The charge was voided (cancel/sweep) and the job is dead — a late
+                # success must never resurrect it. Real providers don't emit success
+                # for a voided PI; races and replays can.
+                logger.warning(
+                    "ignoring late payment_succeeded for voided payment %s (job %s)",
+                    payment.id,
+                    payment.job_id,
+                )
+                return
+            payment.status = PaymentStatus.SUCCEEDED
+'''
+new = '''
+            job = session.get(Job, payment.job_id, with_for_update=True)
+            payment.status = PaymentStatus.SUCCEEDED
+'''

@@ -1,0 +1,4 @@
+Reuse TransactionOut for the completion receipt
+
+The completion endpoint already returns the Transaction row; declaring the
+ledger model directly drops a near-duplicate view.

@@ -1,0 +1,46 @@
+{
+  "case": "money-a1-cancel-blocking-offer-lock",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.68s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "489 passed, 11 skipped, 12 warnings in 70.91s (0:01:10)",
+    "seconds": 75
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[buyer]": "AssertionError: {'accept': 200, 'cancel': 500}",
+      "tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[admin]": "AssertionError: {'accept': 200, 'cancel': 500}"
+    },
+    "summary": "2 failed, 498 passed, 12 warnings in 88.47s (0:01:28)",
+    "seconds": 92,
+    "confirmed": [
+      "tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[admin]",
+      "tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[buyer]"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 201,
+  "case_sha256": "9963ff494394273011f4d2acd85661065c63294e25da2888ab9c025f9e6d10a1"
+}

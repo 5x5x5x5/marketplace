@@ -1,0 +1,5 @@
+Slice pages after the query
+
+Large OFFSETs make Postgres walk and discard every skipped row anyway;
+slicing the ordered result gives identical pages on SQLite and Postgres and
+keeps one statement shape for every page.

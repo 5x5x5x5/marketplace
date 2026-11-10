@@ -1,0 +1,4 @@
+Rename _superseded to say what it checks
+
+The helper answers "has a newer event for this object already applied?";
+name it that way so the account_updated branch reads as its rule.

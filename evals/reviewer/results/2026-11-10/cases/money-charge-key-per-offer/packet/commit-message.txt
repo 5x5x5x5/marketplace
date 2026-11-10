@@ -1,0 +1,5 @@
+Key the buyer charge by offer
+
+A job can be offered to several sellers in turn; keying the charge by the
+offer that was accepted ties the PaymentIntent to the acceptance that
+created it, which is what support looks up.

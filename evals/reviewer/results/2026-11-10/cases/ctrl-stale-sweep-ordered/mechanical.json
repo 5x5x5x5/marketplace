@@ -1,0 +1,39 @@
+{
+  "case": "ctrl-stale-sweep-ordered",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.36s",
+    "seconds": 6
+  },
+  "tests_sqlite": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "489 passed, 11 skipped, 12 warnings in 65.11s (0:01:05)",
+    "seconds": 69
+  },
+  "tests_pg": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "500 passed, 12 warnings in 78.76s (0:01:18)",
+    "seconds": 82
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 177,
+  "case_sha256": "7cdfd984c268e55773533cdea172f37e0a8b57d4e32a42eeb3b4461bfb59a641"
+}

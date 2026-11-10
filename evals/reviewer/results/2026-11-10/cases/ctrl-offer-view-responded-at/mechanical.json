@@ -1,0 +1,39 @@
+{
+  "case": "ctrl-offer-view-responded-at",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.43s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "489 passed, 11 skipped, 12 warnings in 66.33s (0:01:06)",
+    "seconds": 70
+  },
+  "tests_pg": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "500 passed, 12 warnings in 80.12s (0:01:20)",
+    "seconds": 84
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 181,
+  "case_sha256": "b08f7c9995b195788de5e6807f50f2425057156b93218a5b15c82a74f2ffbee8"
+}

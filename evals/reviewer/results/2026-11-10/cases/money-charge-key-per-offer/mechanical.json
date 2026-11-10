@@ -1,0 +1,39 @@
+{
+  "case": "money-charge-key-per-offer",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.54s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "489 passed, 11 skipped, 12 warnings in 71.43s (0:01:11)",
+    "seconds": 75
+  },
+  "tests_pg": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "500 passed, 12 warnings in 87.45s (0:01:27)",
+    "seconds": 91
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 193,
+  "case_sha256": "92e43bd01296200f4d43e0b9386dd14db861d556311ba5577917e75b01fa3cbc"
+}

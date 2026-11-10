@@ -1,0 +1,39 @@
+id = "money-f5-admin-cancel-stale-relock"
+kind = "bug"
+class = "money-path/stale-relock"
+origin = "F5 (docs/tryout-findings-2026-07-16.md). Fixed in 12309c6 'Fix seller receipt leak (F1) and cancel-vs-complete double-pay (F5)'."
+synthetic = false
+invariant = "A lock taken after an unlocked read uses populate_existing and re-checks status (CLAUDE.md concurrency rule; money-path-reviewer item 1)."
+location = "src/marketplace/services/jobs.py: admin_cancel_job"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Trim the admin cancel re-lock
+
+The FOR UPDATE get already locks the Job row, so the extra
+populate_existing option and its comment are redundant here.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at admin_cancel_job stating that the
+locked get returns the identity-map object cached by the earlier unlocked
+session.get (expire_on_commit=False), so the status guard reads pre-lock
+state; a cancel racing a seller completion can then cancel/refund a job that
+is already COMPLETED (buyer refunded while the seller is paid).
+PARTIAL: says populate_existing is needed after an earlier load without the
+concrete race outcome, or gives the outcome only at Minor severity.
+MISSED: anything else, including agreeing the option was redundant.
+'''
+
+[[edits]]
+file = "src/marketplace/services/jobs.py"
+old = '''
+    # populate_existing: the unlocked existence get() above cached this Job in
+    # the identity map; without it the locked re-get returns the STALE cached
+    # attributes (expire_on_commit=False), so a status guard racing a complete
+    # reads pre-race state and cancels an already-COMPLETED job (finding F5).
+    job = session.get(Job, job_id, with_for_update=True, populate_existing=True)
+'''
+new = '''
+    job = session.get(Job, job_id, with_for_update=True)
+'''
