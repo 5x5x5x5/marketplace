@@ -150,8 +150,8 @@ login and logout pages that keep the session in an `HttpOnly`,
 extracted into `catalog.py` so the JSON API and the pages share one
 implementation, after an earlier draft that duplicated the visibility check
 let the two drift. The commit-before-response check was widened from `/v1/*`
-to every route. No booking pages and no CSRF tokens yet; see the limitations
-below. No migration.
+to every route. Booking pages and CSRF tokens came later, in phase 14. No
+migration.
 
 ### 13. Operational hardening, tooling and agent setup (2026-11)
 
@@ -211,15 +211,41 @@ below. No migration.
 - **Capacity, measured.** A before/after load-test pair is recorded in
   [`docs/capacity-2026-11.md`](docs/capacity-2026-11.md).
 
-<!-- COORDINATOR: booking and payment pages (next, after the above). Add as phase 14 once merged; then remove the "No booking pages" limitation below and update the CSRF item. -->
+### 14. Booking and payment pages (2026-11-10)
+
+Spec and plan: `docs/superpowers/specs/2026-11-10-booking-pages-design.md`,
+`docs/superpowers/plans/2026-11-10-booking-pages.md`. A buyer can get a
+price for a listing, confirm a booking, follow it, pay when the charge
+needs confirming, and cancel; a seller has a dashboard for offers, jobs,
+listings, availability and payments onboarding. The pages became a package
+and call the same services as the JSON API. Every authenticated page form
+carries a CSRF token derived from the session, with no server secret.
+`REQUIRE_VERIFIED_EMAIL` (default off) gates booking, accepting and listing
+in the services. The verification and password-reset links have pages. A
+browser try-out (`docs/tryout-findings-2026-11-10.md`) found that catalog
+cards had never linked to their listings, so nobody could have booked from
+the browser; fixed. No migration.
+
+Not verified: the Stripe Payment Element flow against a live account.
 
 ## Next
 
-The obvious next phase is the transactional pages: booking from a listing or
-service type, buyer and seller dashboards built on the existing role-scoped
-views, a seller offer inbox, payment confirmation for `awaiting_payment`
-jobs, pages behind the verification and password-reset links, and CSRF
-tokens on those forms.
+Nothing is in progress. The most useful next pieces of work, in order:
+
+- **Run the Stripe path for real.** The card-entry step, the redirect back
+  and the settling webhook have only been tested against the fake provider
+  and the adapter's unit tests.
+- **Stop holding locks across provider calls** (see Known limitations). The
+  money-path audit lists what a safe restructuring has to preserve.
+- **Close the gaps the reviewer evaluation found**
+  (`evals/reviewer/results/2026-11-10/NOTES.md`): a test that every stored
+  notification payload is role-safe, `buyer_id` in the architecture test's
+  denylist for seller views, and a per-test timeout so a hang fails with a
+  name.
+- **Work through the audit's six deferred hazards**
+  (`docs/money-path-audit-2026-11.md`).
+- **Execute the agent workflows once** with the API key secret and branch
+  protection in place, and fix what the first real run shows.
 
 ## Deliberately left to a fork
 
@@ -254,16 +280,20 @@ auction.
   instantly, so tests and the load harness understate this; with a real
   provider every accept or complete holds its locks and a pool connection
   for the length of a network call.
-- **`email_verified` gates nothing.** `POST /v1/auth/verify` sets it and no
-  endpoint checks it.
+- **Email verification is off by default.** `REQUIRE_VERIFIED_EMAIL` gates
+  booking, accepting and listing when set; without it `email_verified` is
+  recorded and nothing checks it.
 - **No rate limiting on the argon2 endpoints.** Each login, signup or reset
   attempt costs real CPU and memory; this has to be handled at the edge.
 - **Load-test numbers come from a single shared box**: Locust, the app and
   Postgres on one machine. They are useful for comparing two builds, not as
   production capacity figures.
-- **No booking or payment pages, and no CSRF tokens.** Booking is API-only.
-  The current page forms (signup, login, logout) rely on `SameSite=Lax` and
-  POST-only mutation, which is not enough for money-moving forms.
+- **The browser payment step is unverified against Stripe.** The Payment
+  Element is mounted and confirmed by a small script written from Stripe's
+  documentation; it has not been run against a live or test-mode account.
+- **Login CSRF is accepted.** Authenticated forms carry a session-bound
+  token; the unauthenticated ones (signup, login, verify, password reset)
+  have no session to bind to.
 - **The Stripe adapter is tested for webhook signature verification and
   event mapping only**; the end-to-end Stripe run is a manual record from
   2026-07-13, not something the suite repeats.

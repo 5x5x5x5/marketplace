@@ -33,8 +33,9 @@ by `tests/test_architecture.py` and the Semgrep rules in `.semgrep/rules/`.
 
 What is **not** covered, stated plainly (details under
 [Residual risks](#residual-risks)): no rate limiting anywhere in the app,
-including the argon2 endpoints; email verification gates nothing; no CSRF
-tokens (the current forms rely on `SameSite=Lax`); no security response
+including the argon2 endpoints; email verification is off by default; login
+CSRF is accepted; the browser payment step has not been run against Stripe;
+no security response
 headers (CSP, frame options, HSTS) set by the app; trusted hosts and CORS
 ship open; row locks and pooled connections are held across payment-provider
 calls; and one shared admin role with full authority.
@@ -96,7 +97,7 @@ configuration, it says so.
 
 ### Cookie posture
 
-`POST /signup` and `POST /login` on the page routes (`pages.py`) set the
+`POST /signup` and `POST /login` on the page routes (`pages/account.py`) set the
 session token as a cookie instead of returning it:
 
 - `HttpOnly`: page JavaScript can't read it. The app ships no client-side
@@ -119,19 +120,32 @@ session token as a cookie instead of returning it:
 and `tests/test_live_server.py::test_cookie_only_auth_over_socket` cover
 this.
 
-### CSRF stance
+### CSRF
 
-`SameSite=Lax` plus a rule that every page mutation is a POST (no
-state-changing GET; `GET /login` and `GET /signup` only render forms). A
-forged cross-site form POST does not carry the cookie under `Lax`, so it
-can't ride a session to signup, login or logout. **There are no CSRF
-tokens.** That was judged acceptable for these three forms because no money
-moves and nothing reaches beyond the caller's own session. It is **not**
-enough for booking or payment forms: a same-site attacker page, or a future
-relaxation of `Lax`, could still forge a same-site POST. Those forms will
-need tokens.
+Authenticated page forms carry a CSRF token derived from the session: the
+sha256 of a fixed domain prefix and the raw session token from the HttpOnly
+cookie. It needs no server secret and no stored state, changes with every
+login, dies with the session row, and cannot be computed from the sha256
+that `auth_sessions` stores. It is compared in constant time, and a missing
+or wrong token fails closed with a 403 before the handler runs. An
+architecture test walks every POST route in the pages package and fails if
+one lacks the check and is not on a short, named allowlist.
 
-<!-- COORDINATOR: booking and payment pages (in progress). When they land, describe their CSRF tokens here and update the residual-risk bullet "No CSRF tokens" and the current-posture summary. -->
+`SameSite=Lax` alone is not relied on. A same-site origin, such as another
+port or a subdomain, still receives the cookie; the browser try-out
+demonstrated this by auto-submitting a cancel from a page on another port,
+which the token refused.
+
+The unauthenticated forms (signup, login, verify, password reset) have no
+session to bind a token to. Login CSRF, where an attacker logs a victim
+into the attacker's account, is an accepted residual risk.
+
+Every page mutation is a POST; no GET changes state, and the links in
+verification and reset emails render a form that POSTs the token, so
+opening one (or a mail scanner fetching it) never consumes it. Logged-in
+pages answer `Cache-Control: no-store`, and every page sends
+`Referrer-Policy: same-origin`, so tokens in the address bar never leave in
+a Referer header.
 
 The idempotency middleware never stores responses for `/signup`, `/login`
 or `/logout`, so a replay can't resend a `Set-Cookie`.
@@ -458,17 +472,22 @@ app unless stated.
   and the argon2 endpoints are the cheapest way to exhaust CPU and memory.
   Mitigation belongs at the gateway or edge
   ([`docs/DEPLOY.md`](docs/DEPLOY.md#edge-rate-limits)); left to a fork.
-- **Email verification gates nothing.** `email_verified` is set by
-  `POST /v1/auth/verify` and never checked. Signup and login work on
-  unverified accounts, because without a real mail sender a verification
-  requirement proves nothing. A fork wiring in mail is expected to add the
-  gate.
+- **Email verification is off by default.** `REQUIRE_VERIFIED_EMAIL`
+  requires a verified email to create a job, accept an offer or create a
+  listing. It ships off because without a real mail sender a verification
+  requirement proves nothing; a deployment with mail configured should turn
+  it on.
 - **Timing difference on `password-reset/request`.** Status and body are
   identical, but the existing-account path does more work (a token insert
   and a send attempt), so response time leaks a faint signal. Closing it
   needs equal work on the other path, which isn't built.
-- **No CSRF tokens.** Acceptable for signup, login and logout under
-  `SameSite=Lax`; not acceptable for future money-moving forms.
+- **Login CSRF.** Authenticated forms carry a session-bound token; signup,
+  login, verify and password reset cannot, and an attacker can log a victim
+  into the attacker's own account.
+- **The browser payment step is unverified against Stripe.** It loads
+  Stripe's script from Stripe's origin and confirms the payment in the
+  browser; settlement is still the signed webhook. A Content-Security-Policy
+  that allows only that script origin is not set (see the next item).
 - **No security response headers.** The app sets no `Content-Security-Policy`,
   `X-Frame-Options`/`frame-ancestors`, `Strict-Transport-Security` or
   `X-Content-Type-Options`. Set them at the edge or add middleware before

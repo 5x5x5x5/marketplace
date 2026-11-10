@@ -96,7 +96,7 @@ test covered it because nobody had thought of that sequence. The audit
 also recorded six hazards it chose not to fix, with reasons.
 
 **Executable checks catch the rules that are easy to forget.** `CLAUDE.md`
-lists forty invariants. An agent that has read them can still violate one
+lists nearly fifty invariants. An agent that has read them can still violate one
 in a long session. So the statically checkable ones are tests
 (`tests/test_architecture.py`) and Semgrep rules (`.semgrep/`), each with a
 failure message that names the rule and the fix. When those tests were
@@ -183,6 +183,8 @@ What the workers did, each as its own merge commit:
 | Ops MCP server | The admin API as tools for an operating agent |
 | Background agents | Issue-to-pull-request, pull-request review, weekly upkeep |
 | Documentation | README, roadmap, security notes and a deployment guide, checked against the code |
+| Booking and payment pages | The buyer and seller flows in the browser, with session-bound CSRF tokens, built from its own spec and plan and driven in a real browser |
+| Reviewer evaluation | Sixteen past bugs re-seeded as review cases, with the mechanical layers measured |
 
 Some things worth knowing about how that went:
 

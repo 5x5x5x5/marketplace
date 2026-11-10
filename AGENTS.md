@@ -40,7 +40,7 @@ src/marketplace/
   services/         domain logic: booking, jobs, offers, webhooks, disputes, payouts, maintenance, ...
   errors.py         domain errors that services raise (mapped to HTTP once, in api.py)
   auth.py           sessions, signup/login, principal resolution (bearer header or cookie)
-  pages.py          server-rendered pages (call services; never import api.py or routers/)
+  pages/            server-rendered pages: storefront, account, buyer, seller, csrf (call services; never import api.py or routers/)
   catalog.py        the one implementation of catalog visibility and "from" prices
   models.py         Pydantic views, one family per role: Buyer*, Seller*, Admin*, Catalog*
   entities.py       ORM (never returned from a route unmapped)

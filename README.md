@@ -209,21 +209,47 @@ JSON API, with no JavaScript build step:
 | Route | Page |
 |---|---|
 | `GET /` | catalog landing, 24 listings per page, `?service_type_id=` and `?page=` |
-| `GET /listings/{id}` | listing detail with photos and `price_from`; HTML 404 if not visible |
+| `GET /listings/{id}` | listing detail with photos and `price_from`; a logged-in buyer can ask for a price |
 | `GET /sellers/{id}` | seller profile: rating, completed jobs, visible listings |
+| `GET /quotes/{id}`, `GET /bookings`, `GET /bookings/{id}` | the buyer's exact price and its expiry, their bookings, and one booking's status as it moves, with cancel and the payment step |
+| `GET /seller` | seller dashboard: offers to accept or decline, jobs to complete, listings, availability, payments onboarding |
 | `GET/POST /signup`, `GET/POST /login`, `POST /logout` | cookie-backed account pages, buyer and seller only |
+| `GET/POST /verify`, `/password-reset`, `/password-reset/confirm` | the pages the verification and reset emails link to |
+
+A buyer can browse, get a price, book, pay and follow a booking, and a
+seller can accept, complete and manage listings, without leaving the
+browser. The pages call the same services as the JSON API, so every rule
+there applies here: the buyer's pages show the buyer's price and never the
+payout, and the seller's show the payout and never the price.
+
+| The buyer sees | The seller sees |
+|---|---|
+| ![The buyer's price for a listing](docs/screenshots/03-quote.png) | ![The seller dashboard with an offer showing the seller's payout](docs/screenshots/05-seller-dashboard-offer.png) |
+
+More screenshots of the flow are in [`docs/screenshots/`](docs/screenshots/).
 
 A successful page signup or login stores the session token in an `HttpOnly`,
 `SameSite=Lax` cookie (`Secure` when `COOKIE_SECURE=true`). It is the same
 `auth_sessions` row a bearer client gets, so logout and password reset revoke
-it the same way. There is no browser login for admins. Seller-supplied text
-renders on public pages, so template autoescaping is treated as a security
-boundary and tested; see `SECURITY.md`.
+it the same way. Every form under a session carries a CSRF token derived
+from that session. There is no browser login for admins. Seller-supplied
+text renders on public pages, so template autoescaping is treated as a
+security boundary and tested; see `SECURITY.md`.
 
-The pages cover browsing and accounts only. Booking, dashboards and payment
-confirmation are still API-only.
+**Paying.** When a charge needs confirming in the browser, the booking page
+mounts Stripe's Payment Element on the job's client secret
+(`STRIPE_PUBLISHABLE_KEY`), and the webhook, not the browser redirect,
+settles the booking. With the fake provider there is nothing to mount: the
+page shows the pending state and updates when the development webhook lands.
+The Stripe path is wired and unit-tested but has not been run against a live
+Stripe account.
 
-<!-- COORDINATOR: booking and payment pages (in progress in another worktree). Describe the transact pages here once merged: booking flow from a listing, buyer/seller dashboards, offer inbox, payment confirmation for AWAITING_PAYMENT jobs, email-token pages, and the CSRF tokens on those forms. Update the "pages cover browsing and accounts only" sentence above and the matching items in ROADMAP.md and SECURITY.md. -->
+To see the whole flow locally with a payment that waits for confirmation:
+
+```
+uv run python scripts/seed.py
+ALLOW_UNSIGNED_WEBHOOKS=true FAKE_CHARGES_PENDING=true uv run uvicorn marketplace.api:app
+```
 
 ## Repository layout
 
@@ -237,7 +263,7 @@ src/marketplace/
   config.py, repo.py        snapshots the core runs on, and the code that loads them
   catalog.py                the one implementation of catalog visibility and "from" prices
   auth.py                   signup/login, sessions, principal resolution (bearer header or cookie)
-  pages.py, templates/      server-rendered pages
+  pages/, templates/        server-rendered pages: storefront, account, buyer, seller, CSRF
   models.py                 Pydantic views, one family per audience: Buyer*, Seller*, Admin*, Catalog*
   entities.py               SQLAlchemy ORM
   db.py                     engine, pool sizing, CommitRoute (commit before the response is sent)
@@ -298,12 +324,14 @@ headers = {"Authorization": f"Bearer {r.json()['token']}"}
 - **Mail** (verification and reset links) goes through an `EmailSender` port
   in `mail.py`. With `SMTP_HOST` set it sends over SMTP; otherwise it logs
   the message. The links point at `BASE_URL/verify?token=…` and
-  `BASE_URL/password-reset/confirm?token=…`, and the app has no GET handlers
-  for those paths: whatever serves `BASE_URL` has to pass the token to
-  `POST /v1/auth/verify` or `POST /v1/auth/password-reset/confirm`.
-- **Email verification gates nothing.** `POST /v1/auth/verify` sets
-  `email_verified`, and no endpoint checks it. Signup and login work on an
-  unverified account.
+  `BASE_URL/password-reset/confirm?token=…`. The app serves both pages; each
+  renders a form that POSTs the token, so opening a link never consumes it.
+  A separate frontend can instead pass the token to `POST /v1/auth/verify`
+  or `POST /v1/auth/password-reset/confirm`.
+- **Email verification is optional.** `REQUIRE_VERIFIED_EMAIL` (default
+  false) requires a verified email to create a job, accept an offer or
+  create a listing, in the API and the pages alike. With it off,
+  `email_verified` is recorded and nothing checks it.
 - **No rate limiting** on login, signup or password reset. These run argon2
   and are the cheapest way to load the server; put a limit in front of them
   at the edge ([`docs/DEPLOY.md`](docs/DEPLOY.md#edge-rate-limits)).
@@ -657,7 +685,9 @@ changes:
 | `SESSION_TTL_HOURS` | 72 | session lifetime |
 | `COOKIE_SECURE` | false | `Secure` flag on the page session cookie; true behind TLS |
 | `BASE_URL` | `http://localhost:8000` | origin used in verification and reset links |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | unset | real payments; both or neither |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PUBLISHABLE_KEY` | unset | real payments; all three or none |
+| `REQUIRE_VERIFIED_EMAIL` | false | require a verified email to book, accept or list |
+| `FAKE_CHARGES_PENDING` | false | demo only: fake charges wait for the webhook, to show the payment step |
 | `ALLOW_UNSIGNED_WEBHOOKS` | false | open the fake-provider webhook (local only) |
 | `WEBHOOK_RETRY_BASE_SECONDS`, `WEBHOOK_MAX_ATTEMPTS` | 60, 5 | webhook outbox backoff and cap |
 | `QUOTE_TTL_MINUTES`, `OFFER_TTL_MINUTES`, `PAYMENT_TTL_MINUTES` | 15, 120, 30 | lifecycle timeouts |
@@ -734,7 +764,14 @@ See [`src/marketplace_mcp/README.md`](src/marketplace_mcp/README.md).
 
 ## How this was built
 
-<!-- COORDINATOR: "How this was built" section. To be written by the coordinator: the agent-first process, phase by phase, with pointers to the evidence in the repo. Suggested anchors: docs/superpowers/specs and plans (one spec and plan per phase), docs/tryout-findings-2026-07-16.md (bugs found only by driving a live server), ROADMAP.md (the chronological record), and the money-path audit below. -->
+The full account, with the evidence for each claim and the places the
+process failed, is [`docs/BUILDING.md`](docs/BUILDING.md). In short: every
+phase went from a written spec to a task plan to a test-first build, then
+narrow adversarial review, a fix wave, and a try-out against a live server.
+The last stretch was run by one coordinating agent handing briefed pieces
+of work to worker agents in separate git worktrees and merging their
+branches behind the gate. The reviewers are measured against this repo's
+own past bugs in [`evals/`](evals/README.md).
 
 A later audit checked every payment-provider call and every pairing of row
 locks against five bug classes and found two real bugs, both fixed with

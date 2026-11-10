@@ -7,7 +7,7 @@ pluggable pricing pipelines; the platform keeps the spread on every matched pair
 Two booking modes share one job lifecycle. **Dispatch**: a buyer asks for a
 quote on a service type and the platform matches a seller. **Browse**: sellers
 publish listings in a public catalog, a buyer picks one, and the job is pinned
-to that seller. Server-rendered pages (`pages.py`) sit over the same catalog
+to that seller. Server-rendered pages (`pages/`) sit over the same catalog
 and session machinery as the JSON API. `rideshare`/`cleaning` in the seed and
 demo data are placeholders, not a committed vertical.
 
@@ -73,7 +73,7 @@ invariants.
   `get_session` teardown.** Teardown (`session.close()`) runs after the
   response is already on the wire, which is finding F2 (read-your-writes race
   on every chained write); never re-add a commit there. Every router sets
-  `route_class=CommitRoute` (`routers/*.py`, `auth.py`, `pages.py`); the import-time
+  `route_class=CommitRoute` (`routers/*.py`, `auth.py`, `pages/*.py`); the import-time
   `_assert_commit_routes` invariant fails fast if a router is added without
   it — widened in the pages-foundation phase to cover *every* route in the
   app, not just `/v1/*` (`_COMMIT_EXEMPT = {"/healthz"}` is the one deliberate
@@ -93,7 +93,7 @@ invariants.
   `api._domain_error_response` is the only place a domain error becomes
   HTTP. `api.py` holds middleware, the lifespan, router mounting and the
   `_assert_commit_routes` check, and nothing else.
-- **`pages.py` never imports `api.py` or `routers/`.** `api.py` imports and
+- **`pages/` never imports `api.py` or `routers/`.** `api.py` imports and
   mounts `pages_router`, so the reverse import is a cycle. Pages reach domain
   logic the same way the JSON routers do, by calling `services/` (and
   `catalog.py` for catalog reads), and must catch `DomainError` themselves
@@ -103,7 +103,7 @@ invariants.
   `visible_listings_stmt`, `listing_bookable`, `seller_publicly_visible`,
   `indicative_buyer_price`, and the `catalog_listing_out`/`catalog_seller_out`
   view builders live there once; both `/v1/catalog/*` (`routers/catalog.py`) and the
-  storefront pages (`pages.py`) call into them — neither re-implements the
+  storefront pages (`pages/storefront.py`) call into them — neither re-implements the
   join, the filter, or the pricing call. This branch caught two double-
   expression regressions from an earlier draft that hand-rolled the same
   visibility check in two places and let them drift; don't reintroduce a
@@ -128,9 +128,12 @@ invariants.
   literal string scan over the rendered page,
   `tests/test_pages.py::test_page_source_asymmetry*` — a future page adding a
   new field to the template context is exactly the case that scan exists to
-  catch.
+  catch. The logged-in pages follow the same doctrine per audience:
+  buyer pages are scanned for the payout and the margin, seller pages for
+  the buyer's price, the buyer's identity and the payment client secret
+  (`tests/test_pages.py::test_*_pages_never_show_*`).
 - **Cookie sessions are the same `auth_sessions` rows as the API, not a
-  parallel identity system.** `POST /signup` and `POST /login` (`pages.py`)
+  parallel identity system.** `POST /signup` and `POST /login` (`pages/account.py`)
   call the identical `auth.signup`/`auth.login` the JSON API uses, then set
   the *raw* session token as an `HttpOnly`+`SameSite=Lax` cookie (`Secure`
   gated on `settings.cookie_secure`, off by default for local HTTP, on
@@ -142,6 +145,44 @@ invariants.
   session, because it *is* the same row; there is no separate cookie-session
   TTL or revocation path to keep in sync. See `SECURITY.md`'s cookie-posture
   section.
+- **Every authenticated page form carries a session-bound CSRF token.**
+  `pages.csrf.token_for(raw)` is `sha256("marketplace-csrf-v1\0" + raw
+  session token)`: no server secret, no stored state, distinct from
+  `auth_sessions.token_hash`, compared with `hmac.compare_digest`. Every
+  POST in the pages package depends on `require_csrf` except
+  `CSRF_EXEMPT_POSTS` (the unauthenticated forms: `/signup`, `/login`,
+  `/verify`, `/password-reset/request`, `/password-reset/confirm`). A
+  missing or wrong token is a 403 before the handler runs.
+  `tests/test_architecture.py::test_every_page_post_requires_csrf_except_the_allowlist`
+  enforces it; extending the allowlist is a security decision. Every form
+  under a cookie session renders `templates/_csrf.html`.
+- **A page handler that catches a `DomainError` rolls back before it
+  answers** (`pages.common.redirect_after_error`). Page POSTs answer 303,
+  which is under 400, so `CommitRoute` would otherwise commit whatever the
+  service mutated before raising. Work a service committed itself (the
+  pinned-booking 410) stays.
+- **Page POSTs are post/redirect/get, and a repeat is harmless by domain
+  logic, not `Idempotency-Key`.** A repeated confirm finds the job its
+  quote became (`services.booking.job_for_quote`); toggles post the target
+  value; status guards turn other repeats into a notice.
+  `IdempotencyMiddleware` skips every pages-router POST
+  (`exempt=pages.is_page_post`, wired in `api.py`): their redirects and HTML
+  cannot be replayed from the JSON store. Page notices are codes
+  (`?notice=<code>` selects a fixed message from `pages.common.NOTICES`); a
+  service's `detail` is never put in or read from a URL.
+- **The browser payment step gets only `PaymentProvider.browser_key` and the
+  job's client secret.** Both reach the template only while the buyer's own
+  job is `AWAITING_PAYMENT` with a `PENDING` payment. Settlement is the
+  webhook, never the browser redirect. Startup refuses `STRIPE_SECRET_KEY`
+  without a `pk_`-prefixed `STRIPE_PUBLISHABLE_KEY`, and refuses
+  `FAKE_CHARGES_PENDING` (a demo switch) alongside Stripe.
+- **`REQUIRE_VERIFIED_EMAIL` (default off) is enforced in the services.**
+  It gates `create_job`, `accept_offer` and `create_listing`
+  (`services.common.require_verified_email`, after `require_active`, before
+  any lock or write; 403), so the API and the pages agree.
+- **Token links are never consumed on GET.** `/verify` and
+  `/password-reset/confirm` render a form that POSTs the token; the reset
+  request redirects identically for any input.
 - **Pyright strict** across `src/` and `tests/`. Do not drop to basic mode.
 - **Providers are only reached through `payments/port.py`.** `fake.py` and
   `stripe_provider.py` are the only two implementations; never `import stripe`
