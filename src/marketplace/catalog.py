@@ -4,24 +4,34 @@ HTML pages.
 Moved verbatim out of api.py (phase-2 pages foundation): visibility rules
 for the public catalog must never drift between `/v1/catalog/*` and the
 server-rendered browse pages. No logic changes versus the original
-api.py functions — see tests/test_catalog.py, which passes unmodified
-against this module (imported indirectly through api.py's re-exports)."""
+api.py functions — see tests/test_catalog.py. The `/v1/catalog/*` reads
+themselves (`list_listings`, `get_listing`, `get_seller_profile`) live at
+the bottom of this module; the router only parses and returns."""
 
 from collections.abc import Sequence
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import Row, Select, select
 from sqlalchemy.orm import Session
 
 from . import repo
 from .entities import Listing, SellerProfile, User
-from .models import CatalogListingOut, CatalogSellerOut, Side, UserStatus, to_money
+from .errors import NotFoundError
+from .models import (
+    CatalogListingOut,
+    CatalogSellerOut,
+    CatalogSellerProfileOut,
+    Side,
+    UserStatus,
+    to_money,
+)
 from .pricing import PricingContext, run_pipeline
 
 
 def indicative_buyer_price(session: Session, service_type_id: str) -> Decimal | None:
     """Catalog 'from' price: the buyer pipeline at this instant, pre-floor.
-    Mirrors create_quote's price computation (api.py) — keep the two in
+    Mirrors create_quote's price computation (services/booking.py) — keep the two in
     sync); a real quote may floor-bump the price upward, so this is a
     floor-blind lower bound, never an exact promise."""
     cfg = repo.load_pricing_config(session, service_type_id)
@@ -152,3 +162,42 @@ def catalog_listings_for_rows(
             continue
         out.append(catalog_listing_out(listing, user, seller, price))
     return out
+
+
+# ---------- /v1/catalog/* reads (moved from the api.py catalog router) ----------
+
+
+def list_listings(
+    session: Session, service_type_id: str | None, limit: int, offset: int
+) -> list[CatalogListingOut]:
+    rows = session.execute(visible_listings_page(limit, offset, service_type_id)).all()
+    return catalog_listings_for_rows(session, rows)
+
+
+def get_listing(session: Session, listing_id: UUID) -> CatalogListingOut:
+    row = session.execute(visible_listings_stmt().where(Listing.id == listing_id)).first()
+    if row is None:
+        raise NotFoundError("listing not found")
+    listing, user, seller = row
+    price = indicative_buyer_price(session, listing.service_type_id)
+    if price is None:
+        raise NotFoundError("listing not found")
+    return catalog_listing_out(listing, user, seller, price)
+
+
+def get_seller_profile(session: Session, seller_id: str) -> CatalogSellerProfileOut:
+    user = session.get(User, seller_id)
+    seller = session.get(SellerProfile, seller_id)
+    if not seller_publicly_visible(user, seller):
+        raise NotFoundError("seller not found")
+    assert user is not None
+    assert seller is not None
+    rows = session.execute(visible_listings_stmt().where(Listing.seller_id == seller_id)).all()
+    return CatalogSellerProfileOut(
+        seller_id=user.id,
+        display_name=user.display_name,
+        rating=seller.rating,
+        rating_count=seller.rating_count,
+        completed_jobs=seller.completed_jobs,
+        listings=catalog_listings_for_rows(session, rows),
+    )

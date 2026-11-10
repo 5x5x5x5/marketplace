@@ -198,16 +198,6 @@ def put_notification_preferences(
 
 buyer_router = APIRouter(prefix="/v1", tags=["buyer"], route_class=CommitRoute)
 
-# Moved to catalog.py (shared with the HTML pages layer); re-exported here
-# under their original names — tests/test_catalog.py imports the first two
-# directly from marketplace.api, and every call site below is unchanged.
-_indicative_buyer_price = catalog.indicative_buyer_price
-_listing_bookable = catalog.listing_bookable
-_visible_listings_stmt = catalog.visible_listings_stmt
-_catalog_seller_out = catalog.catalog_seller_out
-_catalog_listing_out = catalog.catalog_listing_out
-_catalog_listings_for_rows = catalog.catalog_listings_for_rows
-
 
 @buyer_router.post("/quotes", response_model=QuoteOut, status_code=201)
 def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Quote:
@@ -686,10 +676,6 @@ async def payments_webhook(request: Request, provider: ProviderDep) -> dict[str,
 
 catalog_router = APIRouter(prefix="/v1/catalog", tags=["catalog"], route_class=CommitRoute)
 
-# _listing_bookable, _visible_listings_stmt, _catalog_seller_out,
-# _catalog_listing_out, _catalog_listings_for_rows: moved to catalog.py
-# (module docstring above, near buyer_router) — aliased there.
-
 
 @catalog_router.get("/listings", response_model=list[CatalogListingOut])
 def catalog_list_listings(
@@ -698,39 +684,17 @@ def catalog_list_listings(
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> list[CatalogListingOut]:
-    rows = session.execute(catalog.visible_listings_page(limit, offset, service_type_id)).all()
-    return _catalog_listings_for_rows(session, rows)
+    return catalog.list_listings(session, service_type_id, limit, offset)
 
 
 @catalog_router.get("/listings/{listing_id}", response_model=CatalogListingOut)
 def catalog_get_listing(listing_id: UUID, session: SessionDep) -> CatalogListingOut:
-    row = session.execute(_visible_listings_stmt().where(Listing.id == listing_id)).first()
-    if row is None:
-        raise HTTPException(status_code=404, detail="listing not found")
-    listing, user, seller = row
-    price = _indicative_buyer_price(session, listing.service_type_id)
-    if price is None:
-        raise HTTPException(status_code=404, detail="listing not found")
-    return _catalog_listing_out(listing, user, seller, price)
+    return catalog.get_listing(session, listing_id)
 
 
 @catalog_router.get("/sellers/{seller_id}", response_model=CatalogSellerProfileOut)
 def catalog_get_seller(seller_id: str, session: SessionDep) -> CatalogSellerProfileOut:
-    user = session.get(User, seller_id)
-    seller = session.get(SellerProfile, seller_id)
-    if not catalog.seller_publicly_visible(user, seller):
-        raise HTTPException(status_code=404, detail="seller not found")
-    assert user is not None
-    assert seller is not None
-    rows = session.execute(_visible_listings_stmt().where(Listing.seller_id == seller_id)).all()
-    return CatalogSellerProfileOut(
-        seller_id=user.id,
-        display_name=user.display_name,
-        rating=seller.rating,
-        rating_count=seller.rating_count,
-        completed_jobs=seller.completed_jobs,
-        listings=_catalog_listings_for_rows(session, rows),
-    )
+    return catalog.get_seller_profile(session, seller_id)
 
 
 # ---------- App assembly ----------
