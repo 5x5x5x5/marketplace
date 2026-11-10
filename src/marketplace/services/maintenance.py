@@ -151,7 +151,7 @@ def _run_sweep_once() -> None:
 async def maintenance_loop() -> None:
     """The template's heartbeat: drain the outbox every few seconds and run the
     sweeps every minute, so offers/payments/sessions expire — and sellers get
-    their 2-minute-TTL offer emails — even when no requests arrive. Ticks are
+    their offer emails within the offer TTL — even when no requests arrive. Ticks are
     crash-proof; cancellation (lifespan shutdown) stops the loop."""
     last_sweep = time.monotonic()
     while True:

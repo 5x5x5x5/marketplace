@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     db_max_overflow: int = 30
     db_pool_timeout_seconds: float = 5.0
 
-    # fork divergence: browse marketplace with human sellers — see browse-core spec
+    # Sized for human sellers answering a browse booking, not instant dispatch.
     quote_ttl_minutes: int = 15
     offer_ttl_minutes: int = 120
 

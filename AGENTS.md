@@ -35,9 +35,12 @@ only run there.
 
 ```
 src/marketplace/
-  api.py            routers (buyer, seller, admin, catalog, payments), lifecycle, maintenance loop
+  api.py            app assembly only: middleware, lifespan, router mounting, error mapping
+  routers/          thin JSON routers (buyer, seller, admin, catalog, payments, reports, preferences)
+  services/         domain logic: booking, jobs, offers, webhooks, disputes, payouts, maintenance, ...
+  errors.py         domain errors that services raise (mapped to HTTP once, in api.py)
   auth.py           sessions, signup/login, principal resolution (bearer header or cookie)
-  pages.py          server-rendered pages (never imports api.py)
+  pages.py          server-rendered pages (call services; never import api.py or routers/)
   catalog.py        the one implementation of catalog visibility and "from" prices
   models.py         Pydantic views, one family per role: Buyer*, Seller*, Admin*, Catalog*
   entities.py       ORM (never returned from a route unmapped)
@@ -46,6 +49,7 @@ src/marketplace/
   db.py             sessions and CommitRoute (commit before the response is sent)
   payments/         port.py + fake.py + stripe_provider.py (the only place stripe is imported)
   notifications.py  transactional outbox            idempotency.py  Idempotency-Key replay
+src/marketplace_mcp/  ops MCP server: the admin HTTP API as operator tools (never imports the app)
 migrations/versions/  Alembic, must run on SQLite and Postgres, no app imports
 tests/                pytest; conftest.py points at a temp SQLite DB unless DATABASE_URL is set
 docs/superpowers/     design specs and implementation plans for every phase
@@ -72,6 +76,8 @@ Agents with Claude Code get this as executable configuration under
 | Add a pricing adjuster or matching strategy | `.claude/skills/pricing-extension/SKILL.md` |
 | Try it against a running server | `.claude/skills/tryout/SKILL.md` |
 | Review a diff | `.claude/agents/*-reviewer.md` |
+| Background agents (issue to PR, PR review, weekly upkeep) | `docs/background-agents.md` |
+| Operate the marketplace from an agent | `src/marketplace_mcp/README.md` |
 
 `docs/agent-setup.md` explains why each piece exists.
 

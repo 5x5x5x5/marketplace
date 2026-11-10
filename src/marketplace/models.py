@@ -84,7 +84,7 @@ class WebhookEventStatus(StrEnum):
 
 
 class EventKind(StrEnum):
-    OFFER_RECEIVED = "offer_received"  # seller: the 2-minute clock is ticking
+    OFFER_RECEIVED = "offer_received"  # seller: the offer TTL clock is ticking
     JOB_ACCEPTED_BUYER = "job_accepted_buyer"
     JOB_COMPLETED_BUYER = "job_completed_buyer"
     JOB_EXPIRED_BUYER = "job_expired_buyer"

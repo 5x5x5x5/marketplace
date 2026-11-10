@@ -400,6 +400,6 @@ def test_dispatch_unchanged(
 
 
 def test_ttl_defaults() -> None:
-    """Guards the fork divergence from upstream TTL defaults."""
+    """Guards the browse-era TTL defaults (human sellers, not instant dispatch)."""
     assert settings.quote_ttl_minutes == 15
     assert settings.offer_ttl_minutes == 120

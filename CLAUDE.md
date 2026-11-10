@@ -26,6 +26,7 @@ invariants.
 - `uv run uvicorn marketplace.api:app --reload` — API (SQLite by default;
   `ALLOW_UNSIGNED_WEBHOOKS=true` to post fake-provider webhooks)
 - Postgres: `docker compose up -d db && uv run alembic upgrade head` (see `.env.example`)
+- `uv run --group mcp python -m marketplace_mcp` — ops MCP server over stdio (see `src/marketplace_mcp/README.md`)
 - `bash loadtest/run_baseline.sh` — capacity harness (`uv sync --group loadtest` first; see `loadtest/README.md`)
 
 ## Non-negotiables
@@ -63,11 +64,16 @@ invariants.
 - **Concurrency is the DB's job.** Quote consumption, job/offer status
   transitions, and capacity checks use `session.get(..., with_for_update=True)`.
   There is no process-level lock; don't add one.
+  Canonical lock orders are Payment → Job and Offer → SellerProfile → Job.
+  A path that already holds the Job lock and must touch Offer rows (the
+  cancel paths, via `services.offers.expire_open_offers`) claims them
+  `FOR UPDATE SKIP LOCKED`, never a blocking lock or a plain UPDATE. A lock
+  taken after an unlocked read uses `populate_existing` and re-checks status.
 - **Commits happen in `db.CommitRoute`, before the response is sent — never in
   `get_session` teardown.** Teardown (`session.close()`) runs after the
   response is already on the wire, which is finding F2 (read-your-writes race
   on every chained write); never re-add a commit there. Every router sets
-  `route_class=CommitRoute` (`api.py`, `auth.py`, `pages.py`); the import-time
+  `route_class=CommitRoute` (`routers/*.py`, `auth.py`, `pages.py`); the import-time
   `_assert_commit_routes` invariant fails fast if a router is added without
   it — widened in the pages-foundation phase to cover *every* route in the
   app, not just `/v1/*` (`_COMMIT_EXEMPT = {"/healthz"}` is the one deliberate
@@ -79,16 +85,24 @@ invariants.
   in-flight request. Streaming responses would need a rethink of both
   `CommitRoute` and the idempotency buffer (`idempotency.py`); the app has
   none today.
-- **`pages.py` never imports `api.py`.** Import direction is one-way:
-  `pages -> (db, auth, catalog, entities, models)`. `api.py` imports and
-  mounts `pages_router` (`app.include_router(pages_router)`); the reverse
-  import would be a cycle. If a page ever needs API-layer logic, move the
-  shared piece into a module both can import (as `catalog.py` did for
-  catalog reads) — never import `api` from `pages`.
+- **Domain logic lives in `services/`; routers are thin; `api.py` is
+  assembly only.** A service takes a `Session` plus plain arguments (ids and
+  roles, never `Claims`), imports no fastapi/starlette, `api`, `routers`,
+  `pages` or `auth`, and raises only `errors.DomainError` subclasses. A
+  router parses, calls one service and returns; it never touches the session.
+  `api._domain_error_response` is the only place a domain error becomes
+  HTTP. `api.py` holds middleware, the lifespan, router mounting and the
+  `_assert_commit_routes` check, and nothing else.
+- **`pages.py` never imports `api.py` or `routers/`.** `api.py` imports and
+  mounts `pages_router`, so the reverse import is a cycle. Pages reach domain
+  logic the same way the JSON routers do, by calling `services/` (and
+  `catalog.py` for catalog reads), and must catch `DomainError` themselves
+  to render an error page. The pure core, `repo` and `notifications` never
+  import services.
 - **`catalog.py` is the single source of catalog visibility/pricing truth.**
   `visible_listings_stmt`, `listing_bookable`, `seller_publicly_visible`,
   `indicative_buyer_price`, and the `catalog_listing_out`/`catalog_seller_out`
-  view builders live there once; both `/v1/catalog/*` (`api.py`) and the
+  view builders live there once; both `/v1/catalog/*` (`routers/catalog.py`) and the
   storefront pages (`pages.py`) call into them — neither re-implements the
   join, the filter, or the pricing call. This branch caught two double-
   expression regressions from an earlier draft that hand-rolled the same
@@ -132,7 +146,7 @@ invariants.
 - **Providers are only reached through `payments/port.py`.** `fake.py` and
   `stripe_provider.py` are the only two implementations; never `import stripe`
   outside `stripe_provider.py`, and never call a provider SDK directly from
-  `api.py`. Selection (`payments/__init__.get_provider`) is env-driven
+  a service or router. Selection (`payments/__init__.get_provider`) is env-driven
   (`STRIPE_SECRET_KEY`).
 - **`Payment`/`Payout` record cash movement; `Transaction` stays the margin
   ledger.** Don't merge them — `Transaction.margin` is booked at completion
@@ -158,7 +172,7 @@ invariants.
   meet at the unique constraint and the loser answers `duplicate`, never a
   500. A handler failure is persisted FAILED in a fresh session (attempts,
   one-line `last_error`, exponential `next_attempt_at`) and the endpoint
-  answers 200 `{"status": "deferred"}`. `_run_webhook_retry_once`
+  answers 200 `{"status": "deferred"}`. `services.webhooks.run_webhook_retry_once`
   (maintenance loop) claims due rows with `SKIP LOCKED` and re-applies each
   under its own savepoint until APPLIED or `settings.webhook_max_attempts`;
   at the cap the row goes DEAD_LETTER and admins get the unmutable
@@ -166,14 +180,17 @@ invariants.
   `GET /v1/admin/webhooks` and re-queue via
   `POST /v1/admin/webhooks/{id}/retry`. `payload` is the parsed
   `PaymentEvent` fields only, never the raw body or signature.
-- **Every `_apply_payment_event` branch is safe to apply twice and safe to
-  apply late.** The retry job re-runs events after the job, payment or
+- **Every `_apply_payment_event` branch (`services/webhooks.py`) is safe to
+  apply twice and safe to apply late.** The retry job re-runs events after the job, payment or
   dispute has moved on, and after later events for the same object applied.
   A new branch needs a replay marker (a status lattice, a transition guard,
   or a durable row) plus a twice-test and a late-test in
   `tests/test_webhook_replay.py`. Money-moving markers must be permanent
   rows (for example the `CHARGEBACK_FEE` adjustment's `provider_ref`), not
-  the reapable webhook ledger.
+  the reapable webhook ledger. `transfer_failed` for a transfer that a
+  pinned dispute clawback covers in full is the platform's own reversal, not
+  a failure: the payout stays PAID and nobody is paged, because a FAILED
+  payout would invite an admin retry that pays the seller again.
 - **The unsigned webhook is closed by default.** Without `STRIPE_SECRET_KEY`,
   `POST /v1/payments/webhook` 404s unless `ALLOW_UNSIGNED_WEBHOOKS=true`
   (dev, tests and demo only; `tests/conftest.py` and `scripts/demo.py` set
@@ -201,8 +218,8 @@ invariants.
   `webhook_events` row is exempt the same way: it is still owed a retry.
   Don't widen the notifications delete to include `PENDING`, or the webhook
   delete to include `FAILED`.
-- **Sync DB work stays off the event loop.** `_process_webhook` and the
-  maintenance jobs run session work via `asyncio.to_thread` (`api.py`), and
+- **Sync DB work stays off the event loop.** `services.webhooks.process_webhook` and
+  the maintenance jobs run session work via `asyncio.to_thread`, and
   `IdempotencyMiddleware` uses `run_in_threadpool`; nothing calls a session
   inline in an `async def`. A slow or blocked DB call must never stall every
   other in-flight request.
@@ -215,14 +232,14 @@ invariants.
   behind an external pooler; SQLite ignores all of these. If you raise the
   threadpool, raise the pool with it; replicas × (size + overflow) must fit
   Postgres `max_connections`.
-- **List endpoints paginate in SQL.** `api._paginate(session, stmt, limit,
-  offset)` takes a `Select` with a total order (a unique tie-breaker, usually
+- **List endpoints paginate in SQL.** `services.common.paginate(session, stmt,
+  limit, offset)` takes a `Select` with a total order (a unique tie-breaker, usually
   `id`). Never fetch all rows and slice in Python. Catalog pages go through
   `catalog.visible_listings_page`.
-- **Read-path sweeps do only what correctness needs.** `_sweep` (offer expiry
+- **Read-path sweeps do only what correctness needs.** `services.maintenance.sweep` (offer expiry
   with re-match, stale-payment release) stays lazy on reads. Deletes of rows
   nothing can observe (expired quotes, sessions, email tokens, retention)
-  live in `_housekeeping`, run only by the maintenance loop and
+  live in `housekeeping`, run only by the maintenance loop and
   `POST /v1/admin/jobs/sweep`. The offer-expiry sweep claims offers
   `FOR UPDATE SKIP LOCKED` (Offer → Job, same order as accept and decline),
   so concurrent sweeps never re-match one offer twice.
@@ -232,6 +249,18 @@ invariants.
 - **Candidate loading is batched.** `repo.eligible_candidates` uses a fixed
   number of queries regardless of seller count; don't reintroduce per-seller
   queries on the quote or re-match paths.
+- **`marketplace_mcp` is an HTTP-only client of `/v1/admin/*`.** It never
+  imports `marketplace` internals or the DB layer, never exposes dispute
+  resolution or job cancellation, and registers write tools only when
+  `MARKETPLACE_MCP_ENABLE_WRITES` is set. User-authored text in tool results
+  goes through `untrusted.wrap`.
+- **Agent workflows are comment-and-branch only.**
+  `.github/workflows/agent-*.yml` run only after a job holding no secrets
+  has confirmed the actor has write access and any pull request head is in
+  this repository. They use `pull_request`, never `pull_request_target`, and
+  pass event text to scripts only through environment variables. Agents
+  never merge, approve, or push the default branch; branch protection
+  enforces that. See `docs/background-agents.md`.
 - **Statically checkable rules are checked.** `tests/test_architecture.py`
   and `.semgrep/rules/` encode the rules here that a machine can verify; each
   failure names the rule and the fix. When you add a rule to this list, add
@@ -276,10 +305,10 @@ invariants.
   resolution pins `refund_amount`/`clawback_amount` and commits *before*
   calling the payment provider, so a subsequent provider failure (502) still
   leaves the pinned amounts durable for a retry to converge on
-  (`resolve_dispute`, `api.py`); and pinned quote-consumption on a 410 — a
+  (`services.disputes.resolve_dispute`); and pinned quote-consumption on a 410 — a
   pinned listing that's gone unavailable deletes+commits the now-dead quote
   before raising, so it can never be retried (`create_job`'s
-  pinned-listing-unavailable branch, `api.py`).
+  pinned-listing-unavailable branch, `services/booking.py`).
 
 ## Subtle bits
 
@@ -324,16 +353,17 @@ invariants.
   scraping the console adapter's log output. Restore the previous sender
   (`use_sender` returns it) when done — the fixture in `conftest.py` does this
   around each test.
-- The maintenance loop (`api._maintenance_loop`, spawned in the lifespan)
+- The maintenance loop (`services.maintenance.maintenance_loop`, spawned in the lifespan)
   never runs in tests: the `client` fixture builds `TestClient(api.app)`
   without entering its context manager, so tests call
   `notifications.drain_once()` deterministically instead of waiting on ticks.
   `SMTP_HOST` is pinned empty in `conftest.py` so a developer `.env` can never
   make the suite send real mail.
-- Import direction for notifications is one-way:
-  `api -> notifications -> (mail, db, entities, models)`. The loop lives in
-  `api.py` because it ticks `_sweep`; putting it in `notifications.py` would
-  create a cycle.
+- Import direction is one-way:
+  `api -> routers -> services -> (notifications, repo, catalog, payments) ->
+  (mail, db, entities, models)`. The maintenance loop lives in
+  `services/maintenance.py` because it ticks the sweeps; putting it in
+  `notifications.py` would create a cycle.
 
 ## Explicit non-goals (fork work, not template)
 
