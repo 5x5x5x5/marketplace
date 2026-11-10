@@ -1,0 +1,232 @@
+# Security invariants from CLAUDE.md, as Semgrep rules that can run on a diff.
+# Complementary to tests/test_architecture.py: these also catch the shape of a
+# violation in code the architecture tests do not import (scripts, new modules).
+# Scan scope: `src/` and `scripts/` (tests legitimately build raw tokens).
+rules:
+  - id: marketplace-request-model-identity-field
+    message: >-
+      Request models must not declare buyer_id/seller_id. Identity comes from the
+      authenticated principal (auth dependency), never the request body; a body
+      field reintroduces impersonation. Remove the field and take the id from
+      the auth claims in the handler.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: |
+              class $C(BaseModel):
+                  ...
+                  buyer_id: $T
+                  ...
+          - pattern: |
+              class $C(BaseModel):
+                  ...
+                  seller_id: $T
+                  ...
+          - pattern: |
+              class $C(BaseModel):
+                  ...
+                  buyer_id: $T = $D
+                  ...
+          - pattern: |
+              class $C(BaseModel):
+                  ...
+                  seller_id: $T = $D
+                  ...
+      - metavariable-regex:
+          metavariable: $C
+          regex: ^\w*(Request|Req|Body|Create|Update|In|Input|Payload)$
+    metadata:
+      invariant: identity-from-principal
+
+  - id: marketplace-stripe-import-outside-provider
+    message: >-
+      The Stripe SDK may only be imported in payments/stripe_provider.py. Add the
+      operation to PaymentProvider (payments/port.py), implement it in fake.py
+      and stripe_provider.py, and reach it through payments.get_provider().
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: import stripe
+      - pattern: import stripe.$X
+      - pattern: from stripe import $X
+      - pattern: from stripe.$M import $X
+    paths:
+      exclude:
+        - "**/payments/stripe_provider.py"
+    metadata:
+      invariant: provider-port-only
+
+  - id: marketplace-template-unsafe-output
+    message: >-
+      Jinja autoescape is a security boundary. Do not use |safe or turn
+      autoescape off in a template; seller-supplied text renders on public
+      pages. Render as plain {{ value }}.
+    severity: ERROR
+    languages: [generic]
+    paths:
+      include:
+        - "*.html"
+        - "*.jinja"
+        - "*.j2"
+    pattern-either:
+      - pattern-regex: \|\s*safe\b
+      - pattern-regex: \{%-?\s*autoescape\s+(false|off)\b
+    metadata:
+      invariant: autoescape-boundary
+
+  - id: marketplace-python-autoescape-disabled
+    message: >-
+      Do not disable Jinja autoescape or wrap strings in Markup/mark_safe;
+      user-supplied content would render unescaped. Pass plain strings to the
+      template.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: $F(..., autoescape=False, ...)
+      - pattern: Markup(...)
+      - pattern: markupsafe.Markup(...)
+      - pattern: mark_safe(...)
+    metadata:
+      invariant: autoescape-boundary
+
+  - id: marketplace-log-sensitive-request-data
+    message: >-
+      Do not log request headers, cookies, bodies, query strings or credentials.
+      Bearer tokens ride in headers and reset/verification tokens in bodies. Log
+      method/path/status/duration/request-id only.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $L.$M(..., <... $R.headers ...>, ...)
+          - pattern: $L.$M(..., <... $R.cookies ...>, ...)
+          - pattern: $L.$M(..., <... $R.query_params ...>, ...)
+          - pattern: $L.$M(..., <... $R.query_string ...>, ...)
+          - pattern: $L.$M(..., <... $R.url.query ...>, ...)
+          - pattern: $L.$M(..., <... await $R.body() ...>, ...)
+          - pattern: $L.$M(..., <... await $R.json() ...>, ...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(debug|info|warning|warn|error|exception|critical|log)$
+      - metavariable-regex:
+          metavariable: $L
+          regex: (?i)^(.*log.*|logging)$
+    metadata:
+      invariant: no-sensitive-access-logs
+
+  - id: marketplace-log-sensitive-extra-key
+    message: >-
+      A log record's extra= must not carry headers, cookies, authorization,
+      bodies, query strings or credentials: the JSON formatter would emit them.
+      The access log line is method/path/status/duration/request-id only.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern: |
+          $L.$M(..., extra={..., $K: $V, ...}, ...)
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(debug|info|warning|warn|error|exception|critical|log)$
+      - metavariable-regex:
+          metavariable: $L
+          regex: (?i)^(.*log.*|logging)$
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^["'](headers?|cookies?|authorization|body|query|query_string|password|token|secret)["']$
+    metadata:
+      invariant: no-sensitive-access-logs
+
+  - id: marketplace-secret-compared-with-equality
+    message: >-
+      Compare passwords, tokens, secrets and signatures with
+      hmac.compare_digest (constant time), not == / !=. Plain comparison leaks
+      how many leading bytes matched. (Passwords: use auth.verify_password.)
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i)^(\w+\.)*\w*(password|passwd|token|secret|signature|digest|api_key|apikey)$
+      - pattern-not: $A == None
+      - pattern-not: $A != None
+      - pattern-not: $A == ""
+      - pattern-not: $A != ""
+    metadata:
+      invariant: constant-time-compare
+
+  - id: marketplace-raw-credential-persisted
+    message: >-
+      Never persist a raw credential. Sessions and email tokens store only the
+      sha256 (token_hash=_hash_token(raw)); passwords only as
+      auth.hash_password(...). Response models (...Out) may carry the raw token
+      to the client once; entities may not.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $C(..., token=$X, ...)
+          - pattern: $C(..., raw_token=$X, ...)
+          - pattern: $C(..., session_token=$X, ...)
+          - pattern: $C(..., password=$X, ...)
+      - metavariable-regex:
+          metavariable: $C
+          regex: ^(?!\w*(Out|Request|Response|Body|View|Form|Credentials)$)(?!\w*(Sender|Client|Smtp))[A-Z]\w*$
+    metadata:
+      invariant: hashed-credentials-only
+
+  - id: marketplace-raw-credential-assigned
+    message: >-
+      Never assign a raw token/password onto an entity attribute. Store
+      token_hash=_hash_token(raw) / password_hash=hash_password(pw).
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: $O.token = $X
+      - pattern: $O.raw_token = $X
+      - pattern: $O.password = $X
+    metadata:
+      invariant: hashed-credentials-only
+
+  - id: marketplace-credential-hash-column-not-hashed
+    message: >-
+      token_hash / password_hash must be fed by the hashing helper
+      (_hash_token / hash_token / hashlib.sha256(...).hexdigest() /
+      hash_password), never a raw value or an unrelated variable.
+    severity: ERROR
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: $C(..., token_hash=$X, ...)
+          - pattern: $C(..., password_hash=$X, ...)
+      - pattern-not: $C(..., token_hash=_hash_token(...), ...)
+      - pattern-not: $C(..., token_hash=hash_token(...), ...)
+      - pattern-not: $C(..., token_hash=hashlib.sha256(...).hexdigest(), ...)
+      - pattern-not: $C(..., password_hash=hash_password(...), ...)
+      - pattern-not: $C(..., password_hash=auth.hash_password(...), ...)
+      - metavariable-regex:
+          metavariable: $C
+          regex: ^[A-Z]\w*$
+    metadata:
+      invariant: hashed-credentials-only
+
+  - id: marketplace-money-field-float
+    message: >-
+      Money is Decimal, quantized with models.to_money and serialized as a JSON
+      string. A float price/payout/amount/margin/fee field loses cents. Only the
+      pricing pipeline's ratios (pricing.py, matching.py, config.py) stay float.
+    severity: ERROR
+    languages: [python]
+    # Regex, not an AST pattern: Semgrep's bare annotation pattern (`$F: $T`)
+    # only matched some field shapes. Class-body fields only (indented, name first).
+    pattern-regex: (?im)^[ \t]+\w*(price|payout|amount|margin|fee|fees|revenue)\w*[ \t]*:[ \t]*(float|Optional\[float\])\b|^[ \t]+\w*(price|payout|amount|margin|fee|fees|revenue)\w*[ \t]*:[ \t]*float[ \t]*\|[ \t]*None\b
+    paths:
+      exclude:
+        - "**/pricing.py"
+        - "**/matching.py"
+        - "**/config.py"
+    metadata:
+      invariant: money-is-decimal
