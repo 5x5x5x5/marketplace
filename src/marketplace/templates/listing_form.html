@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}{{ "Edit listing" if listing_id else "New listing" }} — Marketplace{% endblock %}
+
+{% block content %}
+<section class="auth-form">
+  <p class="panel-kicker"><a href="/seller">Dashboard</a></p>
+  <h1>{{ "Edit listing" if listing_id else "New listing" }}</h1>
+  {% if errors %}
+  <div class="form-error" role="alert">
+    <p>Please fix the following:</p>
+    <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+  <form method="post" action="{{ '/seller/listings/' ~ listing_id if listing_id else '/seller/listings' }}">
+    {% include "_csrf.html" %}
+    {% if not listing_id %}
+    <label>
+      Service
+      <select name="service_type_id" required>
+        {% for sid in service_types %}
+        <option value="{{ sid }}" {% if values.service_type_id == sid %}selected{% endif %}>{{ sid }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% else %}
+    <p>Service: {{ values.service_type_id }}</p>
+    {% endif %}
+    <label>
+      Title
+      <input type="text" name="title" value="{{ values.title }}" required maxlength="120" />
+    </label>
+    <label>
+      Description
+      <textarea name="description" rows="5" maxlength="4000">{{ values.description }}</textarea>
+    </label>
+    <label>
+      Photo URLs
+      <textarea name="photo_urls" rows="3" aria-describedby="photo-hint">{{ values.photo_urls }}</textarea>
+      <span id="photo-hint" class="field-hint">One https:// address per line, up to 12.</span>
+    </label>
+    <p class="field-hint">Prices are set by the platform, not on the listing.</p>
+    <button type="submit" class="button">{{ "Save" if listing_id else "Create listing" }}</button>
+  </form>
+</section>
+{% endblock %}

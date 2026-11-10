@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_label, when %}
+
+{% block title %}Dashboard — Marketplace{% endblock %}
+
+{% block content %}
+<section class="catalog-header">
+  <h1>Seller dashboard</h1>
+</section>
+
+<section class="dashboard-section" aria-labelledby="h-payments">
+  <h2 id="h-payments">Payments</h2>
+  {% if profile.payments_ready %}
+  <p>Payments are set up. Payouts go to your connected account when you complete a job.</p>
+  {% else %}
+  <p>Set up payments to publish listings and receive offers.</p>
+  <form method="post" action="/seller/payments/onboard">
+    {% include "_csrf.html" %}
+    <button type="submit" class="button">Set up payments</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="dashboard-section" aria-labelledby="h-availability">
+  <h2 id="h-availability">Availability</h2>
+  {% if availability %}
+  <table class="table">
+    <thead><tr><th scope="col">Service</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Change</span></th></tr></thead>
+    <tbody>
+      {% for service_type_id, on in availability %}
+      <tr>
+        <td>{{ service_type_id }}</td>
+        <td>{% if on %}Available{% else %}Not available{% endif %}</td>
+        <td>
+          <form method="post" action="/seller/availability">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="service_type_id" value="{{ service_type_id }}" />
+            <input type="hidden" name="on" value="{{ 'false' if on else 'true' }}" />
+            <button type="submit" class="button button-secondary">{{ "Go unavailable" if on else "Go available" }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No services are configured yet.</p>
+  {% endif %}
+</section>
+
+<section class="dashboard-section" aria-labelledby="h-offers">
+  <h2 id="h-offers">Offers</h2>
+  {% if offers %}
+  <table class="table">
+    <thead><tr><th scope="col">Service</th><th scope="col">Your payout</th><th scope="col">Respond by</th><th scope="col"><span class="visually-hidden">Respond</span></th></tr></thead>
+    <tbody>
+      {% for offer in offers %}
+      <tr>
+        <td>{{ offer.service_type_id }}</td>
+        <td>${{ offer.seller_payout }}</td>
+        <td>{{ when(offer.expires_at) }}</td>
+        <td>
+          <form method="post" action="/seller/offers/{{ offer.id }}/accept">
+            {% include "_csrf.html" %}
+            <button type="submit" class="button">Accept</button>
+          </form>
+          <form method="post" action="/seller/offers/{{ offer.id }}/decline">
+            {% include "_csrf.html" %}
+            <button type="submit" class="button button-secondary">Decline</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No open offers.</p>
+  {% endif %}
+</section>
+
+<section class="dashboard-section" aria-labelledby="h-jobs">
+  <h2 id="h-jobs">Jobs</h2>
+  {% if jobs %}
+  <table class="table">
+    <thead><tr><th scope="col">Accepted</th><th scope="col">Service</th><th scope="col">Your payout</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td>{{ when(job.accepted_at) if job.accepted_at else "" }}</td>
+        <td>{{ job.service_type_id }}</td>
+        <td>${{ job.seller_payout }}</td>
+        <td><span class="status-pill status-{{ job.status.value }}">{{ status_label(job.status) }}</span></td>
+        <td>
+          {% if job.status == accepted %}
+          <form method="post" action="/seller/jobs/{{ job.id }}/complete">
+            {% include "_csrf.html" %}
+            <button type="submit" class="button">Mark complete</button>
+          </form>
+          {% elif job.status.value == "awaiting_payment" %}
+          <span class="field-hint">Waiting for the buyer's payment</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No jobs yet.</p>
+  {% endif %}
+</section>
+
+<section class="dashboard-section" aria-labelledby="h-listings">
+  <h2 id="h-listings">Listings</h2>
+  <p><a class="button" href="/seller/listings/new">New listing</a></p>
+  {% if listings %}
+  <table class="table">
+    <thead><tr><th scope="col">Title</th><th scope="col">Service</th><th scope="col">In catalog</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+    <tbody>
+      {% for listing in listings %}
+      <tr>
+        <td>{{ listing.title }}</td>
+        <td>{{ listing.service_type_id }}</td>
+        <td>
+          {% if listing.hidden %}Taken down by the platform
+          {% elif listing.active %}Live
+          {% else %}Paused{% endif %}
+        </td>
+        <td>
+          <a href="/seller/listings/{{ listing.id }}/edit">Edit</a>
+          <form method="post" action="/seller/listings/{{ listing.id }}/active">
+            {% include "_csrf.html" %}
+            <input type="hidden" name="active" value="{{ 'false' if listing.active else 'true' }}" />
+            <button type="submit" class="link-button">{{ "Pause" if listing.active else "Make live" }}</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No listings yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
