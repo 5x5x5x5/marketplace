@@ -215,9 +215,13 @@ Some things worth knowing about how that went:
   from "does not exist", a rule held only by convention, thin spots in the
   page scans). All seven were fixed with tests, and the convention became
   an architecture test (`docs/tryout-findings-2026-11-10.md`).
-- **Not everything was verified, and the documents say which.** The GitHub
-  workflows have never run: they need a secret only the maintainer can
-  add. The Stripe card-entry flow has not been exercised against a live
+- **Not everything was verified, and the documents say which.** The CI
+  workflow has run on every push of this work and passes (lint, types, both
+  database engines, migrations, hook tests). The agent workflows have never
+  run: they need a secret only the maintainer can add. The security and
+  weekly upkeep workflows trigger on pull requests, the default branch and a
+  schedule, so they have not run either, though their scans were run by
+  hand and are clean. The Stripe card-entry flow has not been exercised against a live
   account. The load numbers come from one pair of runs on one shared
   machine. Each of these is stated where a reader would look for it.
 
