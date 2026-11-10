@@ -2128,12 +2128,87 @@ def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict
 payments_router = APIRouter(prefix="/v1/payments", tags=["payments"], route_class=CommitRoute)
 
 
+def _applied_elsewhere(session: Session, event: PaymentEvent) -> bool:
+    """Was an event of this kind for this same provider object already applied
+    under a different event id? Only meaningful while that ledger row is
+    inside the retention window, so money-moving branches pair it with a
+    permanent marker of their own."""
+    return (
+        session.scalar(
+            select(WebhookEvent.id)
+            .where(
+                WebhookEvent.kind == event.kind,
+                WebhookEvent.object_id == event.object_id,
+                WebhookEvent.provider_event_id != event.event_id,
+                WebhookEvent.status == WebhookEventStatus.APPLIED,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _superseded(session: Session, event: PaymentEvent) -> bool:
+    """Has a NEWER event of this kind for this object (by arrival) already
+    applied? A retried event can land long after later events for the same
+    object; for last-value-wins state it must not overwrite them."""
+    received = session.scalar(
+        select(WebhookEvent.received_at).where(WebhookEvent.provider_event_id == event.event_id)
+    )
+    if received is None:
+        return False
+    return (
+        session.scalar(
+            select(WebhookEvent.id)
+            .where(
+                WebhookEvent.kind == event.kind,
+                WebhookEvent.object_id == event.object_id,
+                WebhookEvent.provider_event_id != event.event_id,
+                WebhookEvent.status == WebhookEventStatus.APPLIED,
+                WebhookEvent.received_at > received,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _record_chargeback(
+    session: Session, payment: Payment, existing: Dispute | None, event: PaymentEvent
+) -> Dispute:
+    """One dispute per job: create the provider-sourced row, or annotate the
+    existing (buyer-opened, or earlier-chargeback) one."""
+    if existing is not None:
+        existing.provider_dispute_id = event.object_id
+        return existing
+    dispute = Dispute(
+        job_id=payment.job_id,
+        source=DisputeSource.PROVIDER,
+        buyer_id=payment.buyer_id,
+        reason="provider chargeback",
+        provider_dispute_id=event.object_id,
+    )
+    session.add(dispute)
+    session.flush()
+    return dispute
+
+
 def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
     """Route a normalized provider event to the row it affects.
 
     Unknown kinds and unknown ids are recorded (dedup) and ignored — providers
-    emit dozens of event types this app doesn't act on."""
+    emit dozens of event types this app doesn't act on.
+
+    The outbox retry job re-runs this for events whose first apply failed, so
+    every branch must be safe to apply twice (the same economic event under
+    another event id, or a replay) and safe to apply late (after the job or
+    payment moved on, and after later events for the same object applied).
+    Each branch says what makes it so."""
     if event.kind in ("payment_succeeded", "payment_failed"):
+        # Replay/late safety: the payment status lattice. PENDING -> FAILED ->
+        # SUCCEEDED is allowed (decline then retry on the same PI); SUCCEEDED
+        # is never undone by a failure; REFUNDED is terminal; a success after
+        # a void never resurrects a dead job.
         payment = session.scalar(
             select(Payment).where(Payment.provider_payment_id == event.object_id).with_for_update()
         )
@@ -2159,6 +2234,10 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         elif payment.status is not PaymentStatus.SUCCEEDED:
             payment.status = PaymentStatus.FAILED  # late failures never undo a success
     elif event.kind == "account_updated":
+        # Last value wins, by arrival: a retried older update must not
+        # overwrite a newer one that already applied.
+        if _superseded(session, event):
+            return
         seller = session.scalar(
             select(SellerProfile).where(SellerProfile.provider_account_id == event.object_id)
         )
@@ -2170,19 +2249,31 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
         if payout is not None:
             if event.kind == "transfer_failed":
-                payout.status = PayoutStatus.FAILED
-                notifications.enqueue_admins(
-                    session,
-                    EventKind.PAYOUT_FAILED_ADMIN,
-                    {
-                        "job_id": str(payout.job_id),
-                        "payout_id": str(payout.id),
-                        "seller_id": payout.seller_id,
-                        "amount": str(payout.amount),
-                    },
-                )
-            else:
+                # A failed/reversed transfer is terminal for that transfer id,
+                # so applying it late is truthful; notify only on the
+                # transition so a replay doesn't re-page admins.
+                if payout.status is not PayoutStatus.FAILED:
+                    payout.status = PayoutStatus.FAILED
+                    notifications.enqueue_admins(
+                        session,
+                        EventKind.PAYOUT_FAILED_ADMIN,
+                        {
+                            "job_id": str(payout.job_id),
+                            "payout_id": str(payout.id),
+                            "seller_id": payout.seller_id,
+                            "amount": str(payout.amount),
+                        },
+                    )
+            elif payout.status is PayoutStatus.PENDING:
                 payout.status = PayoutStatus.PAID
+            elif payout.status is PayoutStatus.FAILED:
+                # Late success for a transfer that has since failed/reversed:
+                # the money came back, so PAID would be a lie.
+                logger.warning(
+                    "ignoring late transfer_paid for failed payout %s (transfer %s)",
+                    payout.id,
+                    event.object_id,
+                )
     elif event.kind == "chargeback_opened":
         if event.related_id is None:
             logger.warning(
@@ -2194,21 +2285,16 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
         )
         if payment is None:
             return  # unknown charge: recorded by dedup, nothing to apply
-        dispute = session.scalar(
+        existing = session.scalar(
             select(Dispute).where(Dispute.job_id == payment.job_id).with_for_update()
         )
-        if dispute is None:
-            dispute = Dispute(
-                job_id=payment.job_id,
-                source=DisputeSource.PROVIDER,
-                buyer_id=payment.buyer_id,
-                reason="provider chargeback",
-                provider_dispute_id=event.object_id,
-            )
-            session.add(dispute)
-            session.flush()
-        else:
-            dispute.provider_dispute_id = event.object_id  # annotate, don't duplicate
+        if existing is not None and (
+            existing.provider_dispute_id == event.object_id or _applied_elsewhere(session, event)
+        ):
+            # Already recorded (by an earlier apply, or by a chargeback_closed
+            # that arrived first): re-annotating or re-notifying is the replay.
+            return
+        dispute = _record_chargeback(session, payment, existing, event)
         amount = to_money(Decimal(event.amount_minor or 0) / 100)
         notifications.enqueue_admins(
             session,
@@ -2220,15 +2306,47 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
             select(Dispute).where(Dispute.provider_dispute_id == event.object_id).with_for_update()
         )
         if dispute is None:
-            return
+            # The close can be applied before its open (the open is still
+            # waiting on a retry, or never arrived): map it through the
+            # disputed payment the same way the open would, rather than
+            # dropping the loss on the floor.
+            payment = (
+                session.scalar(
+                    select(Payment).where(Payment.provider_payment_id == event.related_id)
+                )
+                if event.related_id is not None
+                else None
+            )
+            if payment is None:
+                return
+            existing = session.scalar(
+                select(Dispute).where(Dispute.job_id == payment.job_id).with_for_update()
+            )
+            dispute = _record_chargeback(session, payment, existing, event)
         won = event.outcome == "won"
+        amount = to_money(Decimal(event.amount_minor or 0) / 100)
+        # Replay marker: a lost close always books a CHARGEBACK_FEE row stamped
+        # with this dispute object's id (permanent, survives retention); a won
+        # close moves no money, so the webhook ledger is its marker.
+        already_booked = (
+            not won
+            and session.scalar(
+                select(Adjustment.id).where(
+                    Adjustment.dispute_id == dispute.id,
+                    Adjustment.kind == AdjustmentKind.CHARGEBACK_FEE,
+                    Adjustment.provider_ref == event.object_id,
+                )
+            )
+            is not None
+        )
+        if already_booked or _applied_elsewhere(session, event):
+            return
         if dispute.status is not DisputeStatus.RESOLVED:
             # The status field records arbitration when an admin has ruled
             # (RESOLVED is preserved); otherwise the latest provider outcome
             # wins — repeat chargebacks on one job re-adjudicate the same row.
             dispute.status = DisputeStatus.CHARGEBACK_WON if won else DisputeStatus.CHARGEBACK_LOST
             dispute.resolved_at = _now()
-        amount = to_money(Decimal(event.amount_minor or 0) / 100)
         if not won:
             if amount > 0:  # a zero/absent amount_minor books no $0.00 loss row
                 session.add(
@@ -2246,6 +2364,7 @@ def _apply_payment_event(session: Session, event: PaymentEvent) -> None:
                     dispute_id=dispute.id,
                     kind=AdjustmentKind.CHARGEBACK_FEE,
                     amount=to_money(settings.chargeback_fee_usd),
+                    provider_ref=event.object_id,
                 )
             )
         notifications.enqueue_admins(
