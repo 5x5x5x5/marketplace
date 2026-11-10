@@ -774,13 +774,7 @@ def test_sync_db_work_stays_off_the_event_loop() -> None:
     session_names = {"session", "db", "sess"}
     bad: list[str] = []
     async_defs = 0
-    # Known, reported deviation: the idempotency middleware does short sync
-    # session work on the loop. Remove this entry when that is offloaded; do
-    # not add others.
-    known = {"idempotency.py"}
     for path in _py_files():
-        if path.name in known:
-            continue
         for node in ast.walk(_parse(path)):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
