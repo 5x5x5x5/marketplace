@@ -185,11 +185,31 @@ below. No migration.
 - **Agent setup.** Skills, narrow reviewer subagents and hooks under
   `.claude/`, `AGENTS.md`, and [`docs/agent-setup.md`](docs/agent-setup.md).
 
-<!-- COORDINATOR: money-path audit (in progress). Add it to phase 13 (or as its own entry) once merged, with what it found and fixed. -->
+- **Money-path audit.** Every provider call site and lock pairing checked
+  against five bug classes (inverted lock order, stale-snapshot dispatch, a
+  replayable 4xx after a side effect, retries that do not converge,
+  resurrection). Two bugs fixed with tests that failed first: a cancel
+  racing an accept could deadlock on Postgres, and a full dispute clawback
+  was read back as a failed transfer, inviting a second payout. Six lesser
+  hazards are recorded and left open in
+  [`docs/money-path-audit-2026-11.md`](docs/money-path-audit-2026-11.md).
 
-<!-- COORDINATOR: api.py split into router and service modules (in progress). Add to phase 13 once merged. -->
+- **Services and routers.** `api.py` (about 2,800 lines holding the app,
+  every JSON router and all domain logic) became app assembly only. Domain
+  logic moved to `services/` (no web-framework imports; domain errors mapped
+  to HTTP in one place) and the JSON routers to `routers/`. The OpenAPI
+  document and the route list are identical before and after. This is what
+  lets the pages reach the booking logic without importing the API.
 
-<!-- COORDINATOR: ops MCP server package and background-agent GitHub workflows (in progress). Add to phase 13 once merged. -->
+- **Operating and maintaining it with agents.** An MCP server
+  (`src/marketplace_mcp/`) exposes the admin API as operator tools, with
+  write tools off by default and money-moving decisions left out. GitHub
+  workflows let a maintainer hand an issue to an agent, give every pull
+  request an agent review that can only comment, and run weekly upkeep
+  ([`docs/background-agents.md`](docs/background-agents.md)); the agent
+  workflows are unexecuted until a maintainer adds the API key secret.
+- **Capacity, measured.** A before/after load-test pair is recorded in
+  [`docs/capacity-2026-11.md`](docs/capacity-2026-11.md).
 
 <!-- COORDINATOR: booking and payment pages (next, after the above). Add as phase 14 once merged; then remove the "No booking pages" limitation below and update the CSRF item. -->
 

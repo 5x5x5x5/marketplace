@@ -229,6 +229,10 @@ confirmation are still API-only.
 
 ```
 src/marketplace/
+  api.py                    app assembly only: middleware, lifespan, router mounting, error mapping
+  routers/                  thin JSON routers: buyer, seller, admin, catalog, payments, reports, preferences
+  services/                 domain logic: booking, jobs, offers, webhooks, disputes, payouts, maintenance, ...
+  errors.py                 domain errors the services raise, mapped to HTTP in one place
   pricing.py, matching.py   the pure pricing and matching core (adjusters, strategies)
   config.py, repo.py        snapshots the core runs on, and the code that loads them
   catalog.py                the one implementation of catalog visibility and "from" prices
@@ -244,14 +248,19 @@ src/marketplace/
   settings.py               every environment setting and its default
 migrations/versions/        Alembic; runs from empty on SQLite and Postgres
 tests/                      pytest; tests/test_architecture.py holds the invariants as checks
+src/marketplace_mcp/        ops MCP server: the admin API as operator tools (HTTP client only)
 scripts/                    demo.py (headless lifecycle), seed.py (demo data + tokens)
 loadtest/                   Locust harness and staged runner
 docs/                       deployment guide, agent setup, phase specs/plans, try-out findings
 .claude/                    agent skills, reviewer subagents, hooks
+evals/                      reviewer evaluation: real past bugs re-seeded as review cases
 .semgrep/                   Semgrep rules for the security invariants, with a test corpus
 ```
 
-<!-- COORDINATOR: api.py split (in progress in another worktree). Once the route handlers move out of api.py into router and service modules, add those modules to the layout above. Until then the routes, the lifecycle logic and the maintenance loop live in src/marketplace/api.py; deliberately not named above because the location is about to change. -->
+A request goes router → service → (`repo`, `catalog`, `payments`,
+`notifications`). Services import no web framework and raise domain errors;
+routers and pages both call them. `tests/test_architecture.py` enforces the
+layering.
 
 ## Reference
 
@@ -618,7 +627,20 @@ never touches the database.
 `max_connections`, edge rate limits and caching. The load-test harness is in
 [`loadtest/`](loadtest/README.md).
 
-<!-- COORDINATOR: capacity before/after table (measured with loadtest/run_baseline.sh before and after the pool, pagination and quote-path work). Insert here with the run conditions, and note that the numbers come from a single shared box. -->
+**Measured.** One before/after pair on a single 4-core box (one worker,
+local Postgres, fake payment provider, load generator on the same machine;
+full table and caveats in
+[`docs/capacity-2026-11.md`](docs/capacity-2026-11.md)):
+
+| Stage | Before | After |
+|---|---|---|
+| 100 concurrent browsers | 0 requests completed in 30 s (pool timeouts) | 64 req/s, 0.9% shed as `503` |
+| Booking lifecycle, 24 users | 52.6 req/s, p95 1.3 s | 82.1 req/s, p95 290 ms |
+| Browse with 1,000 listings, 25 users | 40.2 req/s, p50 580 ms | 79.6 req/s, p50 310 ms |
+| Login, 10 users | 17.5 req/s | 17.1 req/s (argon2-bound; rate-limit at the edge) |
+
+The numbers come from one pair of 30-second runs on a shared box. The
+shapes are the result; the absolute figures are indicative.
 
 ### Configuration
 
@@ -680,15 +702,47 @@ changes:
   builds can be compared (`uv sync --group loadtest`, then `bash
   loadtest/run_baseline.sh`; see [`loadtest/README.md`](loadtest/README.md)).
 
-<!-- COORDINATOR: background-agent GitHub workflows (in progress in another worktree). List them here alongside CI and the security workflow once merged: what triggers each, what it may do, and its permissions. -->
+- **Background agents** (`.github/workflows/agent-implement.yml`,
+  `agent-review.yml`, `maintenance.yml`): a maintainer can hand an issue to
+  an agent, which opens a pull request; every same-repository pull request
+  gets an agent review that applies this repo's reviewer rules and can only
+  comment; a weekly run opens an issue when the gate or the security scans
+  go red. Agent jobs run only after a secret-free job confirms the actor has
+  write access. They are unexecuted until a maintainer adds the API key
+  secret; setup and the security model are in
+  [`docs/background-agents.md`](docs/background-agents.md).
 
-<!-- COORDINATOR: ops MCP server package (in progress in another worktree). Add a short subsection here (or under Observability and operations) once merged: what it exposes, how to run it, and what access it needs. -->
+### Operating it with an agent
+
+`src/marketplace_mcp/` is an MCP server that exposes the admin API as tools,
+so an agent can do an operator's reads (the ops snapshot, jobs, payouts,
+disputes, reports, dead-lettered webhooks, the pricing configuration) and,
+only when `MARKETPLACE_MCP_ENABLE_WRITES` is set, a bounded set of writes
+(re-queue a webhook, retry a payout, run the sweep, hide a listing, suspend
+a user, tune pricing). It is an HTTP client of `/v1/admin/*` and never
+imports the app, so authentication, audit rows and commit ordering stay in
+the API. Dispute resolution and job cancellation are deliberately not
+exposed: they move money and stay with a person. User-written text
+(listing titles, report bodies) comes back delimited and labeled as
+untrusted, which is a mitigation against prompt injection, not a guarantee.
+
+```
+uv run --group mcp python -m marketplace_mcp   # needs MARKETPLACE_ADMIN_TOKEN
+```
+
+See [`src/marketplace_mcp/README.md`](src/marketplace_mcp/README.md).
 
 ## How this was built
 
 <!-- COORDINATOR: "How this was built" section. To be written by the coordinator: the agent-first process, phase by phase, with pointers to the evidence in the repo. Suggested anchors: docs/superpowers/specs and plans (one spec and plan per phase), docs/tryout-findings-2026-07-16.md (bugs found only by driving a live server), ROADMAP.md (the chronological record), and the money-path audit below. -->
 
-<!-- COORDINATOR: money-path audit (in progress in another worktree). Link the audit document here and summarize its findings and their status once merged. -->
+A later audit checked every payment-provider call and every pairing of row
+locks against five bug classes and found two real bugs, both fixed with
+tests that failed first: a cancel racing an accept could deadlock on
+Postgres, and a dispute clawback of a seller's whole payout was read back
+as a failed transfer, which let an admin retry pay the seller twice. Six
+lesser hazards are documented and left open, with reasons, in
+[`docs/money-path-audit-2026-11.md`](docs/money-path-audit-2026-11.md).
 
 The working setup is checked in:
 

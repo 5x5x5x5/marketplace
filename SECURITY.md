@@ -249,7 +249,26 @@ or disabled autoescape.
   hours), so it is the state-machine guards, not the provider key, that hold
   at any age.
 
-<!-- COORDINATOR: money-path audit (in progress). Link the audit and record its findings and their status here (and in Findings history) once merged. -->
+- **Money-path audit (2026-11).** Every provider call site and every
+  pairing of row locks was checked against five classes: inverted lock
+  order, stale-snapshot dispatch, a replayable 4xx after a provider side
+  effect, retries that do not converge, and resurrection of a terminal
+  state. Two findings were fixed with tests that failed first:
+  - **A1 (medium).** The cancel paths locked the job and then wrote its open
+    offers, while accept, decline and the offer sweep lock offer then job. A
+    cancel racing an accept deadlocked on Postgres and one side got a 500.
+    The cancel paths now claim offers `FOR UPDATE SKIP LOCKED`.
+  - **A2 (critical).** A dispute clawback equal to the seller's whole payout
+    fully reverses the transfer, which the provider reports like a failed
+    transfer. The handler marked the payout FAILED and paged admins, and an
+    admin payout retry would then have paid the seller again. A reversal
+    covered by a pinned clawback now leaves the payout PAID.
+  Six lesser hazards are recorded and deliberately left open (a
+  millisecond-wide lock inversion that heals through the webhook outbox,
+  the provider's roughly 24-hour idempotency-key window, unlocked completion
+  counters, and three others). The lock-order table, the retry table and the
+  paths found safe are in
+  [`docs/money-path-audit-2026-11.md`](docs/money-path-audit-2026-11.md).
 
 ## Payment webhooks
 
@@ -390,9 +409,44 @@ or disabled autoescape.
 - Workflow actions are pinned to commit SHAs, workflows default to
   read-only `contents` permission, and Dependabot is configured.
 
-<!-- COORDINATOR: background-agent GitHub workflows (in progress). Describe their triggers, permissions and what they may change, and whether untrusted input (issue or PR text) can reach them, once merged. -->
+- **Background-agent workflows** (`.github/workflows/agent-implement.yml`,
+  `agent-review.yml`). These run a coding agent with repository credentials,
+  so their inputs are the threat: issue bodies, comments, pull-request
+  descriptions and diffs are text written by other people.
+  - Only users with write access can start a run. A job that holds no
+    secrets checks the actor's permission through the collaborators API and,
+    for a pull request, that the head is in this repository; the job holding
+    the API key runs only if that passes. Bot senders are excluded.
+  - The review workflow uses `pull_request`, never `pull_request_target`,
+    skips forks, and reads `CLAUDE.md` and the reviewer definitions from the
+    base branch so a pull request cannot rewrite its own rules.
+  - Each job asks for the minimum permissions. The implementing agent can
+    push a branch and open a pull request; the reviewing agent can read code
+    and write comments. Neither can approve or merge, and tool allowlists
+    exclude web access, `gh api`, force-push and history rewriting. Event
+    text reaches scripts only through environment variables.
+  - The agent's instructions declare issue and pull-request text untrusted.
+    That is a mitigation, not a guarantee: branch protection (a required
+    human approval, required checks, no bypass) is what actually stops an
+    agent's change from reaching the default branch, and it has to be
+    configured by the maintainer (`docs/background-agents.md`).
+  - The API key is the only secret exposed to agent jobs. These workflows
+    have not been executed; they need that secret first.
 
-<!-- COORDINATOR: ops MCP server package (in progress). Describe what it can read or change, how it authenticates, and where it may run, once merged; add it to the threat model if it reaches the database or admin API. -->
+- **Ops MCP server** (`src/marketplace_mcp/`). It authenticates as an admin
+  with an ordinary revocable session token taken from the environment, and
+  talks only to `/v1/admin/*` over HTTP, so it can do what an admin can do
+  through the API and nothing else; an architecture test checks it never
+  imports the app or the database layer. Write tools are not registered
+  unless `MARKETPLACE_MCP_ENABLE_WRITES` is set, and dispute resolution and
+  job cancellation are not exposed at all. The token is never logged or
+  returned in a tool result. The residual risk is prompt injection: listing
+  titles, report bodies and similar user-written text flow into the agent's
+  context through the read tools. That text is delimited with a per-value
+  random marker and labeled as untrusted, and no tool derives an action from
+  content, but an agent with write tools enabled can still be talked into
+  misusing them. Keep writes off unless needed, prefer per-call approval in
+  the client, and revoke the session when done.
 
 ## Residual risks
 
