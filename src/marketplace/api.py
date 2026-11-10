@@ -147,7 +147,7 @@ from .payments import get_provider
 from .payments.port import PaymentError, PaymentProvider, WebhookSignatureError
 from .pricing import REGISTRY
 from .repo import audit
-from .services import booking, jobs, maintenance, webhooks
+from .services import booking, jobs, maintenance, payouts, webhooks
 from .services.common import now as _now
 from .services.common import paginate as _paginate
 from .services.common import require_active as _require_active
@@ -531,25 +531,7 @@ def onboard_payments(
 
     `payments_ready` flips via the provider's account webhook (instantly for the
     fake provider); matching only offers jobs to ready sellers."""
-    _require_active(session, seller_id)
-    seller = repo.get_or_create_seller(session, seller_id)
-    if seller.provider_account_id is None:
-        try:
-            acct = provider.create_seller_account(seller_id, idempotency_key=f"acct:{seller_id}")
-        except PaymentError as exc:
-            logger.warning("account creation failed for seller %s: %s", seller_id, exc)
-            raise HTTPException(
-                status_code=502, detail="payment provider unavailable, retry"
-            ) from None
-        seller.provider_account_id = acct.provider_account_id
-        seller.payments_ready = acct.payments_ready
-        session.flush()
-    return OnboardingOut(
-        onboarding_url=provider.onboarding_link(
-            seller.provider_account_id, settings.onboarding_return_url
-        ),
-        payments_ready=seller.payments_ready,
-    )
+    return payouts.onboard_payments(session, seller_id, provider)
 
 
 @seller_router.post("/availability")
@@ -1077,51 +1059,14 @@ def list_payouts(
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[Payout]:
-    stmt = select(Payout)
-    if status is not None:
-        stmt = stmt.where(Payout.status == status)
-    return _paginate(
-        session, stmt.order_by(Payout.created_at.desc(), Payout.id.desc()), limit, offset
-    )
+    return payouts.list_payouts(session, status, limit, offset)
 
 
 @admin_router.post("/payouts/{payout_id}/retry", response_model=PayoutOut)
 def retry_payout(
     payout_id: UUID, session: SessionDep, admin_id: AdminId, provider: ProviderDep
 ) -> Payout:
-    payout = session.get(Payout, payout_id, with_for_update=True)
-    if payout is None:
-        raise HTTPException(status_code=404, detail="payout not found")
-    if payout.status is not PayoutStatus.FAILED:
-        raise HTTPException(status_code=409, detail=f"payout is {payout.status}, not failed")
-    seller = session.get(SellerProfile, payout.seller_id)
-    if seller is None or seller.provider_account_id is None:
-        raise HTTPException(status_code=409, detail="seller has no payment account yet")
-    # If no transfer was ever created (plain outage), replaying the original key
-    # is the safe retry — it can never double-pay. But if a transfer WAS created
-    # and later reversed (transfer.reversed → FAILED), replaying that key would
-    # return the same reversed transfer and record PAID with no money moved, so
-    # the retry must force a new transfer under a fresh key.
-    retry_key = (
-        f"transfer:{payout.job_id}"
-        if payout.provider_transfer_id is None
-        else f"transfer:{payout.job_id}:retry:{payout.provider_transfer_id}"
-    )
-    try:
-        transfer = provider.transfer_to_seller(
-            provider_account_id=seller.provider_account_id,
-            amount=payout.amount,
-            currency=payout.currency,
-            job_id=str(payout.job_id),
-            idempotency_key=retry_key,
-        )
-    except PaymentError as exc:
-        logger.warning("transfer retry failed for payout %s: %s", payout_id, exc)
-        raise HTTPException(status_code=502, detail="payment provider unavailable, retry") from None
-    payout.provider_transfer_id = transfer.provider_transfer_id
-    payout.status = transfer.status
-    audit(session, admin_id, "retry_payout", str(payout_id), {})
-    return payout
+    return payouts.retry_payout(session, admin_id, payout_id, provider)
 
 
 @admin_router.get("/notifications", response_model=list[NotificationOut])
