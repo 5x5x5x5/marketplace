@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from marketplace.mail import ConsoleEmailSender, RecordingEmailSender, get_mail_sender, use_sender
-from tests.conftest import TEST_PASSWORD, AuthFactory
+from tests.conftest import TEST_PASSWORD, AuthFactory, Header
 
 
 def test_mail_sender_swap_roundtrip() -> None:
@@ -263,7 +263,9 @@ def test_mail_outage_never_fails_or_fingerprints_requests(client: TestClient) ->
         use_sender(previous)
 
 
-def test_sweep_deletes_expired_sessions(client: TestClient, auth: AuthFactory) -> None:
+def test_sweep_deletes_expired_sessions(
+    client: TestClient, auth: AuthFactory, admin: Header
+) -> None:
     from datetime import UTC, datetime, timedelta
 
     from sqlalchemy import func, select
@@ -273,17 +275,20 @@ def test_sweep_deletes_expired_sessions(client: TestClient, auth: AuthFactory) -
 
     auth("buyer", "sweepy")  # its session becomes the expired one
     with SessionLocal() as s:
-        row = s.scalar(select(AuthSession))
+        row = s.scalar(select(AuthSession).where(AuthSession.user_id == "sweepy"))
         assert row is not None
         row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         s.commit()
-    # An EXPIRED principal 401s during dependency resolution — the endpoint
-    # body (and its sweep) never runs. A different, live principal must
-    # trigger maintenance.
+    # Expired-row deletes are housekeeping: the maintenance loop and the
+    # admin sweep run them, read paths (e.g. a seller's offer poll) don't.
     live = auth("seller", "sweeper")
-    client.get("/v1/seller/offers", headers=live)  # list_offers calls _sweep
+    client.get("/v1/seller/offers", headers=live)
     with SessionLocal() as s:
-        assert s.scalar(select(func.count()).select_from(AuthSession)) == 1  # only the live one
+        assert s.scalar(select(func.count()).select_from(AuthSession)) == 3  # nothing reaped
+    assert client.post("/v1/admin/jobs/sweep", headers=admin).status_code == 200
+    with SessionLocal() as s:
+        # the seller's and the admin's live sessions remain
+        assert s.scalar(select(func.count()).select_from(AuthSession)) == 2
 
 
 def test_openapi_declares_bearer_security_scheme(client: TestClient) -> None:

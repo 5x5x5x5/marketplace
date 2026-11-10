@@ -16,7 +16,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -251,13 +251,19 @@ def _match_and_offer(session: Session, job: Job) -> None:
 
 def _sweep_expired_offers(session: Session) -> None:
     """Lazy sweep: expire timed-out offers and re-match their jobs. Called on reads."""
+    # SKIP LOCKED: concurrent sweeps (many read paths, more than one
+    # maintenance runner) each claim distinct offers, so one expired offer is
+    # never re-matched twice into two live offers. Offer -> Job lock order
+    # matches accept/decline.
     stale = session.scalars(
-        select(Offer).where(Offer.status == OfferStatus.OFFERED, Offer.expires_at < _now())
+        select(Offer)
+        .where(Offer.status == OfferStatus.OFFERED, Offer.expires_at < _now())
+        .with_for_update(skip_locked=True)
     ).all()
     for offer in stale:
         offer.status = OfferStatus.EXPIRED
         offer.responded_at = _now()
-        job = session.get(Job, offer.job_id)
+        job = session.get(Job, offer.job_id, with_for_update=True, populate_existing=True)
         if job is not None and job.status == JobStatus.PENDING:
             _match_and_offer(session, job)
 
@@ -306,6 +312,11 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
         )
 
 
+def _sweep_expired_quotes(session: Session) -> None:
+    """Quotes past their TTL can never be consumed (`create_job` 410s them)."""
+    session.execute(delete(Quote).where(Quote.expires_at < _now()))
+
+
 def _sweep_expired_auth(session: Session) -> None:
     """Expired sessions and email tokens are dead weight — drop them on reads."""
     session.execute(delete(AuthSession).where(AuthSession.expires_at < _now()))
@@ -335,9 +346,19 @@ def _sweep_retention(session: Session) -> None:
 
 
 def _sweep(session: Session, provider: PaymentProvider) -> None:
-    """Everything lazy maintenance does on reads: offers, payments, auth."""
+    """Lazy-on-read state transitions: expired offers re-match and stale
+    payments release their capacity slot, so state is correct even with no
+    scheduler running. Housekeeping deletes are NOT here — see below."""
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
+
+
+def _housekeeping(session: Session) -> None:
+    """Deletes of rows nothing can observe any more (expired quotes, sessions,
+    email tokens, aged retention rows). Correctness never depends on them, so
+    they run only from the maintenance loop and the admin sweep endpoint,
+    never on a request's read path."""
+    _sweep_expired_quotes(session)
     _sweep_expired_auth(session)
     _sweep_retention(session)
 
@@ -350,6 +371,7 @@ def _run_drain_once() -> None:
 def _run_sweep_once() -> None:
     with SessionLocal() as session:
         _sweep(session, get_provider())
+        _housekeeping(session)
         session.commit()
 
 
@@ -373,8 +395,11 @@ async def _maintenance_loop() -> None:
                 logger.exception("sweep tick failed")
 
 
-def _paginate[T](rows: Sequence[T], limit: int, offset: int) -> list[T]:
-    return list(rows[offset : offset + limit])
+def _paginate[T](session: Session, stmt: Select[tuple[T]], limit: int, offset: int) -> list[T]:
+    """LIMIT/OFFSET in SQL: list endpoints never load a whole table to return
+    one page. `stmt` must carry a total order (a unique tie-breaker) or rows
+    can repeat/skip across pages."""
+    return list(session.scalars(stmt.limit(limit).offset(offset)).all())
 
 
 def _count_by(session: Session, column: Any, enum: type[StrEnum]) -> dict[str, int]:
@@ -614,8 +639,11 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
     if cfg is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
 
-    session.execute(delete(Quote).where(Quote.expires_at < _now()))
-    if (session.scalar(select(func.count()).select_from(Quote)) or 0) >= MAX_ACTIVE_QUOTES:
+    # Count live quotes only (index range on expires_at, capped at the limit);
+    # expired rows are reaped by housekeeping, not deleted here — concurrent
+    # quote writers deleting the same expired rows would block on each other.
+    live = select(Quote.id).where(Quote.expires_at > _now()).limit(MAX_ACTIVE_QUOTES).subquery()
+    if (session.scalar(select(func.count()).select_from(live)) or 0) >= MAX_ACTIVE_QUOTES:
         raise HTTPException(status_code=503, detail="quote capacity reached, retry shortly")
 
     supply = repo.available_count(session, cfg.service.id)
@@ -772,8 +800,7 @@ def list_buyer_jobs(
     stmt = select(Job).where(Job.buyer_id == buyer_id)
     if status is not None:
         stmt = stmt.where(Job.status == status)
-    rows = session.scalars(stmt.order_by(Job.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(session, stmt.order_by(Job.created_at.desc(), Job.id.desc()), limit, offset)
 
 
 @buyer_router.get("/jobs/{job_id}", response_model=BuyerJobView)
@@ -1070,8 +1097,9 @@ def list_offers(
         stmt = stmt.where(Offer.status == status)
     else:
         stmt = stmt.where(Offer.status == OfferStatus.OFFERED)
-    rows = session.scalars(stmt.order_by(Offer.offered_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(
+        session, stmt.order_by(Offer.offered_at.desc(), Offer.id.desc()), limit, offset
+    )
 
 
 @seller_router.get("/jobs", response_model=list[SellerJobView])
@@ -1085,8 +1113,7 @@ def list_seller_jobs(
     stmt = select(Job).where(Job.seller_id == seller_id)
     if status is not None:
         stmt = stmt.where(Job.status == status)
-    rows = session.scalars(stmt.order_by(Job.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(session, stmt.order_by(Job.created_at.desc(), Job.id.desc()), limit, offset)
 
 
 @seller_router.get("/jobs/{job_id}/dispute", response_model=SellerDisputeOut)
@@ -1567,16 +1594,16 @@ def admin_list_reviews(
     offset: Offset = 0,
 ) -> list[AdminReviewOut]:
     model = Review if kind == "buyer" else SellerReview
-    rows = session.scalars(select(model).order_by(model.created_at.desc())).all()
-    return [_admin_review_out(r) for r in _paginate(rows, limit, offset)]
+    stmt = select(model).order_by(model.created_at.desc(), model.id.desc())
+    return [_admin_review_out(r) for r in _paginate(session, stmt, limit, offset)]
 
 
 @admin_router.get("/listings", response_model=list[SellerListingOut])
 def admin_list_listings(
     session: SessionDep, limit: Limit = 100, offset: Offset = 0
 ) -> list[Listing]:
-    rows = session.scalars(select(Listing).order_by(Listing.created_at.desc())).all()
-    return _paginate(list(rows), limit, offset)
+    stmt = select(Listing).order_by(Listing.created_at.desc(), Listing.id.desc())
+    return _paginate(session, stmt, limit, offset)
 
 
 @admin_router.post("/listings/{listing_id}/hide", response_model=SellerListingOut)
@@ -1659,10 +1686,10 @@ def admin_list_reports(
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[Report]:
-    q = select(Report).order_by(Report.created_at.desc())
+    q = select(Report).order_by(Report.created_at.desc(), Report.id.desc())
     if status is not None:
         q = q.where(Report.status == status)
-    return _paginate(session.scalars(q).all(), limit, offset)
+    return _paginate(session, q, limit, offset)
 
 
 @admin_router.post("/reports/{report_id}/resolve", response_model=AdminReportOut)
@@ -1692,16 +1719,15 @@ def resolve_report(
 def admin_list_buyers(
     session: SessionDep, admin_id: AdminId, limit: Limit = 100, offset: Offset = 0
 ) -> list[BuyerProfile]:
-    rows = session.scalars(select(BuyerProfile).order_by(BuyerProfile.id)).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(session, select(BuyerProfile).order_by(BuyerProfile.id), limit, offset)
 
 
 @admin_router.get("/transactions", response_model=list[TransactionOut])
 def list_transactions(
     session: SessionDep, limit: Limit = 100, offset: Offset = 0
 ) -> list[Transaction]:
-    rows = session.scalars(select(Transaction).order_by(Transaction.completed_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    stmt = select(Transaction).order_by(Transaction.completed_at.desc(), Transaction.id.desc())
+    return _paginate(session, stmt, limit, offset)
 
 
 @admin_router.get("/payouts", response_model=list[PayoutOut])
@@ -1714,8 +1740,9 @@ def list_payouts(
     stmt = select(Payout)
     if status is not None:
         stmt = stmt.where(Payout.status == status)
-    rows = session.scalars(stmt.order_by(Payout.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(
+        session, stmt.order_by(Payout.created_at.desc(), Payout.id.desc()), limit, offset
+    )
 
 
 @admin_router.post("/payouts/{payout_id}/retry", response_model=PayoutOut)
@@ -1767,8 +1794,12 @@ def list_notifications(
     stmt = select(Notification)
     if status is not None:
         stmt = stmt.where(Notification.status == status)
-    rows = session.scalars(stmt.order_by(Notification.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(
+        session,
+        stmt.order_by(Notification.created_at.desc(), Notification.id.desc()),
+        limit,
+        offset,
+    )
 
 
 @admin_router.post("/notifications/drain")
@@ -1789,8 +1820,9 @@ def list_disputes(
     stmt = select(Dispute)
     if status is not None:
         stmt = stmt.where(Dispute.status == status)
-    rows = session.scalars(stmt.order_by(Dispute.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(
+        session, stmt.order_by(Dispute.created_at.desc(), Dispute.id.desc()), limit, offset
+    )
 
 
 @admin_router.post("/disputes/{dispute_id}/resolve", response_model=AdminDisputeOut)
@@ -2062,8 +2094,8 @@ def admin_stats(session: SessionDep, admin_id: AdminId) -> StatsOut:
 
 @admin_router.get("/audit", response_model=list[AuditOut])
 def list_audit(session: SessionDep, limit: Limit = 100, offset: Offset = 0) -> list[AuditLog]:
-    rows = session.scalars(select(AuditLog).order_by(AuditLog.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    stmt = select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+    return _paginate(session, stmt, limit, offset)
 
 
 @admin_router.get("/jobs", response_model=list[BuyerJobView])
@@ -2073,8 +2105,7 @@ def list_all_jobs(
     stmt = select(Job)
     if status is not None:
         stmt = stmt.where(Job.status == status)
-    rows = session.scalars(stmt.order_by(Job.created_at.desc())).all()
-    return _paginate(rows, limit, offset)
+    return _paginate(session, stmt.order_by(Job.created_at.desc(), Job.id.desc()), limit, offset)
 
 
 @admin_router.post("/jobs/{job_id}/cancel", response_model=BuyerJobView)
@@ -2110,6 +2141,7 @@ def admin_cancel_job(
 @admin_router.post("/jobs/sweep")
 def sweep(session: SessionDep, admin_id: AdminId, provider: ProviderDep) -> dict[str, str]:
     _sweep(session, provider)
+    _housekeeping(session)
     audit(session, admin_id, "sweep", "jobs", {})
     return {"status": "ok"}
 
@@ -2294,10 +2326,7 @@ def catalog_list_listings(
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> list[CatalogListingOut]:
-    stmt = _visible_listings_stmt().order_by(Listing.created_at.desc())
-    if service_type_id is not None:
-        stmt = stmt.where(Listing.service_type_id == service_type_id)
-    rows = _paginate(session.execute(stmt).all(), limit, offset)
+    rows = session.execute(catalog.visible_listings_page(limit, offset, service_type_id)).all()
     return _catalog_listings_for_rows(session, rows)
 
 
@@ -2345,6 +2374,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         init_db()
     bootstrap_admin()
     logger.info("marketplace starting (db=%s)", settings.database_url.split("://", 1)[0])
+    if not settings.maintenance_enabled:
+        logger.info("maintenance loop disabled (MAINTENANCE_ENABLED=false) on this instance")
+        yield
+        return
     maintenance = asyncio.create_task(_maintenance_loop())
     yield
     maintenance.cancel()

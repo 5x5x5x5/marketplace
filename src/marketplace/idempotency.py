@@ -24,6 +24,7 @@ import logging
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
 from starlette.requests import cookie_parser
 from starlette.responses import JSONResponse, Response
@@ -53,6 +54,30 @@ _SESSION_COOKIE = "session_token"
 # is never silently exempted just by living outside /v1 — each addition
 # here has to be a deliberate call.
 _PAGE_AUTH_PATHS = frozenset({"/signup", "/login", "/logout"})
+
+
+def _lookup(
+    authorization: str | None, session_token: str | None, key: str
+) -> tuple[str | None, IdempotencyRecord | None]:
+    with SessionLocal() as session:
+        principal = peek_principal(session, authorization, session_token)
+        if principal is None:
+            return None, None
+        row = session.scalar(
+            select(IdempotencyRecord).where(
+                IdempotencyRecord.principal == principal, IdempotencyRecord.key == key
+            )
+        )
+        return principal, row
+
+
+def _store(record: IdempotencyRecord) -> None:
+    with SessionLocal() as session:
+        session.add(record)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()  # concurrent duplicate won the insert; fine
 
 
 class IdempotencyMiddleware:
@@ -85,17 +110,12 @@ class IdempotencyMiddleware:
             return
         cookie_header = headers.get("cookie")
         session_token = cookie_parser(cookie_header).get(_SESSION_COOKIE) if cookie_header else None
-        with SessionLocal() as session:
-            principal = peek_principal(session, headers.get("authorization"), session_token)
-            row = (
-                None
-                if principal is None
-                else session.scalar(
-                    select(IdempotencyRecord).where(
-                        IdempotencyRecord.principal == principal, IdempotencyRecord.key == key
-                    )
-                )
-            )
+        # threadpool: this is a sync DB checkout inside an async middleware;
+        # on the event loop, a wait for a pool connection would stall every
+        # in-flight request, not just this one.
+        principal, row = await run_in_threadpool(
+            _lookup, headers.get("authorization"), session_token, key
+        )
         if principal is None:
             # Neither the header nor the session_token cookie resolved a
             # principal; auth 401s downstream with the real error.
@@ -137,20 +157,14 @@ class IdempotencyMiddleware:
         status = int(captured_status)
         if status < 500 and status != 401 and status != 403:
             try:
-                with SessionLocal() as session:
-                    session.add(
-                        IdempotencyRecord(
-                            principal=principal,
-                            key=key,
-                            path=path,
-                            response_status=status,
-                            response_body=captured_body.decode("utf-8", errors="replace"),
-                        )
-                    )
-                    try:
-                        session.commit()
-                    except IntegrityError:
-                        session.rollback()  # concurrent duplicate won the insert; fine
+                record = IdempotencyRecord(
+                    principal=principal,
+                    key=key,
+                    path=path,
+                    response_status=status,
+                    response_body=captured_body.decode("utf-8", errors="replace"),
+                )
+                await run_in_threadpool(_store, record)
             except Exception:
                 # The domain work is already committed (CommitRoute ran inside
                 # self.app above) — a missed replay record beats failing a

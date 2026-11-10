@@ -5,6 +5,7 @@ in the test suite (no Docker needed). SQLAlchemy keeps the schema portable.
 """
 
 from decimal import Decimal
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,6 +16,21 @@ class Settings(BaseSettings):
     # Default to a local SQLite file so `uv run` and the tests work with no setup.
     # Point DATABASE_URL at Postgres (see docker-compose.yml) for real deployments.
     database_url: str = "sqlite+pysqlite:///./marketplace.db"
+
+    # Connection pool (ignored for SQLite). Sized against Starlette's default
+    # 40-token threadpool: 10 kept open + 30 overflow = 40, so every thread
+    # that can run a handler at once can hold a connection. A checkout that
+    # waits past the timeout becomes a 503 with Retry-After instead of a 30 s
+    # stall and a 500: under overload, queued requests hold threads while
+    # requests that already hold connections wait for a thread to commit, and
+    # only the timeout breaks that, so a short one sheds load early.
+    # Per instance: replicas x (size + overflow) must fit Postgres's
+    # max_connections with headroom. DB_POOL=null hands pooling to an external
+    # pooler (fresh connection per checkout; size/overflow/timeout unused).
+    db_pool: Literal["queue", "null"] = "queue"
+    db_pool_size: int = 10
+    db_max_overflow: int = 30
+    db_pool_timeout_seconds: float = 5.0
 
     # fork divergence: browse marketplace with human sellers — see browse-core spec
     quote_ttl_minutes: int = 15
@@ -40,6 +56,10 @@ class Settings(BaseSettings):
     notify_drain_seconds: int = 5
     notify_max_attempts: int = 5
     sweep_interval_seconds: int = 60
+    # Gates the in-process maintenance loop (outbox drain, sweeps,
+    # housekeeping). With several replicas, leave it on for exactly one; every
+    # job in it is safe to run concurrently, but N runners is N times the work.
+    maintenance_enabled: bool = True
 
     # Mail delivery: SMTP_HOST set -> stdlib SMTP adapter (any provider's SMTP
     # endpoint, or Mailpit locally); empty -> console adapter (logs only).

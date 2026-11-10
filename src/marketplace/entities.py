@@ -17,6 +17,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -189,13 +190,21 @@ class Quote(Base):
     service_type_id: Mapped[str] = mapped_column(String(128))
     buyer_price: Mapped[Decimal] = mapped_column(_MONEY)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
-    expires_at: Mapped[datetime] = mapped_column(_TS)
+    # indexed: the live-quote cap counts and the housekeeping sweep deletes by it
+    expires_at: Mapped[datetime] = mapped_column(_TS, index=True)
     listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id"), default=None)
     pinned_seller_id: Mapped[str | None] = mapped_column(String(128), default=None)
 
 
 class Job(Base):
     __tablename__ = "jobs"
+    # Composite indexes for the hot counts: in-flight demand per service type
+    # (every quote) and in-flight load per seller (matching, accept). Without
+    # them those counts scan every historical job of the type or seller.
+    __table_args__ = (
+        Index("ix_jobs_service_type_id_status", "service_type_id", "status"),
+        Index("ix_jobs_seller_id_status", "seller_id", "status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     quote_id: Mapped[uuid.UUID] = mapped_column(Uuid)
