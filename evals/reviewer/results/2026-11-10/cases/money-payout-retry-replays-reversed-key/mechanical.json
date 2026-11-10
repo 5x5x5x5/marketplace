@@ -1,0 +1,49 @@
+{
+  "case": "money-payout-retry-replays-reversed-key",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.80s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer": "AssertionError: assert ':retry:' in 'transfer:c5dda194-588c-4b36-811c-c156d763927d'"
+    },
+    "summary": "1 failed, 488 passed, 11 skipped, 12 warnings in 71.35s (0:01:11)",
+    "seconds": 75,
+    "confirmed": [
+      "tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer": "AssertionError: assert ':retry:' in 'transfer:08d8f7e9-a5e8-40a5-955f-d952b60b46fd'"
+    },
+    "summary": "1 failed, 499 passed, 12 warnings in 88.70s (0:01:28)",
+    "seconds": 93,
+    "confirmed": [
+      "tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 198,
+  "case_sha256": "47f8b164f72dc8c83d626c6d23506bd457261bf1cffd919c71013da949fc471d"
+}

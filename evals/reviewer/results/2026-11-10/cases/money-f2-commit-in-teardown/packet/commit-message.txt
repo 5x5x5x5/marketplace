@@ -1,0 +1,6 @@
+Commit in the session dependency
+
+Committing inside a route-class wrapper meant every router had to opt in,
+and a session used outside a CommitRoute never committed. Commit where the
+session is created, after the handler returns, and keep CommitRoute as the
+router marker the startup check looks for.

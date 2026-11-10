@@ -1,0 +1,53 @@
+{
+  "case": "money-late-success-resurrects-void",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.93s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel": "AssertionError: assert <PaymentStatu...: 'succeeded'> == <PaymentStatu...LED: 'failed'>",
+      "tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects": "AssertionError: assert (<JobStatus.C... 'succeeded'>) == (<JobStatus.C...ED: 'failed'>)"
+    },
+    "summary": "2 failed, 487 passed, 11 skipped, 12 warnings in 72.63s (0:01:12)",
+    "seconds": 77,
+    "confirmed": [
+      "tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel",
+      "tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel": "AssertionError: assert <PaymentStatu...: 'succeeded'> == <PaymentStatu...LED: 'failed'>",
+      "tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects": "AssertionError: assert (<JobStatus.C... 'succeeded'>) == (<JobStatus.C...ED: 'failed'>)"
+    },
+    "summary": "2 failed, 498 passed, 12 warnings in 90.43s (0:01:30)",
+    "seconds": 94,
+    "confirmed": [
+      "tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel",
+      "tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 200,
+  "case_sha256": "8f25ede4a314f83a470ab7222adab9d8ef96952c23e597aee6344597e525a6af"
+}

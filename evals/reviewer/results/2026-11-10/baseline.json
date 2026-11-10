@@ -1,0 +1,38 @@
+{
+  "case": "_baseline",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.82s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "489 passed, 11 skipped, 12 warnings in 74.80s (0:01:14)",
+    "seconds": 79
+  },
+  "tests_pg": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 500,
+    "failed": {},
+    "summary": "500 passed, 12 warnings in 93.14s (0:01:33)",
+    "seconds": 98
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 208
+}

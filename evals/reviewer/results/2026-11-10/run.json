@@ -1,0 +1,7 @@
+{
+  "date": "2026-11-10",
+  "head": "8d3508005eab870edbafc637cb6872dae3b73bd6",
+  "pg": true,
+  "semgrep": "uvx semgrep==1.184.0 --config .semgrep/rules src scripts",
+  "head_note": "Cases exported HEAD as it stood when each started: e6fb3fc for the first ones, 8d35080 (README only, which is excluded from the export) for the rest; the exported trees are identical."
+}

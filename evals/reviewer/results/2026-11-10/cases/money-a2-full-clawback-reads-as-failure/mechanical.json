@@ -1,0 +1,57 @@
+{
+  "case": "money-a2-full-clawback-reads-as-failure",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.48s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout": "AssertionError: assert <PayoutStatus.FAILED: 'failed'> is <PayoutStatus.PAID: 'paid'>",
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late": "AssertionError: assert <PayoutStatus.FAILED: 'failed'> is <PayoutStatus.PAID: 'paid'>",
+      "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry": "AssertionError: assert 409 == 200"
+    },
+    "summary": "3 failed, 486 passed, 11 skipped, 12 warnings in 71.81s (0:01:11)",
+    "seconds": 76,
+    "confirmed": [
+      "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry",
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout",
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout": "AssertionError: assert <PayoutStatus.FAILED: 'failed'> is <PayoutStatus.PAID: 'paid'>",
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late": "AssertionError: assert <PayoutStatus.FAILED: 'failed'> is <PayoutStatus.PAID: 'paid'>",
+      "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry": "AssertionError: assert 409 == 200"
+    },
+    "summary": "3 failed, 497 passed, 12 warnings in 85.15s (0:01:25)",
+    "seconds": 89,
+    "confirmed": [
+      "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry",
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout",
+      "tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 198,
+  "case_sha256": "c3014e43e02415795528093d678f1c0f88952fc55940c46322ba74406e49bf62"
+}

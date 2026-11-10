@@ -1,0 +1,4 @@
+Build the cancel notices from one job snapshot
+
+Both notices described the same job with hand-copied keys; one snapshot
+keeps them consistent and each renderer picks the fields it needs.

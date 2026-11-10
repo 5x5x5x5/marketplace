@@ -1,0 +1,1030 @@
+{
+  "run": {
+    "date": "2026-11-10",
+    "head": "8d3508005eab870edbafc637cb6872dae3b73bd6",
+    "pg": true,
+    "semgrep": "uvx semgrep==1.184.0 --config .semgrep/rules src scripts",
+    "head_note": "Cases exported HEAD as it stood when each started: e6fb3fc for the first ones, 8d35080 (README only, which is excluded from the export) for the rest; the exported trees are identical."
+  },
+  "summary": {
+    "bug_cases": 16,
+    "control_cases": 4,
+    "per_layer": {
+      "tests": {
+        "caught": 12,
+        "decided": 16,
+        "of": 16
+      },
+      "architecture": {
+        "caught": 4,
+        "decided": 16,
+        "of": 16
+      },
+      "semgrep": {
+        "caught": 1,
+        "decided": 16,
+        "of": 16
+      },
+      "reviewer": {
+        "caught": 0,
+        "decided": 0,
+        "of": 16
+      },
+      "tests_sqlite": {
+        "caught": 10,
+        "decided": 16,
+        "of": 16
+      },
+      "tests_pg": {
+        "caught": 12,
+        "decided": 16,
+        "of": 16
+      }
+    },
+    "layers_counted_for_overlap": [
+      "tests",
+      "architecture",
+      "semgrep"
+    ],
+    "reviewer_complete": false,
+    "caught_by_exactly_one_layer": {
+      "asym-seller-review-buyer-id": "tests",
+      "money-a1-cancel-blocking-offer-lock": "tests",
+      "money-a2-full-clawback-reads-as-failure": "tests",
+      "money-dispute-pin-not-committed": "tests",
+      "money-f5-admin-cancel-stale-relock": "tests",
+      "money-floor-gross-not-net": "tests",
+      "money-late-success-resurrects-void": "tests",
+      "money-payout-retry-replays-reversed-key": "tests",
+      "ops-pagination-in-python": "tests",
+      "ops-retention-reaps-failed-webhooks": "tests",
+      "ops-webhook-db-on-event-loop": "architecture"
+    },
+    "caught_by_none": [
+      "asym-cancel-notice-shared-payload",
+      "money-charge-key-per-offer"
+    ],
+    "reviewer_partial": [],
+    "control_false_positives": {}
+  },
+  "cases": [
+    {
+      "id": "asym-availability-seller-id-in-body",
+      "kind": "bug",
+      "class": "asymmetry/identity-from-request",
+      "origin": "SECURITY.md safe-to-pilot sweep C3/C4 (seller identity taken from caller-supplied input instead of the token); the class behind the 'identity comes from the principal' rule.",
+      "synthetic": false,
+      "location": "src/marketplace/models.py: AvailabilityRequest; src/marketplace/services/profiles.py: post_availability",
+      "reviewer": "asymmetry-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/asym-availability-seller-id-in-body/packet/prompt.md",
+      "packet_code": "rdcc896",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_architecture.py::test_request_bodies_never_carry_buyer_or_seller_id"
+          ]
+        },
+        "semgrep": {
+          "outcome": "flagged",
+          "detail": [
+            "marketplace-request-model-identity-field src/marketplace/models.py:665"
+          ]
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "asym-cancel-notice-shared-payload",
+      "kind": "bug",
+      "class": "asymmetry/notification-payload",
+      "origin": "Synthetic: no historical instance. The rule it breaks is the notifications design's role-safe payload rule (CLAUDE.md 'Notifications are enqueue-only'; asymmetry-reviewer item 5 names exactly this shape).",
+      "synthetic": true,
+      "location": "src/marketplace/services/jobs.py: _notify_cancelled",
+      "reviewer": "asymmetry-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/asym-cancel-notice-shared-payload/packet/prompt.md",
+      "packet_code": "r8373cc",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "asym-f1-seller-receipt-ledger-model",
+      "kind": "bug",
+      "class": "asymmetry/wrong-view-model",
+      "origin": "F1 (docs/tryout-findings-2026-07-16.md; SECURITY.md findings history). Fixed in 12309c6 'Fix seller receipt leak (F1) and cancel-vs-complete double-pay (F5)'.",
+      "synthetic": false,
+      "location": "src/marketplace/routers/seller.py: complete_job (POST /v1/seller/jobs/{job_id}/complete)",
+      "reviewer": "asymmetry-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/asym-f1-seller-receipt-ledger-model/packet/prompt.md",
+      "packet_code": "rb73eb4",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_end_to_end.py::test_full_flow_books_correct_margin",
+            "tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_end_to_end.py::test_full_flow_books_correct_margin",
+            "tests/test_information_asymmetry.py::test_completion_receipt_is_seller_scoped"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_architecture.py::test_role_routes_do_not_return_the_other_sides_fields[seller-forbidden1]"
+          ]
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "asym-seller-review-buyer-id",
+      "kind": "bug",
+      "class": "asymmetry/forbidden-field-in-role-view",
+      "origin": "95a459a 'Fix wave: withhold buyer identity from sellers, guard PI-less chargebacks' (SellerReviewOut was the first seller-facing view to leak buyer_id).",
+      "synthetic": false,
+      "location": "src/marketplace/models.py: SellerReviewOut (response of POST /v1/seller/jobs/{job_id}/review)",
+      "reviewer": "asymmetry-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/asym-seller-review-buyer-id/packet/prompt.md",
+      "packet_code": "r4c36be",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_seller_reviews.py::test_seller_reviews_buyer_happy_path_and_aggregate"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ctrl-cancel-shared-tail",
+      "kind": "control",
+      "class": "control/refactor",
+      "origin": "Control: a behavior-preserving refactor of both cancel paths (same lock order, same locked re-reads, same provider calls).",
+      "synthetic": true,
+      "location": "src/marketplace/services/jobs.py: cancel_job, admin_cancel_job, new _cancel_locked",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/ctrl-cancel-shared-tail/packet/prompt.md",
+      "packet_code": "rc59423",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ctrl-offer-view-responded-at",
+      "kind": "control",
+      "class": "control/new-field-right-view",
+      "origin": "Control: a legitimate new field on the seller's own offer view (the seller's own response time; no counterparty data).",
+      "synthetic": true,
+      "location": "src/marketplace/models.py: SellerOfferView",
+      "reviewer": "asymmetry-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/ctrl-offer-view-responded-at/packet/prompt.md",
+      "packet_code": "rcffd1a",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ctrl-rename-superseded-helper",
+      "kind": "control",
+      "class": "control/rename",
+      "origin": "Control: a harmless rename of a private helper in the webhook applier.",
+      "synthetic": true,
+      "location": "src/marketplace/services/webhooks.py: _superseded -> _newer_event_applied",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/ctrl-rename-superseded-helper/packet/prompt.md",
+      "packet_code": "r0b7a9e",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ctrl-stale-sweep-ordered",
+      "kind": "control",
+      "class": "control/money-path-correct-change",
+      "origin": "Control: the fix shape the money-path audit proposed for deferred item D6 (stale-payment sweep iterates without an order).",
+      "synthetic": true,
+      "location": "src/marketplace/services/maintenance.py: _sweep_stale_payments",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/ctrl-stale-sweep-ordered/packet/prompt.md",
+      "packet_code": "r7d50ec",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-a1-cancel-blocking-offer-lock",
+      "kind": "bug",
+      "class": "money-path/lock-order",
+      "origin": "A1 (docs/money-path-audit-2026-11.md). Fixed in 7287d30 'Skip offers locked by accept/decline/sweep when a cancel expires them'.",
+      "synthetic": false,
+      "location": "src/marketplace/services/offers.py: expire_open_offers (called by cancel_job and admin_cancel_job)",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-a1-cancel-blocking-offer-lock/packet/prompt.md",
+      "packet_code": "rc44ba8",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[admin]",
+            "tests/test_money_path_audit.py::test_cancel_vs_accept_never_deadlocks[buyer]"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-a2-full-clawback-reads-as-failure",
+      "kind": "bug",
+      "class": "money-path/webhook-mapping",
+      "origin": "A2 (docs/money-path-audit-2026-11.md). Fixed in b63c870 'Keep a payout PAID when a full dispute clawback reverses its transfer'.",
+      "synthetic": false,
+      "location": "src/marketplace/services/webhooks.py: _apply_payment_event, transfer_failed branch",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-a2-full-clawback-reads-as-failure/packet/prompt.md",
+      "packet_code": "r7e25b6",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry",
+            "tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout",
+            "tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry",
+            "tests/test_money_path_audit.py::test_full_clawback_reversal_event_does_not_fail_the_payout",
+            "tests/test_money_path_audit.py::test_full_clawback_reversal_event_twice_and_late"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-charge-key-per-offer",
+      "kind": "bug",
+      "class": "money-path/idempotency-key-derivation",
+      "origin": "Synthetic: no historical instance. Derived from the money-path audit's retry table (accept_offer row: after a crash between charge and commit, the next accept, possibly by another seller after re-match, must replay the same key 'because it is derived from the job').",
+      "synthetic": true,
+      "location": "src/marketplace/services/jobs.py: accept_offer",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-charge-key-per-offer/packet/prompt.md",
+      "packet_code": "r8f839b",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-dispute-pin-not-committed",
+      "kind": "bug",
+      "class": "money-path/mid-handler-commit",
+      "origin": "32a6f31 'Close disputes final-review findings: partial-reversal mapping, pinned resolve retries, ...' and 51252f1; the pin-and-commit precedent in CLAUDE.md. Also the precondition A2's fix relies on (b63c870).",
+      "synthetic": false,
+      "location": "src/marketplace/services/disputes.py: resolve_dispute",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-dispute-pin-not-committed/packet/prompt.md",
+      "packet_code": "re0c0f3",
+      "case_changed_since_run": false,
+      "notes": "cases/money-dispute-pin-not-committed/notes.md",
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_disputes.py::test_concurrent_duplicate_resolve_cannot_double_book",
+            "tests/test_disputes.py::test_resolve_pins_amounts_across_a_502_retry",
+            "tests/test_money_path_audit.py::test_dispute_retry_converges_when_the_full_reversal_event_lands_mid_retry"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "suite timed out"
+          ]
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-f2-commit-in-teardown",
+      "kind": "bug",
+      "class": "money-path/commit-ordering",
+      "origin": "F2 (docs/tryout-findings-2026-07-16.md). Fixed by the commit-before-response branch (docs/superpowers/plans/2026-07-16-commit-before-response.md).",
+      "synthetic": false,
+      "location": "src/marketplace/db.py: get_session and CommitRoute.get_route_handler",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-f2-commit-in-teardown/packet/prompt.md",
+      "packet_code": "rea6980",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_live_server.py::test_commit_lands_before_client_has_response",
+            "tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing",
+            "tests/test_live_server.py::test_read_your_writes_over_socket",
+            "tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical"
+          ],
+          "unconfirmed_on_rerun": [
+            "tests/test_live_server.py::test_read_your_writes_over_socket"
+          ]
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_live_server.py::test_commit_lands_before_client_has_response",
+            "tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing",
+            "tests/test_live_server.py::test_read_your_writes_over_socket",
+            "tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_architecture.py::test_get_session_teardown_does_not_commit"
+          ]
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-f5-admin-cancel-stale-relock",
+      "kind": "bug",
+      "class": "money-path/stale-relock",
+      "origin": "F5 (docs/tryout-findings-2026-07-16.md). Fixed in 12309c6 'Fix seller receipt leak (F1) and cancel-vs-complete double-pay (F5)'.",
+      "synthetic": false,
+      "location": "src/marketplace/services/jobs.py: admin_cancel_job",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-f5-admin-cancel-stale-relock/packet/prompt.md",
+      "packet_code": "r7d48ed",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_payments.py::test_cancel_vs_complete_race"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-floor-gross-not-net",
+      "kind": "bug",
+      "class": "money-path/margin-floor",
+      "origin": "28b5c33 'Make the margin floor fee-aware at both enforcement sites' (fee-aware margin phase; match-time test added in dd92407).",
+      "synthetic": false,
+      "location": "src/marketplace/matching.py: _priced (used by every matching strategy)",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-floor-gross-not-net/packet/prompt.md",
+      "packet_code": "r166e4d",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_matching.py::test_floor_filters_candidate_fee_aware"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_matching.py::test_floor_filters_candidate_fee_aware"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-late-success-resurrects-void",
+      "kind": "bug",
+      "class": "money-path/resurrection",
+      "origin": "3c5d1af 'Never resurrect a voided payment: late success no-ops on dead jobs' (SECURITY.md later fixes: 'Late payment success').",
+      "synthetic": false,
+      "location": "src/marketplace/services/webhooks.py: _apply_payment_event, payment_succeeded branch",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-late-success-resurrects-void/packet/prompt.md",
+      "packet_code": "ra1bc59",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel",
+            "tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_payments.py::test_late_success_never_resurrects_a_voided_cancel",
+            "tests/test_webhook_replay.py::test_payment_succeeded_late_after_buyer_cancel_never_resurrects"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "money-payout-retry-replays-reversed-key",
+      "kind": "bug",
+      "class": "money-path/idempotency-key-reuse",
+      "origin": "b41be67 'Apply final-review fix wave: ... reversed-transfer retry keys ...' (retry_payout must not replay the key of a reversed transfer).",
+      "synthetic": false,
+      "location": "src/marketplace/services/payouts.py: retry_payout",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope",
+      "packet": "cases/money-payout-retry-replays-reversed-key/packet/prompt.md",
+      "packet_code": "r14480f",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_payments.py::test_reversed_transfer_retry_forces_a_new_transfer"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ops-pagination-in-python",
+      "kind": "bug",
+      "class": "operational/pagination",
+      "origin": "e53860e 'Paginate the catalog and list endpoints in SQL' (SECURITY.md M7: pagination applied in SQL).",
+      "synthetic": false,
+      "location": "src/marketplace/services/common.py: paginate (every list endpoint)",
+      "reviewer": "spec-compliance-reviewer",
+      "reviewer_fit": "weak: no narrow reviewer lists this class; spec-compliance reviews it against the commit message and CLAUDE.md with no plan task",
+      "packet": "cases/ops-pagination-in-python/packet/prompt.md",
+      "packet_code": "r201b0e",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/buyer-admin-reviews]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/seller-admin-seller_reviews]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/transactions-admin-transactions]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/jobs-buyer-jobs]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/jobs-seller-jobs]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/offers-seller-offers]"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/buyer-admin-reviews]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/seller-admin-seller_reviews]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/transactions-admin-transactions]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/jobs-buyer-jobs]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/jobs-seller-jobs]",
+            "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/offers-seller-offers]"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ops-retention-reaps-failed-webhooks",
+      "kind": "bug",
+      "class": "operational/retention",
+      "origin": "df4b9c0 'Add retention sweeps, move webhook DB work off the event loop' (PENDING outbox never reaped) and f8f54dc 'Merge webhook outbox: persisted failures, retry, dead-letter, replay-safe handlers' (FAILED webhook rows exempt).",
+      "synthetic": false,
+      "location": "src/marketplace/services/maintenance.py: _sweep_retention",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "partial: the reviewer lists webhook replay and outbox handling but not retention",
+      "packet": "cases/ops-retention-reaps-failed-webhooks/packet/prompt.md",
+      "packet_code": "r6facd3",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones"
+          ],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    },
+    {
+      "id": "ops-webhook-db-on-event-loop",
+      "kind": "bug",
+      "class": "operational/event-loop-blocking",
+      "origin": "df4b9c0 'Add retention sweeps, move webhook DB work off the event loop'.",
+      "synthetic": false,
+      "location": "src/marketplace/routers/payments.py: payments_webhook",
+      "reviewer": "money-path-reviewer",
+      "reviewer_fit": "in-scope (item 7: DB work on the coroutine)",
+      "packet": "cases/ops-webhook-db-on-event-loop/packet/prompt.md",
+      "packet_code": "r74c6ef",
+      "case_changed_since_run": false,
+      "notes": null,
+      "static_gate": {
+        "ruff_check": "pass",
+        "ruff_format": "pass",
+        "pyright": "pass"
+      },
+      "layers": {
+        "tests_sqlite": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "tests_pg": {
+          "outcome": "silent",
+          "detail": [],
+          "unconfirmed_on_rerun": []
+        },
+        "architecture": {
+          "outcome": "flagged",
+          "detail": [
+            "tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread"
+          ]
+        },
+        "semgrep": {
+          "outcome": "silent",
+          "detail": []
+        },
+        "reviewer": {
+          "outcome": "pending",
+          "runs": []
+        }
+      }
+    }
+  ]
+}

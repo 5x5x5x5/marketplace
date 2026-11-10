@@ -1,0 +1,66 @@
+{
+  "case": "money-f2-commit-in-teardown",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 36,
+    "failed": {
+      "tests/test_architecture.py::test_get_session_teardown_does_not_commit": "AssertionError: commit in get_session teardown:"
+    },
+    "summary": "1 failed, 35 passed in 2.90s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_get_session_teardown_does_not_commit": "AssertionError: commit in get_session teardown:",
+      "tests/test_live_server.py::test_commit_lands_before_client_has_response": "AssertionError: no commit was recorded for this request by the time the client received its response (F2): the response reached the client before the transaction committed",
+      "tests/test_live_server.py::test_read_your_writes_over_socket": "AssertionError: iteration 30: fresh quote invisible: {\"detail\":\"quote not found\"}",
+      "tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing": "assert 201 == 500",
+      "tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical": "AssertionError: {\"detail\":\"quote not found\"}"
+    },
+    "summary": "5 failed, 484 passed, 11 skipped, 12 warnings in 68.73s (0:01:08)",
+    "seconds": 73,
+    "confirmed": [
+      "tests/test_architecture.py::test_get_session_teardown_does_not_commit",
+      "tests/test_live_server.py::test_commit_lands_before_client_has_response",
+      "tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing",
+      "tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_get_session_teardown_does_not_commit": "AssertionError: commit in get_session teardown:",
+      "tests/test_live_server.py::test_commit_lands_before_client_has_response": "AssertionError: no commit was recorded for this request by the time the client received its response (F2): the response reached the client before the transaction committed",
+      "tests/test_live_server.py::test_read_your_writes_over_socket": "AssertionError: {\"detail\":\"internal error\",\"request_id\":\"d6e8985653bf48f6aa466b1bf349b3c5\"}",
+      "tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing": "assert 201 == 500",
+      "tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical": "AssertionError: {\"detail\":\"quote not found\"}"
+    },
+    "summary": "5 failed, 495 passed, 12 warnings in 86.21s (0:01:26)",
+    "seconds": 90,
+    "confirmed": [
+      "tests/test_architecture.py::test_get_session_teardown_does_not_commit",
+      "tests/test_live_server.py::test_commit_lands_before_client_has_response",
+      "tests/test_live_server.py::test_failed_commit_returns_500_envelope_and_persists_nothing",
+      "tests/test_live_server.py::test_read_your_writes_over_socket",
+      "tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 200,
+  "case_sha256": "eaaceb8f12935b48cce2ffc74c67b6f8eedd70063a0741dd341ea1b47842c294"
+}

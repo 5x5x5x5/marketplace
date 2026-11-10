@@ -1,0 +1,4 @@
+Include the reviewed buyer in the seller review receipt
+
+Mirrors ReviewOut, which carries the reviewed seller's id, so clients can
+render both receipts with one component.

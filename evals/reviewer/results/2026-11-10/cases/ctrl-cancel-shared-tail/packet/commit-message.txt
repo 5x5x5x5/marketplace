@@ -1,0 +1,6 @@
+Extract the shared cancel tail into one helper
+
+cancel_job and admin_cancel_job ended with the same eight lines (expire
+offers, release the payment, notify, mark cancelled). Move them into
+_cancel_locked, called with the Job already locked, so the two paths can't
+drift.

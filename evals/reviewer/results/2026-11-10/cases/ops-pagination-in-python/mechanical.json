@@ -1,0 +1,101 @@
+{
+  "case": "ops-pagination-in-python",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.71s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/jobs-buyer-jobs]": "AssertionError: ['SELECT jobs.id, jobs.quote_id, jobs.buyer_id, jobs.service_type_id, jobs.buyer_price, jobs.seller_id, jobs.pinned_se... jobs.completed_at, jobs.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/offers-seller-offers]": "AssertionError: ['SELECT offers.id, offers.job_id, offers.service_type_id, offers.seller_id, offers.seller_payout, offers.status, offe...d_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/jobs-seller-jobs]": "AssertionError: ['SELECT jobs.id, jobs.quote_id, jobs.buyer_id, jobs.service_type_id, jobs.buyer_price, jobs.seller_id, jobs.pinned_se...jobs.completed_at, jobs.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]": "AssertionError: ['SELECT jobs.id, jobs.quote_id, jobs.buyer_id, jobs.service_type_id, jobs.buyer_price, jobs.seller_id, jobs.pinned_se...ated_at, jobs.accepted_at, jobs.completed_at, jobs.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]": "AssertionError: ['SELECT audit_log.id, audit_log.actor, audit_log.action, audit_log.target, audit_log.detail, audit_log.created_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]": "AssertionError: ['SELECT notifications.id, notifications.user_id, notifications.email, notifications.kind, notifications.payload, noti....sent_at, notifications.last_error ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/transactions-admin-transactions]": "AssertionError: ['SELECT transactions.id, transactions.job_id, transactions.buyer_price, transactions.seller_payout, transactions.margin, transactions.completed_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]": "AssertionError: ['SELECT payouts.id, payouts.job_id, payouts.seller_id, payouts.amount, payouts.currency, payouts.status, payouts.prov..._transfer_id, payouts.created_at, payouts.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]": "AssertionError: ['SELECT disputes.id, disputes.job_id, disputes.source, disputes.buyer_id, disputes.reason, disputes.status, disputes....ute_id, disputes.created_at, disputes.resolved_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]": "AssertionError: ['SELECT reports.id, reports.reporter_id, reports.target_kind, reports.target_id, reports.reason, reports.status, repo...lution_note, reports.created_at, reports.resolved_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]": "AssertionError: ['SELECT buyer_profiles.id, buyer_profiles.completed_jobs, buyer_profiles.rating_count, buyer_profiles.rating_sum ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]": "AssertionError: ['SELECT listings.id, listings.seller_id, listings.service_type_id, listings.title, listings.description, listings.pho....hidden, listings.created_at, listings.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/buyer-admin-reviews]": "AssertionError: ['SELECT reviews.id, reviews.job_id, reviews.buyer_id, reviews.seller_id, reviews.rating, reviews.comment, reviews.comment_hidden, reviews.created_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/seller-admin-seller_reviews]": "AssertionError: ['SELECT seller_reviews.id, seller_reviews.job_id, seller_reviews.seller_id, seller_reviews.buyer_id, seller_reviews.r...dden, seller_reviews.created_at "
+    },
+    "summary": "14 failed, 475 passed, 11 skipped, 12 warnings in 71.53s (0:01:11)",
+    "seconds": 76,
+    "confirmed": [
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/buyer-admin-reviews]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/seller-admin-seller_reviews]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/transactions-admin-transactions]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/jobs-buyer-jobs]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/jobs-seller-jobs]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/offers-seller-offers]"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/jobs-buyer-jobs]": "AssertionError: ['SELECT jobs.id, jobs.quote_id, jobs.buyer_id, jobs.service_type_id, jobs.buyer_price, jobs.seller_id, jobs.pinned_se...bs.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/offers-seller-offers]": "AssertionError: ['SELECT offers.id, offers.job_id, offers.service_type_id, offers.seller_id, offers.seller_payout, offers.status, offe...seller_id = %(seller_id_1)s::VARCHAR AND offers.status = %(status_1)s ORDER BY offers.offered_at DESC, offers.id DESC']",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/jobs-seller-jobs]": "AssertionError: ['SELECT jobs.id, jobs.quote_id, jobs.buyer_id, jobs.service_type_id, jobs.buyer_price, jobs.seller_id, jobs.pinned_se....updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]": "AssertionError: ['SELECT jobs.id, jobs.quote_id, jobs.buyer_id, jobs.service_type_id, jobs.buyer_price, jobs.seller_id, jobs.pinned_se...ated_at, jobs.accepted_at, jobs.completed_at, jobs.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]": "AssertionError: ['SELECT audit_log.id, audit_log.actor, audit_log.action, audit_log.target, audit_log.detail, audit_log.created_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]": "AssertionError: ['SELECT notifications.id, notifications.user_id, notifications.email, notifications.kind, notifications.payload, noti....sent_at, notifications.last_error ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/transactions-admin-transactions]": "AssertionError: ['SELECT transactions.id, transactions.job_id, transactions.buyer_price, transactions.seller_payout, transactions.margin, transactions.completed_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]": "AssertionError: ['SELECT payouts.id, payouts.job_id, payouts.seller_id, payouts.amount, payouts.currency, payouts.status, payouts.prov..._transfer_id, payouts.created_at, payouts.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]": "AssertionError: ['SELECT disputes.id, disputes.job_id, disputes.source, disputes.buyer_id, disputes.reason, disputes.status, disputes....ute_id, disputes.created_at, disputes.resolved_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]": "AssertionError: ['SELECT reports.id, reports.reporter_id, reports.target_kind, reports.target_id, reports.reason, reports.status, repo...lution_note, reports.created_at, reports.resolved_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]": "AssertionError: ['SELECT buyer_profiles.id, buyer_profiles.completed_jobs, buyer_profiles.rating_count, buyer_profiles.rating_sum ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]": "AssertionError: ['SELECT listings.id, listings.seller_id, listings.service_type_id, listings.title, listings.description, listings.pho....hidden, listings.created_at, listings.updated_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/buyer-admin-reviews]": "AssertionError: ['SELECT reviews.id, reviews.job_id, reviews.buyer_id, reviews.seller_id, reviews.rating, reviews.comment, reviews.comment_hidden, reviews.created_at ",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/seller-admin-seller_reviews]": "AssertionError: ['SELECT seller_reviews.id, seller_reviews.job_id, seller_reviews.seller_id, seller_reviews.buyer_id, seller_reviews.r...dden, seller_reviews.created_at "
+    },
+    "summary": "14 failed, 486 passed, 12 warnings in 88.35s (0:01:28)",
+    "seconds": 92,
+    "confirmed": [
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/audit-admin-audit_log]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/buyers-admin-buyer_profiles]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/disputes-admin-disputes]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/jobs-admin-jobs]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/listings-admin-listings]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/notifications-admin-notifications]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/payouts-admin-payouts]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reports-admin-reports]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/buyer-admin-reviews]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/reviews/seller-admin-seller_reviews]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/admin/transactions-admin-transactions]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/jobs-buyer-jobs]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/jobs-seller-jobs]",
+      "tests/test_capacity.py::test_list_endpoints_paginate_in_sql[/v1/seller/offers-seller-offers]"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 198,
+  "case_sha256": "870c73ac53050d33c72f7d37ff36c608b01014e735c9ec2d74541e19a3114730"
+}

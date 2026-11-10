@@ -1,0 +1,51 @@
+{
+  "case": "ops-webhook-db-on-event-loop",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 36,
+    "failed": {
+      "tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread": "AssertionError: async webhook handler does not offload: ['/v1/payments/webhook']"
+    },
+    "summary": "1 failed, 35 passed in 2.78s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread": "AssertionError: async webhook handler does not offload: ['/v1/payments/webhook']"
+    },
+    "summary": "1 failed, 488 passed, 11 skipped, 12 warnings in 70.81s (0:01:10)",
+    "seconds": 75,
+    "confirmed": [
+      "tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread": "AssertionError: async webhook handler does not offload: ['/v1/payments/webhook']"
+    },
+    "summary": "1 failed, 499 passed, 12 warnings in 91.33s (0:01:31)",
+    "seconds": 95,
+    "confirmed": [
+      "tests/test_architecture.py::test_async_webhook_handlers_offload_to_a_thread"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 198,
+  "case_sha256": "de410f756ea543bbd46805cc9810d715155206a5717d5d6d87a0361dd80b6610"
+}

@@ -1,0 +1,23 @@
+diff --git a/src/marketplace/services/offers.py b/src/marketplace/services/offers.py
+index 0f04a60..c97c796 100644
+--- a/src/marketplace/services/offers.py
++++ b/src/marketplace/services/offers.py
+@@ -85,15 +85,12 @@ def match_and_offer(session: Session, job: Job) -> None:
+ 
+ 
+ def expire_open_offers(session: Session, job_id: UUID) -> None:
+-    # Callers already hold the Job lock, and accept/decline/the offer sweep
+-    # lock Offer -> Job: waiting here for an offer one of them holds is a
+-    # deadlock. SKIP LOCKED leaves that offer to its holder, which finds the
+-    # job no longer PENDING once we commit (accept 409s, decline and the
+-    # sweep do not re-match).
++    # Every open offer on a cancelled job must end EXPIRED; skipping a locked
++    # one would leave it OFFERED until its TTL.
+     for offer in session.scalars(
+         select(Offer)
+         .where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+-        .with_for_update(skip_locked=True)
++        .with_for_update()
+     ).all():
+         offer.status = OfferStatus.EXPIRED
+         offer.responded_at = _now()
