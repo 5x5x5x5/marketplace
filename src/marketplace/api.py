@@ -16,7 +16,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -26,12 +25,11 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
 
-from . import catalog, notifications, repo
+from . import catalog
 from .auth import (
     Claims,
     Principal,
@@ -44,18 +42,14 @@ from .auth import (
 )
 from .db import CommitRoute, get_session, init_db
 from .entities import (
-    Adjustment,
     AuditLog,
     BuyerProfile,
     Dispute,
-    IdempotencyRecord,
     Job,
     Listing,
     Notification,
     Offer,
-    Payment,
     Payout,
-    Pipeline,
     Quote,
     Report,
     Review,
@@ -68,10 +62,7 @@ from .entities import (
 )
 from .errors import DomainError
 from .idempotency import IdempotencyMiddleware
-from .mail import get_mail_sender
-from .matching import STRATEGIES
 from .models import (
-    AdjustmentKind,
     AdminDisputeOut,
     AdminReportOut,
     AdminReviewOut,
@@ -97,11 +88,9 @@ from .models import (
     NotificationOut,
     NotificationPreferenceOut,
     NotificationPreferencesUpdate,
-    NotificationStats,
     NotificationStatus,
     OfferStatus,
     OnboardingOut,
-    PaymentStatus,
     PayoutOut,
     PayoutStatus,
     PipelinesBody,
@@ -128,18 +117,13 @@ from .models import (
     SuspendRequest,
     TransactionOut,
     UserModerationOut,
-    UserRole,
-    UserStatus,
     WebhookEventOut,
     WebhookEventStatus,
-    to_money,
 )
 from .observability import BodySizeLimitMiddleware, RequestIdMiddleware, configure_logging
 from .pages import pages_router
 from .payments import get_provider
 from .payments.port import PaymentError, PaymentProvider, WebhookSignatureError
-from .pricing import REGISTRY
-from .repo import audit
 from .services import (
     booking,
     disputes,
@@ -147,14 +131,14 @@ from .services import (
     listings,
     maintenance,
     moderation,
+    ops,
     payouts,
+    platform_config,
     preferences,
     profiles,
     reviews,
     webhooks,
 )
-from .services.common import now as _now
-from .services.common import paginate as _paginate
 from .services.webhooks import process_webhook as _process_webhook
 from .settings import settings
 
@@ -171,18 +155,7 @@ Offset = Annotated[int, Query(ge=0)]
 ProviderDep = Annotated[PaymentProvider, Depends(get_provider)]
 
 
-_STARTED_AT = _now()
-
-
 # ---------- Matching / offer helpers ----------
-
-
-def _count_by(session: Session, column: Any, enum: type[StrEnum]) -> dict[str, int]:
-    """Group-count a status column; every enum member present, absent = 0."""
-    rows: dict[Any, int] = {}
-    for value, count in session.execute(select(column, func.count()).group_by(column)).all():
-        rows[value] = count
-    return {m.value: int(rows.get(m, 0)) for m in enum}
 
 
 # ---------- Reports router ----------
@@ -433,115 +406,47 @@ admin_router = APIRouter(
 
 @admin_router.get("/config")
 def get_config(session: SessionDep) -> dict[str, Any]:
-    pc = repo.get_platform_config(session)
-    service_types = {
-        st.id: {
-            "base_buyer_price": str(st.base_buyer_price),
-            "base_seller_payout": str(st.base_seller_payout),
-        }
-        for st in session.scalars(select(ServiceType)).all()
-    }
-    pipelines = {
-        p.service_type_id: {"buyer": p.buyer, "seller": p.seller}
-        for p in session.scalars(select(Pipeline)).all()
-    }
-    return {
-        "service_types": service_types,
-        "pipelines": pipelines,
-        "margin_floor": {
-            "absolute": str(pc.margin_absolute),
-            "pct": str(pc.margin_pct),
-            "ceiling_multiplier": str(pc.ceiling_multiplier),
-        },
-        "fees": {"pct": str(pc.fee_pct), "fixed": str(pc.fee_fixed)},
-        "matching_strategy": pc.matching_strategy,
-        "adjuster_params": pc.adjuster_params,
-    }
+    return platform_config.get_config(session)
 
 
 @admin_router.put("/config/service_types/{service_type_id}", response_model=ServiceTypeOut)
 def upsert_service_type(
     service_type_id: str, body: ServiceTypeBody, session: SessionDep, admin_id: AdminId
 ) -> ServiceType:
-    st = session.get(ServiceType, service_type_id)
-    if st is None:
-        st = ServiceType(id=service_type_id)
-        session.add(st)
-    st.base_buyer_price = body.base_buyer_price
-    st.base_seller_payout = body.base_seller_payout
-    audit(session, admin_id, "upsert_service_type", service_type_id, body.model_dump(mode="json"))
-    session.flush()
-    return st
+    return platform_config.upsert_service_type(session, admin_id, service_type_id, body)
 
 
 @admin_router.put("/config/pipelines/{service_type_id}")
 def upsert_pipelines(
     service_type_id: str, body: PipelinesBody, session: SessionDep, admin_id: AdminId
 ) -> dict[str, list[str]]:
-    if session.get(ServiceType, service_type_id) is None:
-        raise HTTPException(status_code=404, detail="unknown service_type_id")
-    unknown = sorted({n for n in (*body.buyer, *body.seller) if n not in REGISTRY})
-    if unknown:
-        raise HTTPException(status_code=422, detail=f"unknown adjuster(s): {unknown}")
-    pipe = session.get(Pipeline, service_type_id)
-    if pipe is None:
-        pipe = Pipeline(service_type_id=service_type_id)
-        session.add(pipe)
-    pipe.buyer = body.buyer
-    pipe.seller = body.seller
-    audit(session, admin_id, "upsert_pipelines", service_type_id, body.model_dump(mode="json"))
-    return {"buyer": pipe.buyer, "seller": pipe.seller}
+    return platform_config.upsert_pipelines(session, admin_id, service_type_id, body)
 
 
 @admin_router.put("/config/margin_floor")
 def update_margin_floor(
     body: MarginFloorBody, session: SessionDep, admin_id: AdminId
 ) -> dict[str, str]:
-    pc = repo.get_platform_config(session)
-    pc.margin_absolute = body.absolute
-    pc.margin_pct = body.pct
-    pc.ceiling_multiplier = body.ceiling_multiplier
-    audit(session, admin_id, "update_margin_floor", "platform", body.model_dump(mode="json"))
-    return {
-        "absolute": str(pc.margin_absolute),
-        "pct": str(pc.margin_pct),
-        "ceiling_multiplier": str(pc.ceiling_multiplier),
-    }
+    return platform_config.update_margin_floor(session, admin_id, body)
 
 
 @admin_router.put("/config/fees")
 def update_fees(body: FeesBody, session: SessionDep, admin_id: AdminId) -> dict[str, str]:
-    pc = repo.get_platform_config(session)
-    pc.fee_pct = body.pct
-    pc.fee_fixed = body.fixed
-    audit(session, admin_id, "update_fees", "platform", body.model_dump(mode="json"))
-    return {"pct": str(pc.fee_pct), "fixed": str(pc.fee_fixed)}
+    return platform_config.update_fees(session, admin_id, body)
 
 
 @admin_router.put("/config/matching_strategy")
 def update_matching_strategy(
     body: MatchingStrategyBody, session: SessionDep, admin_id: AdminId
 ) -> dict[str, str]:
-    if body.strategy not in STRATEGIES:
-        raise HTTPException(
-            status_code=422, detail=f"strategy must be one of {sorted(STRATEGIES.keys())}"
-        )
-    pc = repo.get_platform_config(session)
-    pc.matching_strategy = body.strategy
-    audit(session, admin_id, "update_matching_strategy", "platform", {"strategy": body.strategy})
-    return {"strategy": body.strategy}
+    return platform_config.update_matching_strategy(session, admin_id, body)
 
 
 @admin_router.put("/config/adjuster_params/{adjuster_name}")
 def update_adjuster_params(
     adjuster_name: str, body: dict[str, Any], session: SessionDep, admin_id: AdminId
 ) -> dict[str, Any]:
-    if adjuster_name not in REGISTRY:
-        raise HTTPException(status_code=404, detail=f"unknown adjuster {adjuster_name!r}")
-    pc = repo.get_platform_config(session)
-    pc.adjuster_params = {**pc.adjuster_params, adjuster_name: body}  # reassign so it persists
-    audit(session, admin_id, "update_adjuster_params", adjuster_name, body)
-    return body
+    return platform_config.update_adjuster_params(session, admin_id, adjuster_name, body)
 
 
 @admin_router.put("/sellers/{seller_id}", response_model=SellerProfileOut)
@@ -639,8 +544,7 @@ def admin_list_buyers(
 def list_transactions(
     session: SessionDep, limit: Limit = 100, offset: Offset = 0
 ) -> list[Transaction]:
-    stmt = select(Transaction).order_by(Transaction.completed_at.desc(), Transaction.id.desc())
-    return _paginate(session, stmt, limit, offset)
+    return ops.list_transactions(session, limit, offset)
 
 
 @admin_router.get("/payouts", response_model=list[PayoutOut])
@@ -667,23 +571,13 @@ def list_notifications(
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[Notification]:
-    stmt = select(Notification)
-    if status is not None:
-        stmt = stmt.where(Notification.status == status)
-    return _paginate(
-        session,
-        stmt.order_by(Notification.created_at.desc(), Notification.id.desc()),
-        limit,
-        offset,
-    )
+    return ops.list_notifications(session, status, limit, offset)
 
 
 @admin_router.post("/notifications/drain")
 def drain_notifications(session: SessionDep, admin_id: AdminId) -> dict[str, int]:
     """Manual drain for ops/cron — the in-process loop normally handles this."""
-    sent = notifications.drain_once(get_mail_sender())
-    audit(session, admin_id, "drain_notifications", "notifications", {"sent": sent})
-    return {"sent": sent}
+    return ops.drain_notifications(session, admin_id)
 
 
 @admin_router.get("/disputes", response_model=list[AdminDisputeOut])
@@ -712,99 +606,18 @@ def margins_summary(session: SessionDep) -> MarginSummaryOut:
     """Margin summary. Fee fields are a CASH view: a fee is sunk the moment a
     charge captures, so refunded jobs' fees show as losses and charged-but-in-
     flight jobs dip net until their margin books at completion."""
-    txs = session.scalars(select(Transaction)).all()
-    revenue = sum((t.buyer_price for t in txs), to_money(0))
-    payouts = sum((t.seller_payout for t in txs), to_money(0))
-    margin = sum((t.margin for t in txs), to_money(0))
-    take_rate = float(margin / revenue) if revenue > 0 else 0.0
-    adjustments = session.scalars(select(Adjustment)).all()
-    signs = {
-        AdjustmentKind.REFUND: -1,
-        AdjustmentKind.CLAWBACK: 1,
-        AdjustmentKind.CHARGEBACK_LOSS: -1,
-        AdjustmentKind.CHARGEBACK_FEE: -1,
-    }
-    adjustments_net = sum((a.amount * signs[a.kind] for a in adjustments), to_money(0))
-    fees = sum(
-        (
-            p_fee
-            for p_fee in session.scalars(
-                select(Payment.fee_estimate).where(
-                    Payment.status.in_((PaymentStatus.SUCCEEDED, PaymentStatus.REFUNDED))
-                )
-            ).all()
-        ),
-        to_money(0),
-    )
-    return MarginSummaryOut(
-        transactions=len(txs),
-        gross_revenue=revenue,
-        seller_payouts=payouts,
-        platform_margin=margin,
-        take_rate=round(take_rate, 4),
-        adjustments_net=to_money(adjustments_net),
-        platform_margin_net=to_money(margin + adjustments_net),
-        fees_estimated=to_money(fees),
-        platform_margin_net_of_fees=to_money(margin + adjustments_net - fees),
-    )
+    return ops.margins_summary(session)
 
 
 @admin_router.get("/stats", response_model=StatsOut)
 def admin_stats(session: SessionDep, admin_id: AdminId) -> StatsOut:
     """Operator snapshot: counts only, one session, curl-able."""
-    oldest_pending = session.scalar(
-        select(func.min(Notification.created_at)).where(
-            Notification.status == NotificationStatus.PENDING
-        )
-    )
-    users = _count_by(session, User.role, UserRole)
-    users["suspended"] = (
-        session.scalar(
-            select(func.count()).select_from(User).where(User.status == UserStatus.SUSPENDED)
-        )
-        or 0
-    )
-    notification_counts = _count_by(session, Notification.status, NotificationStatus)
-    return StatsOut(
-        jobs=_count_by(session, Job.status, JobStatus),
-        payments=_count_by(session, Payment.status, PaymentStatus),
-        payouts=_count_by(session, Payout.status, PayoutStatus),
-        notifications=NotificationStats(
-            pending=notification_counts["pending"],
-            sent=notification_counts["sent"],
-            failed=notification_counts["failed"],
-            oldest_pending_age_seconds=(
-                (_now() - oldest_pending).total_seconds() if oldest_pending else None
-            ),
-        ),
-        disputes_open=session.scalar(
-            select(func.count()).select_from(Dispute).where(Dispute.status == DisputeStatus.OPEN)
-        )
-        or 0,
-        reports_open=session.scalar(
-            select(func.count()).select_from(Report).where(Report.status == ReportStatus.OPEN)
-        )
-        or 0,
-        users=users,
-        quotes_live=session.scalar(
-            select(func.count()).select_from(Quote).where(Quote.expires_at > _now())
-        )
-        or 0,
-        retention={
-            "idempotency_keys": session.scalar(select(func.count()).select_from(IdempotencyRecord))
-            or 0,
-            "webhook_events": session.scalar(select(func.count()).select_from(WebhookEvent)) or 0,
-            "notifications_total": session.scalar(select(func.count()).select_from(Notification))
-            or 0,
-        },
-        uptime_seconds=int((_now() - _STARTED_AT).total_seconds()),
-    )
+    return ops.admin_stats(session)
 
 
 @admin_router.get("/audit", response_model=list[AuditOut])
 def list_audit(session: SessionDep, limit: Limit = 100, offset: Offset = 0) -> list[AuditLog]:
-    stmt = select(AuditLog).order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-    return _paginate(session, stmt, limit, offset)
+    return ops.list_audit(session, limit, offset)
 
 
 @admin_router.get("/jobs", response_model=list[BuyerJobView])
