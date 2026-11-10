@@ -450,7 +450,7 @@ Expected: previous 54 pass + new tests pass, 1 Postgres skip.
 git add src/marketplace/models.py src/marketplace/settings.py src/marketplace/payments/ tests/test_payments_port.py
 git commit -m "Add payment provider port, fake adapter, and payment domain types
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -624,7 +624,7 @@ Expected: all green. (Ruff excludes `migrations/` via pyproject — the autogen 
 git add src/marketplace/entities.py migrations/versions/ tests/test_payments_port.py
 git commit -m "Add Payment, Payout, WebhookEvent, IdempotencyRecord entities and migration
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -832,7 +832,7 @@ git commit -m "Gate matching on payment onboarding; add seller onboard endpoint
 Sellers who cannot be paid are never offered work. AWAITING_PAYMENT
 holds a capacity slot.
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1079,7 +1079,7 @@ Escrow entry point: charge inside the capacity lock, instant-success
 providers land in ACCEPTED, async ones park in AWAITING_PAYMENT with
 a client_secret on the buyer's job view.
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1326,7 +1326,7 @@ Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . &&
 git add src/marketplace/api.py tests/test_payments.py
 git commit -m "Add provider webhook endpoint with dedup and payment-timeout sweep
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1529,7 +1529,7 @@ git commit -m "Transfer seller payout at completion; admin payout list and retry
 Transfer failure records a FAILED payout instead of failing the
 completion - money owed is never dropped.
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1651,7 +1651,7 @@ Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . &&
 git add src/marketplace/api.py tests/test_payments.py
 git commit -m "Void or refund the charge on job cancellation
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1908,7 +1908,7 @@ Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . &&
 git add src/marketplace/idempotency.py src/marketplace/auth.py src/marketplace/api.py tests/test_idempotency.py
 git commit -m "Add client Idempotency-Key replay middleware
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -2216,7 +2216,7 @@ Run: `uv run pytest -q && uv run ruff check . && uv run ruff format --check . &&
 git add src/marketplace/payments/stripe_provider.py src/marketplace/payments/__init__.py tests/test_stripe_provider.py pyproject.toml uv.lock
 git commit -m "Add Stripe adapter: controller accounts, PaymentIntents, transfers, signed webhooks
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -2298,7 +2298,7 @@ Expected: everything green; demo exits 0; migrations apply from scratch.
 git add scripts/demo.py .env.example README.md CLAUDE.md ROADMAP.md SECURITY.md
 git commit -m "Document payments: demo acts, env example, README/CLAUDE/ROADMAP/SECURITY
 
-Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---

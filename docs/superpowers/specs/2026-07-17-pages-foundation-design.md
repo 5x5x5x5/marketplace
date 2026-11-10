@@ -1,5 +1,7 @@
 # Pages foundation — design (market-platform fork, phase 2)
 
+> **Note (added later):** this phase was built in a separate fork named `market-platform`, which was later merged back. The phase is part of this repository; the fork, `upstream`/`origin` remotes and fork-specific database names mentioned below no longer exist.
+
 **Date:** 2026-07-17
 **Status:** Approved under the maintainer's standing authorization ("go ahead
 with phase 2"; frontend approach HTMX/Jinja-in-the-monolith decided
