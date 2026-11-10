@@ -160,7 +160,8 @@ invariants.
   answers** (`pages.common.redirect_after_error`). Page POSTs answer 303,
   which is under 400, so `CommitRoute` would otherwise commit whatever the
   service mutated before raising. Work a service committed itself (the
-  pinned-booking 410) stays.
+  pinned-booking 410) stays. Checked by
+  `tests/test_architecture.py::test_page_handlers_roll_back_before_answering_a_domain_error`.
 - **Page POSTs are post/redirect/get, and a repeat is harmless by domain
   logic, not `Idempotency-Key`.** A repeated confirm finds the job its
   quote became (`services.booking.job_for_quote`); toggles post the target
