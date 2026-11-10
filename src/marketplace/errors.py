@@ -72,3 +72,7 @@ class OverloadedError(DomainError):
     """A capacity backstop tripped; the caller may retry shortly."""
 
     status_code = 503
+
+
+class EmailNotVerifiedError(ForbiddenError):
+    """The action needs a verified email address (`REQUIRE_VERIFIED_EMAIL`)."""

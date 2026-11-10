@@ -174,7 +174,7 @@ def test_catalog_pages_are_stable_under_created_at_ties(
         seen += [row["id"] for row in r.json()]
     assert sorted(seen) == sorted(ids)  # no listing skipped or repeated
 
-    monkeypatch.setattr(pages, "_PAGE_SIZE", 4)
+    monkeypatch.setattr(pages.storefront, "PAGE_SIZE", 4)
     titles = [f">listing {i}<" for i in range(7)]
     shown: list[str] = []
     for page in (1, 2):
