@@ -194,7 +194,8 @@ def export_head(dest: Path) -> None:
     )
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        members = [m for m in tar.getmembers() if not m.name.startswith(EXCLUDED)]
+        # Directory entries carry no trailing slash ("evals"), so match on name + "/".
+        members = [m for m in tar.getmembers() if not (m.name + "/").startswith(EXCLUDED)]
         tar.extractall(dest, members=members, filter="data")
     env = child_env(**NEUTRAL_GIT)
     for cmd in (
@@ -570,6 +571,8 @@ def assemble(results: Path) -> None:
                 "packet": f"cases/{case_id}/packet/prompt.md",
                 "packet_code": packet_code(case_id),
                 "case_changed_since_run": mech.get("case_sha256") != case["_sha256"],
+                # Hand-written follow-up (for example, which test hung); linked, not parsed.
+                "notes": f"cases/{case_id}/notes.md" if (case_dir / "notes.md").is_file() else None,
                 "static_gate": mech.get("static", {}),
                 "layers": layers,
             }
@@ -770,6 +773,8 @@ def render_md(
                 lines.append(f"- Reviewer {r['output']}: {r['verdict']}: {r.get('rationale', '')}")
         else:
             lines.append("- Reviewer: pending")
+        if row["notes"]:
+            lines.append(f"- Follow-up notes: `{row['notes']}`")
         if row["case_changed_since_run"]:
             lines.append("- WARNING: the case file changed after the mechanical run")
         lines.append("")
