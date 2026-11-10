@@ -5,7 +5,7 @@ description = "Two-sided marketplace with platform margin set independently per 
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
-    "pydantic[email]>=2.6",
+    "pydantic[email]>=2.14.3",
     "pydantic-settings>=2.2",
     "uvicorn>=0.30",
     "sqlalchemy>=2.0",
