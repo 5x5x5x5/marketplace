@@ -207,6 +207,14 @@ Some things worth knowing about how that went:
   the event loop inside a middleware (fixed), and the double-payout lead
   that the audit then confirmed. A separate worker reported that one of
   its own claims could not be verified and marked it so.
+- **The last phase got the review the earlier ones taught.** The booking
+  pages were reviewed after the fact by three reviewers who had not seen
+  the work: one for money paths, one for information asymmetry, one
+  against the plan. They found nothing critical and seven minor things (a
+  provider failure answered as a bare 500, a page that told "not yours"
+  from "does not exist", a rule held only by convention, thin spots in the
+  page scans). All seven were fixed with tests, and the convention became
+  an architecture test (`docs/tryout-findings-2026-11-10.md`).
 - **Not everything was verified, and the documents say which.** The GitHub
   workflows have never run: they need a secret only the maintainer can
   add. The Stripe card-entry flow has not been exercised against a live
