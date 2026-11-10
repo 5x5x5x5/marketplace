@@ -381,7 +381,15 @@ def test_header_beats_stale_cookie_of_different_user(client: TestClient, auth: A
 def test_logout_page_deletes_row_and_clears_cookie(client: TestClient) -> None:
     _signup_form(client, "buyer", "logoutme@example.test")
     token = _login_form(client, "buyer", "logoutme@example.test").cookies["session_token"]
-    r = client.post("/logout", cookies={"session_token": token}, follow_redirects=False)
+    # The logout form carries the session-bound CSRF token (pages/csrf.py).
+    from marketplace.pages.csrf import token_for
+
+    r = client.post(
+        "/logout",
+        cookies={"session_token": token},
+        data={"csrf_token": token_for(token)},
+        follow_redirects=False,
+    )
     assert r.status_code == 303
     assert r.headers["location"] == "/"
     set_cookie = r.headers["set-cookie"]

@@ -15,6 +15,7 @@ from ..db import CommitRoute
 from ..models import LoginRequest, SignupRequest
 from ..settings import settings
 from .common import SESSION_COOKIE, MailDep, OptionalClaims, SessionDep, nav_context, render
+from .csrf import CSRF
 
 router = APIRouter(route_class=CommitRoute, tags=["pages"])
 
@@ -123,7 +124,7 @@ def login_submit(
     return response
 
 
-@router.post("/logout")
+@router.post("/logout", dependencies=[CSRF])
 def logout_submit(
     session: SessionDep,
     session_token: Annotated[str | None, Cookie()] = None,

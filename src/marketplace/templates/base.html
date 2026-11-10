@@ -15,6 +15,7 @@
           {% if claims and current_user %}
           <span class="nav-user">{{ current_user.display_name }} ({{ claims.role }})</span>
           <form class="nav-logout" method="post" action="/logout">
+            {% include "_csrf.html" %}
             <button type="submit" class="link-button">Log out</button>
           </form>
           {% else %}

@@ -20,6 +20,7 @@ from ..mail import EmailSender, get_mail_sender
 from ..models import UserRole
 from ..payments import get_provider
 from ..payments.port import PaymentProvider
+from .csrf import token_for
 from .interrupts import LoginRequired, PageForbidden, templates
 
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -97,10 +98,15 @@ def render(
     """Render a page. Every page answers with `Referrer-Policy: same-origin`
     so a token in the address bar (a reset link, Stripe's return parameters)
     never leaves in a Referer, and a logged-in page is never cached."""
-    ctx: dict[str, Any] = {"notice": notice_message(request.query_params.get("notice"))}
+    raw = request.cookies.get(SESSION_COOKIE)
+    ctx: dict[str, Any] = {
+        "notice": notice_message(request.query_params.get("notice")),
+        # Every form under a cookie session renders this (templates/_csrf.html).
+        "csrf_token": token_for(raw) if raw else None,
+    }
     ctx.update(context)
     out_headers = {"Referrer-Policy": "same-origin"}
-    if request.cookies.get(SESSION_COOKIE):
+    if raw:
         out_headers["Cache-Control"] = "no-store"
     out_headers.update(headers or {})
     return templates.TemplateResponse(
