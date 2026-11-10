@@ -6,6 +6,7 @@
     <title>{% block title %}Marketplace{% endblock %}</title>
     <link rel="stylesheet" href="/static/style.css" />
     <script src="/static/htmx.min.js" defer></script>
+    {% block head %}{% endblock %}
   </head>
   <body>
     <header class="site-header">
@@ -13,6 +14,11 @@
         <a class="brand" href="/">Marketplace</a>
         <nav>
           {% if claims and current_user %}
+          {% if claims.role == "buyer" %}
+          <a href="/bookings">My bookings</a>
+          {% elif claims.role == "seller" %}
+          <a href="/seller">Dashboard</a>
+          {% endif %}
           <span class="nav-user">{{ current_user.display_name }} ({{ claims.role }})</span>
           <form class="nav-logout" method="post" action="/logout">
             {% include "_csrf.html" %}
@@ -25,7 +31,20 @@
         </nav>
       </div>
     </header>
-    <main class="shell">{% block content %}{% endblock %}</main>
+    <main class="shell">
+      {% if notice %}
+      <div class="notice" role="status">
+        <p>{{ notice }}</p>
+        {% if notice_code == "unverified" and csrf_token %}
+        <form method="post" action="/verify/resend" class="inline-form">
+          {% include "_csrf.html" %}
+          <button type="submit" class="button button-secondary">Send a new verification link</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
     <footer class="site-footer">
       <div class="shell">
         <p>Marketplace, an independent platform.</p>

@@ -99,8 +99,11 @@ def render(
     so a token in the address bar (a reset link, Stripe's return parameters)
     never leaves in a Referer, and a logged-in page is never cached."""
     raw = request.cookies.get(SESSION_COOKIE)
+    code = request.query_params.get("notice")
+    message = notice_message(code)
     ctx: dict[str, Any] = {
-        "notice": notice_message(request.query_params.get("notice")),
+        "notice": message,
+        "notice_code": code if message else None,
         # Every form under a cookie session renders this (templates/_csrf.html).
         "csrf_token": token_for(raw) if raw else None,
     }

@@ -9,11 +9,11 @@ from fastapi import APIRouter
 from fastapi.routing import APIRoute
 
 from ..db import CommitRoute
-from . import account, storefront
+from . import account, buyer, storefront
 from .interrupts import PageInterrupt, page_interrupt_handler
 
 pages_router = APIRouter(route_class=CommitRoute, tags=["pages"])
-for _module in (storefront, account):
+for _module in (storefront, account, buyer):
     pages_router.include_router(_module.router)
 
 _PAGE_POSTS = [

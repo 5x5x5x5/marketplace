@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status_label, when %}
+
+{% block title %}My bookings — Marketplace{% endblock %}
+
+{% block content %}
+<section class="catalog-header">
+  <h1>My bookings</h1>
+</section>
+{% if jobs %}
+<table class="table">
+  <thead>
+    <tr><th scope="col">Booked</th><th scope="col">Service</th><th scope="col">Price</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Open</span></th></tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ when(job.created_at) }}</td>
+      <td>{{ job.service_type_id }}</td>
+      <td>${{ job.buyer_price }}</td>
+      <td><span class="status-pill status-{{ job.status.value }}">{{ status_label(job.status) }}</span></td>
+      <td><a href="/bookings/{{ job.id }}">View</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if has_next %}
+<nav class="pagination"><a href="/bookings?page={{ page + 1 }}">Older bookings</a></nav>
+{% endif %}
+{% else %}
+<p class="empty-state">No bookings yet. <a href="/">Browse listings</a> to book one.</p>
+{% endif %}
+{% endblock %}

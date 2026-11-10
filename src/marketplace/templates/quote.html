@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import when %}
+
+{% block title %}Your price — Marketplace{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <h1>Your price</h1>
+  {% if listing %}
+  <p class="panel-sub">{{ listing.title }}{% if seller %} &middot; by {{ seller.display_name }}{% endif %}</p>
+  {% elif seller %}
+  <p class="panel-sub">by {{ seller.display_name }}</p>
+  {% endif %}
+  <p class="price-big">${{ quote.buyer_price }}</p>
+  {% if expired %}
+  <p>This price expired at {{ when(quote.expires_at) }}.</p>
+  {% if quote.listing_id %}
+  <form method="post" action="/listings/{{ quote.listing_id }}/quote">
+    {% include "_csrf.html" %}
+    <button type="submit" class="button">Get a new price</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p>Valid until {{ when(quote.expires_at) }}. Nothing is charged until the seller accepts.</p>
+  <form method="post" action="/quotes/{{ quote.id }}/book" class="actions">
+    {% include "_csrf.html" %}
+    <button type="submit" class="button">Confirm booking</button>
+    {% if quote.listing_id %}<a href="/listings/{{ quote.listing_id }}">Back to the listing</a>{% endif %}
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

@@ -228,3 +228,285 @@ main.shell {
   color: var(--ink-soft);
   font-size: 0.85rem;
 }
+
+/* ---- Forms, notices and the booking/dashboard pages ---- */
+
+.site-header nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.nav-user {
+  margin-left: 1.25rem;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+
+.nav-logout,
+.inline-form {
+  display: inline;
+  margin: 0;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0 0 0 1.25rem;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+button.button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.button-secondary {
+  background: transparent;
+  color: var(--accent);
+}
+
+.button:focus-visible,
+.link-button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.notice {
+  border: 1px solid var(--hairline);
+  border-left: 4px solid var(--accent);
+  background: #fff;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 2rem;
+  border-radius: 2px;
+}
+
+.notice p {
+  margin: 0;
+  color: var(--ink);
+}
+
+.notice form {
+  margin-top: 0.75rem;
+  display: block;
+}
+
+.form-error {
+  color: var(--accent);
+}
+
+.auth-form,
+.panel {
+  max-width: 34rem;
+}
+
+.auth-form form,
+.stack-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--ink);
+}
+
+fieldset {
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+  padding: 0.75rem 1rem;
+}
+
+fieldset label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+select,
+textarea {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.field-hint {
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.panel-kicker {
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.panel-sub {
+  font-style: italic;
+}
+
+.price-big {
+  font-size: 2.4rem;
+  color: var(--ink);
+  margin: 0.25rem 0 0.75rem;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.actions form {
+  margin: 0;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1.5rem;
+  margin: 1.5rem 0;
+  padding: 1rem 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.facts dt {
+  color: var(--ink-soft);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.mono {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+
+.status {
+  font-size: 1.25rem;
+  margin-bottom: 0.25rem;
+  color: var(--ink);
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: var(--cream-deep);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.status-accepted,
+.status-completed {
+  border-color: #2f5d3a;
+}
+
+.status-cancelled,
+.status-expired {
+  color: var(--ink-soft);
+}
+
+.payment {
+  margin: 1.5rem 0;
+  padding: 1.25rem;
+  background: #fff;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+}
+
+#payment-element {
+  margin-bottom: 1rem;
+}
+
+.booking-panel {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--hairline);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: middle;
+}
+
+.table th {
+  font-weight: 400;
+  color: var(--ink-soft);
+  background: var(--cream-deep);
+}
+
+.table form {
+  display: inline;
+  margin: 0 0.5rem 0 0;
+}
+
+.dashboard-section {
+  margin-bottom: 3rem;
+}
+
+.dashboard-section h2 {
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 0.4rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  .table thead {
+    display: none;
+  }
+
+  .table tr {
+    display: block;
+    border-bottom: 1px solid var(--hairline);
+    padding: 0.5rem 0;
+  }
+
+  .table td {
+    display: block;
+    border: none;
+    padding: 0.2rem 0.85rem;
+  }
+}
