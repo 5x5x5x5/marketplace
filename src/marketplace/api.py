@@ -306,6 +306,11 @@ def _sweep_stale_payments(session: Session, provider: PaymentProvider) -> None:
         )
 
 
+def _sweep_expired_quotes(session: Session) -> None:
+    """Quotes past their TTL can never be consumed (`create_job` 410s them)."""
+    session.execute(delete(Quote).where(Quote.expires_at < _now()))
+
+
 def _sweep_expired_auth(session: Session) -> None:
     """Expired sessions and email tokens are dead weight — drop them on reads."""
     session.execute(delete(AuthSession).where(AuthSession.expires_at < _now()))
@@ -338,6 +343,7 @@ def _sweep(session: Session, provider: PaymentProvider) -> None:
     """Everything lazy maintenance does on reads: offers, payments, auth."""
     _sweep_expired_offers(session)
     _sweep_stale_payments(session, provider)
+    _sweep_expired_quotes(session)
     _sweep_expired_auth(session)
     _sweep_retention(session)
 
@@ -617,8 +623,11 @@ def create_quote(req: QuoteRequest, session: SessionDep, buyer_id: BuyerId) -> Q
     if cfg is None:
         raise HTTPException(status_code=404, detail="unknown service_type_id")
 
-    session.execute(delete(Quote).where(Quote.expires_at < _now()))
-    if (session.scalar(select(func.count()).select_from(Quote)) or 0) >= MAX_ACTIVE_QUOTES:
+    # Count live quotes only (index range on expires_at, capped at the limit);
+    # expired rows are reaped by housekeeping, not deleted here — concurrent
+    # quote writers deleting the same expired rows would block on each other.
+    live = select(Quote.id).where(Quote.expires_at > _now()).limit(MAX_ACTIVE_QUOTES).subquery()
+    if (session.scalar(select(func.count()).select_from(live)) or 0) >= MAX_ACTIVE_QUOTES:
         raise HTTPException(status_code=503, detail="quote capacity reached, retry shortly")
 
     supply = repo.available_count(session, cfg.service.id)
