@@ -1,5 +1,6 @@
 """Capacity: connection-pool sizing and load shedding on pool exhaustion."""
 
+import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -10,10 +11,10 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine, event, func, inspect, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool, QueuePool
 
-from marketplace import api, db, pages, repo
+from marketplace import api, db, idempotency, pages, repo
 from marketplace.db import SessionLocal, engine, engine_options
 from marketplace.entities import Availability, Job, Listing, Offer, Quote, SellerProfile
 from marketplace.models import JobStatus, OfferStatus
@@ -403,3 +404,26 @@ def test_maintenance_enabled_gates_the_loop(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_maintenance_enabled_defaults_on() -> None:
     assert _settings().maintenance_enabled is True
+
+
+def test_idempotency_db_work_runs_off_the_event_loop(
+    client: TestClient, basic_service: str, auth: AuthFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_loop: list[bool] = []
+    real = idempotency.SessionLocal
+
+    def tracking_session() -> Session:
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real()
+
+    monkeypatch.setattr(idempotency, "SessionLocal", tracking_session)
+    headers = {**auth("buyer", "idem-buyer"), "Idempotency-Key": "k1"}
+    body = {"service_type_id": basic_service}
+    first = client.post("/v1/quotes", json=body, headers=headers)
+    replay = client.post("/v1/quotes", json=body, headers=headers)
+    assert first.status_code == 201 and replay.json() == first.json()
+    assert on_loop and not any(on_loop)  # lookup + store + replay lookup, all in threads
