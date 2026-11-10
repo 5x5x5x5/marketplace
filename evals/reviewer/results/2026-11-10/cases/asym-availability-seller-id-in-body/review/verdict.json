@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at AvailabilityRequest.seller_id / post_availability: 'Availability body `seller_id` overrides the authenticated seller (impersonation)', with the write landing on the victim's availability."
+    }
+  ]
+}

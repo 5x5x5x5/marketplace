@@ -16,7 +16,7 @@
 - **Never gate on a piped test command** — run bare, check exit codes.
 - **Zero new dependencies** — asyncio, smtplib, email.message are stdlib.
 - The PostToolUse formatter deletes not-yet-used imports; add imports with their usage.
-- No backticks in double-quoted `git commit -m`. Stage exact paths, never `git add -A`. End commit messages with: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
+- No backticks in double-quoted `git commit -m`. Stage exact paths, never `git add -A`. End commit messages with: `Co-Authored-By: <agent attribution trailer>`
 - ORM never leaves the API layer; identity from principal only; pricing/matching core untouched.
 - **Information asymmetry in payloads**: seller payloads/emails never contain `buyer_price`; buyer payloads/emails never contain `seller_payout`. Tests must assert both directions.
 - Tests are deterministic: the `client` fixture never runs the lifespan, so the loop never runs in tests — tests call `drain_once()` directly.
@@ -142,7 +142,7 @@ Run: `uv run ruff check . && uv run ruff format --check . && uv run pyright && u
 git add src/marketplace/models.py src/marketplace/entities.py migrations/versions/ tests/test_notifications.py
 git commit -m "Add Notification outbox entity, event enums, and migration
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -497,7 +497,7 @@ Run: `uv run ruff check . && uv run ruff format --check . && uv run pyright && u
 git add src/marketplace/notifications.py src/marketplace/settings.py tests/test_notifications.py
 git commit -m "Add outbox core: enqueue, renderers, drain_once with backoff
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -839,7 +839,7 @@ git commit -m "Emit outbox notifications at the seven lifecycle transitions
 Role-safe payload snapshots at enqueue; _release_payment reports
 refunds so cancels can notify the buyer.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1023,7 +1023,7 @@ Run: `uv run pytest tests/test_notifications.py -q` → pass. Full gate → gree
 git add src/marketplace/mail.py src/marketplace/settings.py tests/conftest.py tests/test_notifications.py
 git commit -m "Add stdlib SMTP adapter selected by SMTP_HOST
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1197,7 +1197,7 @@ git commit -m "Add maintenance loop (drain + timed sweep) and admin notification
 Closes the background-scheduler item: offers, payments, and sessions now
 expire on a clock, and outbox mail flows without traffic.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1280,7 +1280,7 @@ Expected: SQLite suite green; demo exit 0; four migrations from scratch; **Postg
 git add scripts/demo.py .env.example README.md CLAUDE.md ROADMAP.md
 git commit -m "Document notifications: loop-delivered demo act, env, README/CLAUDE/ROADMAP
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---

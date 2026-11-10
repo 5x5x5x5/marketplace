@@ -1,0 +1,30 @@
+Review the commit at HEAD in this repository (diff range `main...HEAD`, one commit).
+
+Commit message:
+
+> Trim the admin cancel re-lock
+>
+> The FOR UPDATE get already locks the Job row, so the extra
+> populate_existing option and its comment are redundant here.
+
+The diff follows. Read the touched code in full in its files, as your instructions say, and report in your standard output format.
+
+```diff
+diff --git a/src/marketplace/services/jobs.py b/src/marketplace/services/jobs.py
+index d77b263..5d9c965 100644
+--- a/src/marketplace/services/jobs.py
++++ b/src/marketplace/services/jobs.py
+@@ -359,11 +359,7 @@ def admin_cancel_job(
+         raise NotFoundError("job not found")
+     # Canonical lock order is Payment → Job (see cancel_job) — never Job first.
+     session.scalar(select(Payment).where(Payment.job_id == job_id).with_for_update())
+-    # populate_existing: the unlocked existence get() above cached this Job in
+-    # the identity map; without it the locked re-get returns the STALE cached
+-    # attributes (expire_on_commit=False), so a status guard racing a complete
+-    # reads pre-race state and cancels an already-COMPLETED job (finding F5).
+-    job = session.get(Job, job_id, with_for_update=True, populate_existing=True)
++    job = session.get(Job, job_id, with_for_update=True)
+     if job is None:
+         raise NotFoundError("job not found")
+     if job.status in (JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.EXPIRED):
+```

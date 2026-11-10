@@ -1,0 +1,37 @@
+{% if job %}
+{% set s = job.status.value %}
+<p class="status status-{{ s }}">
+  <strong>
+    {%- if s == "pending" -%}
+    Waiting for {{ seller.display_name if seller else "the seller" }} to accept
+    {%- elif s == "awaiting_payment" -%}
+    Accepted, waiting for payment
+    {%- elif s == "accepted" -%}
+    Confirmed
+    {%- elif s == "completed" -%}
+    Completed
+    {%- elif s == "expired" -%}
+    Expired
+    {%- elif s == "cancelled" -%}
+    Cancelled
+    {%- endif -%}
+  </strong>
+</p>
+<p class="status-detail">
+  {% if s == "pending" %}
+  Your request is with the seller. You haven't been charged.
+  {% elif s == "awaiting_payment" %}
+  The seller accepted. The booking is confirmed once your payment goes through.
+  {% elif s == "accepted" %}
+  Payment received and the seller is committed. They'll mark the job complete when it's done.
+  {% elif s == "completed" %}
+  The job is done. Thanks for booking.
+  {% elif s == "expired" %}
+  The seller didn't respond in time, or the payment didn't arrive. Any pending charge was released.
+  {% elif s == "cancelled" %}
+  This booking was cancelled. Any payment taken was refunded.
+  {% endif %}
+</p>
+{% else %}
+<p>Booking not found.</p>
+{% endif %}

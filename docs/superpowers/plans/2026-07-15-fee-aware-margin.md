@@ -17,7 +17,7 @@
 - Pyright strict must stay at 0 errors across `src/` and `tests/`.
 - **PostToolUse formatter strips not-yet-used imports** — add an import and its first use in the SAME edit, or re-add the import after writing the usage.
 - TDD is binding and audited: write the failing test, RUN it, capture the failing output, then implement. Your report must quote the red-run evidence.
-- Commit trailer on every commit: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks inside double-quoted `git commit -m`.
+- Commit trailer on every commit: `Co-Authored-By: <agent attribution trailer>`. No backticks inside double-quoted `git commit -m`.
 - Commit ONLY the files each task lists — never `git add -A`.
 - Postgres: `docker compose up -d db` (container `marketplace-db-1`; prefix commands with `sg docker -c "..."` if the socket denies). URL: `postgresql+psycopg://marketplace:marketplace@localhost:5432/marketplace`.
 - Money is `Decimal`, quantized via `models.to_money` (2 dp, half-up). Never float money.
@@ -304,7 +304,7 @@ Expected: all exit 0. No existing test changes behavior in this task (the floor 
 git add src/marketplace/config.py src/marketplace/matching.py src/marketplace/entities.py src/marketplace/repo.py src/marketplace/models.py src/marketplace/api.py migrations/versions/ tests/test_fees.py
 git commit -m "Add fee config plumbing: estimate helpers, platform columns, admin endpoint
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -480,7 +480,7 @@ Expected: all green. If OTHER tests fail, the cause will be a deliberately tight
 git add src/marketplace/matching.py src/marketplace/api.py tests/test_margin_floor.py
 git commit -m "Make the margin floor fee-aware at both enforcement sites
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 (Include any other test files Step 5 forced you to touch in the `git add` — listed explicitly, not `-A`.)
@@ -657,7 +657,7 @@ Expected: all exit 0. `test_end_to_end.py:57` and `test_disputes.py` summary ass
 git add src/marketplace/api.py src/marketplace/models.py tests/test_fees.py
 git commit -m "Stamp fee estimate on every charge, report net-of-fees margin
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -724,7 +724,7 @@ Expected: every command exits 0; the alembic run applies exactly 9 migrations fr
 git add scripts/demo.py ROADMAP.md README.md SECURITY.md CLAUDE.md
 git commit -m "Document fee-aware margin: demo act 7, roadmap item done
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---

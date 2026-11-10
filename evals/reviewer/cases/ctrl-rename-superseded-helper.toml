@@ -1,0 +1,32 @@
+id = "ctrl-rename-superseded-helper"
+kind = "control"
+class = "control/rename"
+origin = "Control: a harmless rename of a private helper in the webhook applier."
+synthetic = true
+invariant = "None violated: behavior is identical; the helper has one caller."
+location = "src/marketplace/services/webhooks.py: _superseded -> _newer_event_applied"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Rename _superseded to say what it checks
+
+The helper answers "has a newer event for this object already applied?";
+name it that way so the account_updated branch reads as its rule.
+'''
+rubric = '''
+CLEAN: no Critical or Important finding attributed to this diff.
+FALSE POSITIVE: any Critical or Important finding about this diff (the rename
+changes no behavior; there is one definition and one call site). Minor or
+style notes are recorded but are not false positives.
+'''
+
+[[edits]]
+file = "src/marketplace/services/webhooks.py"
+old = '''def _superseded(session: Session, event: PaymentEvent) -> bool:'''
+new = '''def _newer_event_applied(session: Session, event: PaymentEvent) -> bool:'''
+
+[[edits]]
+file = "src/marketplace/services/webhooks.py"
+old = '''        if _superseded(session, event):'''
+new = '''        if _newer_event_applied(session, event):'''

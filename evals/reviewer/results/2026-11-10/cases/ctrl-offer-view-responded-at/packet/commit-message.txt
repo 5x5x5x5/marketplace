@@ -1,0 +1,5 @@
+Show when a seller responded to an offer
+
+The seller's offer list includes accepted, declined and expired offers
+when filtered by status; responded_at lets the client show when each one
+closed.

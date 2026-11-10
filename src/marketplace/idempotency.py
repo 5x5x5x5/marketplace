@@ -21,10 +21,13 @@ upgrade if exactly-once matters more than simplicity.
 """
 
 import logging
+from collections.abc import Callable
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import Headers
+from starlette.requests import cookie_parser
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -36,10 +39,54 @@ logger = logging.getLogger("marketplace.idempotency")
 
 MAX_KEY_LENGTH = 200
 
+# The cookie name the pages' session_token Cookie() parameter binds to
+# (auth.py's _resolve_principal/optional_claims resolve the same cookie by
+# that parameter name). Not imported from pages — pages -> auth is the only
+# allowed import direction (see CLAUDE.md); this module reads the raw
+# "cookie" header itself instead.
+_SESSION_COOKIE = "session_token"
+
+
+def _lookup(
+    authorization: str | None, session_token: str | None, key: str
+) -> tuple[str | None, IdempotencyRecord | None]:
+    with SessionLocal() as session:
+        principal = peek_principal(session, authorization, session_token)
+        if principal is None:
+            return None, None
+        row = session.scalar(
+            select(IdempotencyRecord).where(
+                IdempotencyRecord.principal == principal, IdempotencyRecord.key == key
+            )
+        )
+        return principal, row
+
+
+def _store(record: IdempotencyRecord) -> None:
+    with SessionLocal() as session:
+        session.add(record)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()  # concurrent duplicate won the insert; fine
+
+
+def _never(path: str) -> bool:
+    return False
+
 
 class IdempotencyMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    """`exempt` names paths that must never be captured. `api.py` passes
+    `pages.is_page_post`: every page POST answers with a 303 (Location,
+    sometimes Set-Cookie) or HTML, and a stored replay keeps only status and
+    body, so it could only replay broken. The rule is pages-router
+    membership, decided where the app is assembled, so nothing outside the
+    pages router is ever exempt by accident (this module may not import
+    `pages`)."""
+
+    def __init__(self, app: ASGIApp, exempt: Callable[[str], bool] = _never) -> None:
         self.app = app
+        self.exempt = exempt
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("method") != "POST":
@@ -57,26 +104,26 @@ class IdempotencyMiddleware:
             await response(scope, receive, send)
             return
         path = str(scope["path"])
-        if path.startswith("/v1/auth/"):
-            # Auth responses carry raw bearer tokens; they must never be
-            # captured into idempotency_keys (sha256-at-rest guarantee).
-            # Login is naturally repeatable and signup-replay correctly 409s,
-            # so idempotency semantics aren't wanted here anyway.
+        if path.startswith("/v1/auth/") or self.exempt(path):
+            # /v1/auth/*: responses carry raw bearer tokens; they must never
+            # be captured into idempotency_keys (sha256-at-rest guarantee).
+            # Login is naturally repeatable and signup-replay correctly
+            # 409s, so idempotency semantics aren't wanted here anyway.
+            # Page POSTs: see the class docstring.
             await self.app(scope, receive, send)
             return
-        with SessionLocal() as session:
-            principal = peek_principal(session, headers.get("authorization"))
-            row = (
-                None
-                if principal is None
-                else session.scalar(
-                    select(IdempotencyRecord).where(
-                        IdempotencyRecord.principal == principal, IdempotencyRecord.key == key
-                    )
-                )
-            )
+        cookie_header = headers.get("cookie")
+        session_token = cookie_parser(cookie_header).get(_SESSION_COOKIE) if cookie_header else None
+        # threadpool: this is a sync DB checkout inside an async middleware;
+        # on the event loop, a wait for a pool connection would stall every
+        # in-flight request, not just this one.
+        principal, row = await run_in_threadpool(
+            _lookup, headers.get("authorization"), session_token, key
+        )
         if principal is None:
-            await self.app(scope, receive, send)  # auth 401s downstream with the real error
+            # Neither the header nor the session_token cookie resolved a
+            # principal; auth 401s downstream with the real error.
+            await self.app(scope, receive, send)
             return
         if row is not None:
             if row.path != path:
@@ -114,20 +161,14 @@ class IdempotencyMiddleware:
         status = int(captured_status)
         if status < 500 and status != 401 and status != 403:
             try:
-                with SessionLocal() as session:
-                    session.add(
-                        IdempotencyRecord(
-                            principal=principal,
-                            key=key,
-                            path=path,
-                            response_status=status,
-                            response_body=captured_body.decode("utf-8", errors="replace"),
-                        )
-                    )
-                    try:
-                        session.commit()
-                    except IntegrityError:
-                        session.rollback()  # concurrent duplicate won the insert; fine
+                record = IdempotencyRecord(
+                    principal=principal,
+                    key=key,
+                    path=path,
+                    response_status=status,
+                    response_body=captured_body.decode("utf-8", errors="replace"),
+                )
+                await run_in_threadpool(_store, record)
             except Exception:
                 # The domain work is already committed (CommitRoute ran inside
                 # self.app above) — a missed replay record beats failing a

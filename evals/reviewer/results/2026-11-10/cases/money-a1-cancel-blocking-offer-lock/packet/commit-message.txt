@@ -1,0 +1,5 @@
+Expire every open offer when a job is cancelled
+
+SKIP LOCKED could leave an offer OFFERED on a cancelled job until the TTL
+sweep caught it, and sellers kept seeing it in their offer list. Wait for
+the row instead so a cancel always closes all of the job's offers.

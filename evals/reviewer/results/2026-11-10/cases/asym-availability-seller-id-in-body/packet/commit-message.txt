@@ -1,0 +1,5 @@
+Let availability name the seller it is posted for
+
+Agencies run several seller accounts from one integration; accept an
+optional seller_id so they can post availability without juggling one
+token per seller.

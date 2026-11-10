@@ -1,0 +1,5 @@
+Sweep stale payments in a fixed order
+
+Concurrent sweeps lock each stale job's Payment and Job in the order the
+SELECT returns them; an explicit order keeps that order identical across
+runners.

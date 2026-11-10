@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at admin_cancel_job: the locked get returns the identity-map object, the guard reads stale ACCEPTED, and 'a cancel racing complete can refund the buyer and pay the seller'."
+    }
+  ]
+}

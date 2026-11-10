@@ -1,0 +1,50 @@
+id = "asym-availability-seller-id-in-body"
+kind = "bug"
+class = "asymmetry/identity-from-request"
+origin = "SECURITY.md safe-to-pilot sweep C3/C4 (seller identity taken from caller-supplied input instead of the token); the class behind the 'identity comes from the principal' rule."
+synthetic = false
+invariant = "Identity comes from the authenticated principal, never a request body. Never add a buyer_id/seller_id body field."
+location = "src/marketplace/models.py: AvailabilityRequest; src/marketplace/services/profiles.py: post_availability"
+reviewer = "asymmetry-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Let availability name the seller it is posted for
+
+Agencies run several seller accounts from one integration; accept an
+optional seller_id so they can post availability without juggling one
+token per seller.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding stating that POST
+/v1/seller/availability now takes seller_id from the request body and uses it
+over the token's identity, so any seller can post availability as (and steer
+matching toward or away from) another seller: impersonation.
+PARTIAL: says identity must come from the principal but does not tie it to
+this field and route, or reports it only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/models.py"
+old = '''
+class AvailabilityRequest(BaseModel):
+    service_type_id: str = Field(min_length=1, max_length=128)
+'''
+new = '''
+class AvailabilityRequest(BaseModel):
+    service_type_id: str = Field(min_length=1, max_length=128)
+    seller_id: str | None = Field(default=None, max_length=128)
+'''
+
+[[edits]]
+file = "src/marketplace/services/profiles.py"
+old = '''
+def post_availability(session: Session, seller_id: str, req: AvailabilityRequest) -> None:
+    _require_active(session, seller_id)
+'''
+new = '''
+def post_availability(session: Session, seller_id: str, req: AvailabilityRequest) -> None:
+    seller_id = req.seller_id or seller_id
+    _require_active(session, seller_id)
+'''

@@ -1,0 +1,58 @@
+id = "ops-retention-reaps-failed-webhooks"
+kind = "bug"
+class = "operational/retention"
+origin = "df4b9c0 'Add retention sweeps, move webhook DB work off the event loop' (PENDING outbox never reaped) and f8f54dc 'Merge webhook outbox: persisted failures, retry, dead-letter, replay-safe handlers' (FAILED webhook rows exempt)."
+synthetic = false
+invariant = "The retention sweep never reaps a FAILED webhook_events row (still owed a retry) or a PENDING notification."
+location = "src/marketplace/services/maintenance.py: _sweep_retention"
+reviewer = "money-path-reviewer"
+reviewer_fit = "partial: the reviewer lists webhook replay and outbox handling but not retention"
+removes_explanatory_comment = true
+commit_message = '''
+Age out webhook ledger rows by time only
+
+The webhook ledger is a dedup window: once a row is older than the
+retention window the provider will not redeliver it, so its status doesn't
+matter for reaping. Simplifies the delete to one indexed range scan.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at _sweep_retention stating that the
+delete now also removes FAILED webhook_events rows, which are the retry
+outbox: a payment event still waiting for (or backing off between) retries is
+deleted and never applied (lost payment/payout/chargeback state change), and
+its dedup marker is gone.
+PARTIAL: notes the status filter was dropped without saying FAILED rows are
+pending retries, or only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/services/maintenance.py"
+old = '''from ..models import EventKind, JobStatus, NotificationStatus, PaymentStatus, WebhookEventStatus'''
+new = '''from ..models import EventKind, JobStatus, NotificationStatus, PaymentStatus'''
+
+[[edits]]
+file = "src/marketplace/services/maintenance.py"
+old = '''
+    """Bounded tables: reap replay/dedup rows and delivered mail past their
+    windows. PENDING outbox rows are immortal — the outbox contract holds —
+    and so are FAILED webhook rows: they are still owed a retry."""
+'''
+new = '''
+    """Bounded tables: reap replay/dedup rows and delivered mail past their
+    windows. PENDING outbox rows are immortal — the outbox contract holds."""
+'''
+
+[[edits]]
+file = "src/marketplace/services/maintenance.py"
+old = '''
+        delete(WebhookEvent).where(
+            WebhookEvent.status != WebhookEventStatus.FAILED,
+            WebhookEvent.received_at < now - timedelta(days=settings.retention_webhooks_days),
+        )
+'''
+new = '''
+        delete(WebhookEvent).where(
+            WebhookEvent.received_at < now - timedelta(days=settings.retention_webhooks_days),
+        )
+'''

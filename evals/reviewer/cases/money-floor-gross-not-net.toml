@@ -1,0 +1,39 @@
+id = "money-floor-gross-not-net"
+kind = "bug"
+class = "money-path/margin-floor"
+origin = "28b5c33 'Make the margin floor fee-aware at both enforcement sites' (fee-aware margin phase; match-time test added in dd92407)."
+synthetic = false
+invariant = "The margin floor check is net-of-fees: compare against matching.required_spread(buyer_price, margin_floor, fees), never the gross spread."
+location = "src/marketplace/matching.py: _priced (used by every matching strategy)"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Inline the floor check in _priced
+
+_priced runs once per candidate on every quote and re-match; compare the
+spread inline instead of going through two helper calls per candidate.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at matching._priced stating that the
+inlined check compares the spread against effective_floor only, dropping the
+estimated provider fee that required_spread adds, so matching accepts
+payouts whose margin is below the floor once fees are paid (net-negative or
+under-floor jobs), and diverges from the quote and pinned job-time checks.
+PARTIAL: notices the check differs from passes_floor/required_spread without
+naming the dropped fee, or only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/matching.py"
+old = '''
+        payout = seller_payout_for(c, cfg, supply, demand)
+        if passes_floor(buyer_price, payout, cfg.margin_floor, cfg.fees):
+            out.append((c, payout))
+'''
+new = '''
+        payout = seller_payout_for(c, cfg, supply, demand)
+        if buyer_price - payout >= effective_floor(buyer_price, cfg.margin_floor):
+            out.append((c, payout))
+'''

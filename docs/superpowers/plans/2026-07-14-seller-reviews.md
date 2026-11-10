@@ -19,7 +19,7 @@
 - No `print()` in src/ — logging module (scripts/demo.py prints by design).
 - A PostToolUse formatter may strip imports that are not yet used — add the import and its first use in the same edit, or re-add after.
 - Money is `Decimal`, serialized as JSON strings. Ratings are plain ints.
-- Commit after each green step; concise imperative messages; end body with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+- Commit after each green step; concise imperative messages; end body with `Co-Authored-By: <agent attribution trailer>`.
 
 ---
 

@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Important at payments_webhook: 'Sync webhook processor now runs on the event loop', stalling every in-flight request while it waits on the database."
+    }
+  ]
+}

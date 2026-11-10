@@ -1,0 +1,32 @@
+id = "money-charge-key-per-offer"
+kind = "bug"
+class = "money-path/idempotency-key-derivation"
+origin = "Synthetic: no historical instance. Derived from the money-path audit's retry table (accept_offer row: after a crash between charge and commit, the next accept, possibly by another seller after re-match, must replay the same key 'because it is derived from the job')."
+synthetic = true
+invariant = "Outbound idempotency keys are derived from the job id (charge:{job_id}) so any retry of the charge, whoever accepts, replays the original PaymentIntent."
+location = "src/marketplace/services/jobs.py: accept_offer"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = false
+commit_message = '''
+Key the buyer charge by offer
+
+A job can be offered to several sellers in turn; keying the charge by the
+offer that was accepted ties the PaymentIntent to the acceptance that
+created it, which is what support looks up.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at accept_offer stating that the
+charge key is no longer stable per job: if an accept charges and then fails
+or crashes before commit, the job can be re-offered (expiry/re-match) and the
+next accept charges again under a new key, so the buyer is charged twice and
+the first PaymentIntent is orphaned with no Payment row to refund.
+PARTIAL: says keys must be derived from the job without the double-charge
+path, or only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/services/jobs.py"
+old = '''            idempotency_key=f"charge:{job.id}",'''
+new = '''            idempotency_key=f"charge:{offer.id}",'''

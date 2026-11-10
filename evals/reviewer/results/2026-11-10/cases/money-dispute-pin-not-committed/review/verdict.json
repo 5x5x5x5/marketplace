@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Critical at resolve_dispute: 'Pinned dispute amounts no longer survive a provider 502, so a retry can book different amounts than the provider moved'."
+    }
+  ]
+}

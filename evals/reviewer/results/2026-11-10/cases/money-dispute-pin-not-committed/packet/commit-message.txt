@@ -1,0 +1,6 @@
+Leave the dispute commit to CommitRoute
+
+resolve_dispute committed mid-call, which released the dispute lock before
+the provider legs ran and split one resolution across two transactions.
+Flush the pinned amounts instead and let the route commit once, atomically,
+on success.

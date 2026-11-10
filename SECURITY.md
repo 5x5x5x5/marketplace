@@ -1,433 +1,614 @@
-# Security posture
+# Security
 
-A full read-only sweep was done on the v1 scaffold; the **safe-to-pilot
-hardening** closed the exploitable findings (status table below). Eight
-updates followed, in order: the **template build** (moved state to Postgres),
-**payments** (added an escrow provider), **real-user auth** (replaced the
-pilot HMAC tokens with DB-backed sessions), **disputes** (added arbitration
-over the escrow — partial refunds/clawbacks and chargeback recording),
-**moderation** (suspension, comment takedown, and counterparty abuse
-reports), **notification preferences** (per-kind mutes with a
-server-side money floor), **fee-aware margin** (admin-tunable
-provider-fee estimate stamped onto every charge, floor enforced net of it),
-and **observability & ops** (request-id tracing, a global 500 envelope, an
-admin stats endpoint, retention sweeps, webhook DB work off the event loop,
-and API hardening — body cap, TrustedHost, CORS) — see the update notes
-below.
+This document describes the security posture of the template as it stands:
+the threat model, how each control works and which test covers it, the risks
+that remain, and the history of findings. The invariants that keep these
+controls in place are in [`CLAUDE.md`](CLAUDE.md); several are also enforced
+by `tests/test_architecture.py` and the Semgrep rules in `.semgrep/rules/`.
 
-## Update — template build
+## Current posture
 
-- **Concurrency is now the database's job.** The process-wide lock is gone;
-  quote consumption, job/offer status transitions, and seller-capacity checks use
-  `SELECT … FOR UPDATE` row locks. On Postgres these are real; the SQLite test
-  backend serializes writes, so the deterministic guard tests hold on both, and a
-  true-parallel test can run against Postgres via `DATABASE_URL`.
-- **Tokens now expire** (`exp` claim; `TOKEN_TTL_HOURS`), closing the
-  never-expiring-token gap. Still pilot-grade HMAC — not production auth.
-  *(Superseded — see "Update — real-user auth" below: HMAC tokens and
-  `TOKEN_TTL_HOURS` are deleted, not just expired.)*
-- **Seller capacity** is enforced under a row lock on accept, so a seller can't
-  exceed their configured concurrent-job limit even under racing accepts.
-- **Money is `Decimal`** end-to-end; the margin floor is enforced on quantized
-  values, removing the float sub-floor-leakage drift (old M3).
-- **Residual (Low, mitigated):** a hand-crafted non-compliant JSON body
-  (`NaN`/`Infinity`) is rejected (never stored) but still surfaces as a 500
-  rather than a clean 422. The global error envelope shipped (see "Update —
-  observability & ops" below) means that 500 is now a clean
-  `{"detail": "internal error", "request_id"}` body with the crash confined
-  to the log, not a raw traceback — see finding **N1**.
+- **Identity** comes only from a DB-backed session resolved from a bearer
+  header or an `HttpOnly` cookie, never from a request body. Session tokens,
+  email-verification tokens and password-reset tokens are stored as sha256
+  hashes; passwords as argon2id.
+- **Each audience gets its own response models.** Buyers never receive the
+  payout, sellers never receive the buyer price, the public catalog and
+  pages receive neither, and dispute views split the same way.
+- **Money paths** use database row locks, commit before the response is
+  sent, use deterministic provider idempotency keys, and record refunds and
+  chargebacks on an append-only ledger.
+- **Payment webhooks** are signature-verified when Stripe is configured. In
+  fake-provider mode the webhook route answers 404 unless explicitly opened
+  for local use, and startup refuses unsafe combinations. Events are
+  deduplicated by provider event id, failures go to a retry outbox that
+  stores parsed fields only, and every event type is safe to replay.
+- **Operational controls**: a clean 500 envelope with no internals, access
+  logs without headers, bodies or query strings, a request body cap, trusted
+  hosts and CORS settings (open by default, to be narrowed), and a 503 with
+  `Retry-After` when the connection pool is exhausted.
+- **Automated checks** run in CI: Semgrep (repo rules plus standard Python and
+  FastAPI packs), a dependency audit of the lockfile, and gitleaks over the
+  full git history.
 
-## Update — payments
+What is **not** covered, stated plainly (details under
+[Residual risks](#residual-risks)): no rate limiting anywhere in the app,
+including the argon2 endpoints; email verification is off by default; login
+CSRF is accepted; the browser payment step has not been run against Stripe;
+no security response
+headers (CSP, frame options, HSTS) set by the app; trusted hosts and CORS
+ship open; row locks and pooled connections are held across payment-provider
+calls; and one shared admin role with full authority.
 
-- **The webhook endpoint (`POST /v1/payments/webhook`) is unauthenticated but
-  signature-verified.** There's no bearer token to check — the provider can't
-  present one — so authenticity comes from `parse_webhook` validating the
-  provider's signature header before anything is applied; an invalid signature
-  is a 400. Every event is recorded in `WebhookEvent` keyed on the provider's
-  event id before it's applied, so a replayed delivery (the provider retries on
-  a slow 2xx, or an attacker replays a captured payload) is a no-op, not a
-  double-apply.
-- **`client_secret` is exposed only to the owning buyer, and only while a
-  payment is awaited.** The secret is populated exclusively by `_buyer_view`
-  (`api.py`), for the owning buyer, while the job is `AWAITING_PAYMENT`; it's
-  `None` once the charge succeeds. The admin job routes reuse the `BuyerJobView`
-  schema but bypass `_buyer_view` enrichment, so `payment_status`/`client_secret`
-  are always `None` there, and no seller view carries the field at all.
-- **Refunds/voids are admin- or owner-initiated only.** Job cancellation runs
-  through the same buyer/admin-owned cancel path as before; there's no
-  standalone refund endpoint a caller could hit directly.
-- **Client idempotency responses are stored per-principal.** `IdempotencyRecord`
-  is keyed on `(principal, key)` (`idempotency.py`), so one caller can never
-  replay another's cached response even if the header value collided.
-- **Residual:** the fake payment provider accepts unsigned webhook JSON by
-  design (`payments/fake.py` — there's no real provider to sign anything in
-  dev/tests) and must never be reachable in production. Selection is
-  env-driven (`STRIPE_SECRET_KEY`) with no runtime override, so this is a
-  deployment-configuration risk, not a code path an attacker can toggle.
-- **Residual:** a DB commit failure after a successful provider mutation leaves
-  the provider briefly ahead of the database — the client receives a truthful
-  500 envelope (not a false 200; `db.CommitRoute` commits before the response
-  is sent, so a commit failure is reported, never silently swallowed), and the
-  provider-ahead-of-DB window self-heals as before: charge and refund via
-  idempotency-key replay, void via the idempotent cancel (already-canceled
-  counts as success). A transactional outbox is the eventual upgrade path.
+## Threat model
 
-## Update — real-user auth
+Three roles, `buyer`, `seller` and `admin`, each resolved from an
+`auth_sessions` row, not from a shared secret or a caller-supplied claim.
+The assets are the two independently computed prices (each side must not
+learn the other's number, because the spread is the business model), the
+money moved through the payment provider, and user accounts.
 
-Pilot-grade HMAC tokens (`mint_token`, `MARKETPLACE_SECRET`) are gone —
-deleted, not deprecated. Identity now resolves through DB-backed sessions:
+In scope: an unauthenticated caller, an authenticated buyer or seller trying
+to read the other side's data or act as someone else, forged or replayed
+provider webhooks, replayed client requests, races between concurrent
+requests, and hostile content submitted by sellers that renders on public
+pages.
 
-- **Sessions are opaque bearers, hashed at rest.** `POST /v1/auth/signup` and
-  `POST /v1/auth/login` issue a random 32-byte token; only its sha256 is
-  stored (`auth_sessions.token_hash`). A leaked database dump doesn't hand out
-  usable bearer tokens. Every authenticated request does one indexed lookup
-  (`token_hash` + `expires_at > now`) to resolve `(role, user_id)`.
-- **Sessions are revocable, not just expiring.** Logout deletes the one row
-  for that token. A password reset deletes *every* session row for that user
-  (`confirm_password_reset`) — a stolen token stops working the moment the
-  owner resets their password. The same row-deletion path is where a future
-  ban/suspend would hook in. Sessions also carry a TTL
-  (`SESSION_TTL_HOURS`, default 72); expired rows are left for the lazy sweep
-  rather than actively purged.
-- **Passwords are argon2id via `pwdlib`** (`auth.hash_password`/
-  `verify_password`), never stored or logged in plaintext.
-- **Login gives no account-existence signal.** An unknown email still runs a
-  password verify against a fixed dummy hash before returning the same 401 as
-  a wrong password, so response timing doesn't distinguish "no such account"
-  from "wrong password."
-- **Password-reset-request is uniform-200 by design** (`POST
-  /v1/auth/password-reset/request` always replies `{"status": "ok"}`,
-  independent of whether the email/role exists) — no enumeration via status
-  code or body.
-- **One account is one email + one role.** The same email may hold a separate
-  buyer account and seller account; `(email, role)` is the uniqueness key, not
-  `email` alone. There's no self-serve admin signup — the admin account is
-  seeded once at startup from `ADMIN_EMAIL`/`ADMIN_PASSWORD`.
-- **Email verification and password reset ride the same `EmailSender` port**
-  (`src/marketplace/mail.py`). The shipped `ConsoleEmailSender` logs instead of
-  sending. Mail-send failure is a guarded boundary: `_issue_email_token`
-  catches and logs, so a broken/slow mail provider never fails or
-  fingerprints the enclosing request (signup still 201s; reset-request still
-  200s) — the token row is flushed-pending on the request's session and
-  commits at request end; swallowing the send failure is what lets that
-  commit proceed, so the user can re-request.
+Out of scope for the app itself, and expected at the edge or in a fork:
+volumetric abuse and brute force (rate limiting), TLS termination, bot
+detection, admin separation of duties (there is one admin role), and abuse
+heuristics. Where a control below is only effective with edge
+configuration, it says so.
 
-**Residuals, named rather than hidden:**
-- **No login rate-limiting.** Brute-forcing a password is not throttled at
-  the app layer; this is deliberately deferred to the gateway (see
-  `ROADMAP.md`'s API-hardening item), same posture as the rest of the API.
-- **A timing delta remains on `password-reset/request`.** The response body
-  and status code are identical either way, but the exists-branch does
-  strictly more work (an `EmailToken` insert plus a send attempt) than the
-  ghost branch, so wall-clock time leaks a faint signal. Closing it needs
-  constant-time work on the ghost path, which isn't built. Accepted at pilot
-  grade alongside the no-rate-limiting posture above.
-- **Email verification gates nothing yet.** `POST /v1/auth/verify` flips
-  `email_verified`, but no endpoint checks that flag — signup and login both
-  work on an unverified account, because the console adapter can't prove
-  mail was actually deliverable. A fork wiring in a real sender is expected
-  to add the gate at the same time.
+## Identity and sessions
 
-## Update — disputes
+- **Sessions are opaque bearer tokens, hashed at rest.**
+  `POST /v1/auth/signup` and `POST /v1/auth/login` issue a random 32-byte
+  token; only its sha256 is stored (`auth_sessions.token_hash`). A database
+  dump does not contain usable tokens. Each request does one indexed lookup
+  (`token_hash` and `expires_at > now`) to resolve `(role, user_id)`. The
+  pilot HMAC tokens (`mint_token`, `MARKETPLACE_SECRET`) were deleted, and
+  `tests/test_architecture.py` fails if token minting or a second identity
+  verifier comes back.
+- **Sessions are revocable and expire.** Logout deletes that session's row.
+  A password reset deletes every session for the account, so a stolen token
+  stops working when the owner resets. Sessions expire after
+  `SESSION_TTL_HOURS` (default 72); expired rows are deleted by the
+  maintenance loop's housekeeping. Suspension does **not** revoke sessions:
+  a suspended user can still log in and read, by design (see
+  [Moderation](#moderation-and-notification-floor)).
+- **Passwords are argon2id** via `pwdlib` (`auth.hash_password`), never
+  stored or logged in plaintext.
+- **Login gives no account-existence signal.** An unknown email still runs
+  a verify against a fixed dummy hash and returns the same 401 as a wrong
+  password.
+- **Password-reset request always answers 200 `{"status": "ok"}`**, whether
+  or not the account exists. A timing difference remains (see residual
+  risks).
+- **Verification and reset tokens** are stored as sha256 only and are
+  single-use (`used_at` set when consumed). Their mail is the one message
+  sent directly rather than through the notification outbox, because the
+  outbox would store the raw token. A failing mail sender is caught and
+  logged, so it can neither fail nor fingerprint the request.
+- **Accounts are one email plus one role**; `(email, role)` is unique.
+  There is no admin signup: the admin is seeded at startup from
+  `ADMIN_EMAIL`/`ADMIN_PASSWORD`, and changing the password and restarting
+  replaces the hash and revokes existing admin sessions.
 
-- **Opening a dispute is buyer-only, with ownership, window, and one-per-job
-  guards.** `POST /v1/jobs/{id}/dispute` requires the caller's session to
-  resolve to the job's own buyer (404 otherwise, same not-yours pattern as
-  job views); the job must be `COMPLETED` and within `DISPUTE_WINDOW_DAYS` of
-  `completed_at` (409 once the window elapses); a job can carry at most one
-  dispute row, ever (409 on a second attempt). A Stripe chargeback on the
-  same job annotates that existing row instead of creating a duplicate.
-- **Resolving a dispute is admin-only, with bounds validated at the trust
-  boundary.** `POST /v1/admin/disputes/{id}/resolve` requires an admin
-  session; `refund_amount`/`clawback_amount` are quantized and range-checked
-  (0..`buyer_price`, 0..`seller_payout`) before either provider call, so a
-  hand-crafted body can never authorize refunding or clawing back more than
-  the job itself moved. The two provider legs (partial refund, partial
-  transfer reversal) are each idempotent by a dispute-scoped key
-  (`refund:{job_id}:dispute`, `reversal:{job_id}:dispute` — deliberately
-  distinct from the cancel path's keys); a failure on either leg records
-  nothing, and a retry replays the succeeded leg instead of double-moving
-  money. `Payment.status` is never touched by a partial refund — the charge
-  stays `SUCCEEDED`, so a partial refund can never be mistaken for (or
-  collide with) the cancel path's full `REFUNDED` state.
-- **The chargeback webhook branch never 500s on an unknown or replayed
-  event.** `charge.dispute.created`/`closed` locate the `Payment` by
-  `related_id`; an id that doesn't map to a known payment is recorded (dedup
-  ledger) and ignored, not a crash. The branch rides the existing
-  signature-verified, `WebhookEvent`-deduped `/v1/payments/webhook`, so a
-  replayed chargeback event no-ops like every other event kind. An admin's
-  arbitration outcome (`resolved`) is preserved even if a chargeback closes
-  on the same job afterward — the loss/fee still lands in the `adjustments`
-  ledger, but the `status` field keeps recording the arbitration outcome
-  rather than being overwritten; a still-`open` dispute lets the latest
-  provider outcome set the status instead.
-- **Dispute views stay role-scoped like job views.** `BuyerDisputeOut` never
-  carries the clawback amount; `SellerDisputeOut` never carries the refund
-  amount; only `AdminDisputeOut` carries both. `reason`/`status` are visible
-  to all three (the seller has to know what they're accused of).
-- **Seller→buyer reviews expose only the aggregate to the buyer.**
-  `GET /v1/profile` returns `rating`/`rating_count`, never the individual
-  `SellerReview` rows or comments; those stay admin-side (`GET
-  /v1/admin/buyers` is the same aggregate, not a review list). The
-  moderation sub-phase revisited this: each party can now read their own
-  job's review row(s) — no party ids, hidden comments read null (see the
-  moderation update below); cross-job review lists stay admin-side.
+### Cookie posture
 
-## Update — moderation
+`POST /signup` and `POST /login` on the page routes (`pages/account.py`) set the
+session token as a cookie instead of returning it:
 
-- **Reporting is counterparty-gated, not open season.** `POST /v1/reports`
-  only accepts a `user` target who shares a job with the reporter (either
-  direction) or a `review`/`seller_review` target the reporter is a party
-  to (author or subject) — a 403 otherwise, and a self-report is a 422. One
-  report per `(reporter, target)` pair, enforced by a DB `UNIQUE` so a
-  sequential or concurrent duplicate both land the same 409, never a 500.
-  Every filing notifies every admin (`REPORT_OPENED_ADMIN`) inside the same
-  transaction as the insert, via the existing enqueue-only outbox — no
-  filing is silently unseen.
-- **The reporter never sees the resolution note.** `ReportOut` (the
-  reporter's own `GET /v1/reports` view) carries `status` but not
-  `resolution_note`; that field exists only on `AdminReportOut`. The
-  admin's internal reasoning for actioning or dismissing a report is never
-  echoed back to the person who filed it.
-- **Resolving a report is terminal and inert.** `POST
-  /v1/admin/reports/{id}/resolve` requires `status` to already be
-  `open` (409 on a second resolve — no re-resolution, no status flip-flop)
-  and only writes `status`/`resolution_note`/`resolved_at` onto the report
-  row itself; it never touches the reported user, review, or job. Any
-  consequence (suspend, hide) is a deliberate, separate admin action —
-  resolving a report is not an automatic trigger.
-- **Suspension is verb-gated, not a global lock, and admins are exempt by
-  construction.** `suspend_user` 422s on a target whose `role is ADMIN`
-  before anything is written, so an admin account can never be suspended
-  (self or otherwise). For everyone else, `_require_active` gates only the
-  acquisition verbs (quotes, jobs, reviews, disputes, availability,
-  offer-accept, payments-onboard, report-filing) with a `403 {"detail":
-  "account suspended"}` — the only place suspension surfaces to the
-  suspended user; login, `GET`s, `complete`, `decline`, and `cancel` stay
-  reachable so in-flight work finishes. `repo`'s seller-matching query
-  anti-joins `UserStatus.SUSPENDED`, so a suspended seller stops receiving
-  new offers without a matching-side special case. Suspension itself never
-  calls a payment provider or touches a `Transaction`/`Payment` row — freeze
-  new, finish in-flight, move no money.
-- **Takedown hides, it never deletes.** `comment_hidden` is a boolean on
-  `Review`/`SellerReview`; hiding clears the comment from every non-admin
-  view (the reviewee's own reads, `GET /v1/profile`, etc. — `comment_hidden`
-  is the one property those views gate on) while `rating` and every rating
-  aggregate stay untouched — a hidden review still counts toward
-  `rating`/`rating_count`, only the free-text vanishes. Admin's
-  `GET /v1/admin/reviews/{kind}` and the hide/unhide endpoints always
-  return the raw `comment` plus the `comment_hidden` flag — admins can
-  always see what was hidden and why it was actioned. `POST
-  /v1/admin/users/{id}/reset_display_name` is idempotent-safe and
-  deterministic (`user-{id[:8]}`), independent of the takedown path so it
-  can be applied to a harassment-via-display-name case with no review
-  involved.
-- **Job parties can read their own job's reviews.** `GET /v1/jobs/{id}/reviews`
-  (buyer) and `GET /v1/seller/jobs/{id}/reviews` (seller) return that job's
-  review(s) (id, kind, rating, comment, created_at) — no party ids, and a
-  hidden comment reads as `null` even to the job's own parties — giving the
-  subject of an abusive review the id it needs to file a report against it.
+- `HttpOnly`: page JavaScript can't read it. The app ships no client-side
+  JavaScript of its own beyond a vendored copy of HTMX that no page uses yet.
+- `SameSite=Lax`: sent on top-level navigation, not on cross-site
+  subrequests or cross-site POSTs. This is the CSRF mitigation (below).
+- `Secure` only when `COOKIE_SECURE=true`. It defaults to false for local
+  HTTP; **a deployment behind TLS must set it**, or the cookie can be sent in
+  the clear.
+- **The cookie holds the raw session token**, the same value a bearer
+  client holds, for the same `auth_sessions` row. Storage stays sha256-only,
+  and logout and password reset revoke cookie sessions exactly as they
+  revoke bearer sessions. There is no separate cookie-session table, TTL or
+  revocation path.
+- **Header first.** `auth._resolve_principal` tries the `Authorization`
+  header and falls back to the `session_token` cookie only if the header
+  resolved nothing.
 
-## Update — notification preferences
+`tests/test_architecture.py::test_session_cookie_is_httponly_and_samesite`
+and `tests/test_live_server.py::test_cookie_only_auth_over_socket` cover
+this.
 
-- **Mutes are per-kind, with a server-side money floor that no path can
-  bypass.** `refund_issued_buyer`, `dispute_resolved_buyer`,
-  `dispute_resolved_seller`, and `payout_failed_admin` can never be muted —
-  not via `PUT /v1/notification-preferences` (422), and not via a direct
-  `NotificationMute` row inserted straight into the database, because the
-  floor is enforced at `enqueue` (`notifications.MUST_SEND`), not at the API
-  boundary. The outbox is what will actually send, so that is where the
-  floor has to hold.
+### CSRF
 
-## Update — fee-aware margin
+Authenticated page forms carry a CSRF token derived from the session: the
+sha256 of a fixed domain prefix and the raw session token from the HttpOnly
+cookie. It needs no server secret and no stored state, changes with every
+login, dies with the session row, and cannot be computed from the sha256
+that `auth_sessions` stores. It is compared in constant time, and a missing
+or wrong token fails closed with a 403 before the handler runs. An
+architecture test walks every POST route in the pages package and fails if
+one lacks the check and is not on a short, named allowlist.
 
-- **`Payment.fee_estimate` is an estimate, not reconciled provider actuals.**
-  It's computed from the admin-tunable `pct`/`fixed` platform config (`PUT
-  /v1/admin/config/fees`, defaulting to Stripe's 2.9% + 30¢) and stamped onto
-  the row once, at charge time — it is never recomputed later, so a
-  subsequent config change doesn't retroactively reprice historical charges,
-  and it can drift from what the provider actually deducts (a true
-  reconciliation would read the provider's charge/balance-transaction fee,
-  which is fork work). Pre-migration payment rows (charged before migration
-  #9) carry `0`, not a backfilled estimate.
-- **The margin floor is enforced net of the fee estimate, at quote/match
-  time, so a floor-priced job can't be signed at a loss — for the fee config
-  in force at quote/match time; a fee-config change between quote and accept
-  is applied at the stamp, the same eventual-consistency stance as the margin
-  floor itself.** Both enforcement sites — the quote-path check and
-  match-time candidate filtering (`passes_floor`) — compare against
-  `matching.required_spread(buyer_price, margin_floor, fees)`, never the
-  gross spread; see the "Money is `Decimal`" bullet above.
+`SameSite=Lax` alone is not relied on. A same-site origin, such as another
+port or a subdomain, still receives the cookie; the browser try-out
+demonstrated this by auto-submitting a cancel from a page on another port,
+which the token refused.
 
-## Update — observability & ops
+The unauthenticated forms (signup, login, verify, password reset) have no
+session to bind a token to. Login CSRF, where an attacker logs a victim
+into the attacker's account, is an accepted residual risk.
 
-- **The envelope guarantee: unhandled errors never leak internals.** A
-  single request-boundary middleware (`RequestIdMiddleware`) wraps every
-  route; any exception that escapes an endpoint becomes a clean
-  `{"detail": "internal error", "request_id": "<id>"}` 500 with no
-  traceback, no exception message, and no stack frame in the response
-  body — the traceback goes to the application log only, keyed by the
-  same request id. This is deliberately middleware, not
-  `@app.exception_handler` — a FastAPI/Starlette exception handler runs
-  *outside* user middleware (inside `ServerErrorMiddleware`), which would
-  lose both the `X-Request-ID` response header and the request-id
-  contextvar on exactly the requests where they matter most. `404`/`422`s
-  keep their normal FastAPI shapes; only truly unhandled exceptions are
-  enveloped (`tests/test_observability.py::test_envelope_hides_internals`,
-  `::test_http_exceptions_not_enveloped`). This also closes finding **N1**
-  below: a hand-crafted non-compliant JSON body (`NaN`/`Infinity`) that
-  crashes error serialization no longer leaks a raw traceback — it still
-  surfaces as a 500 (not a clean 422; a stricter transport-level JSON
-  parser would be needed for that), but now as the same clean envelope
-  as every other unhandled error, with the crash detail confined to the
-  log.
-- **Access logs never carry headers, bodies, or query strings — only
-  method, path, status, duration, and request id.** Bearer tokens ride in
-  the `Authorization` header, and reset/verification tokens ride in
-  request bodies or (if a fork ever GETs them) query strings; logging any
-  of the three would put a live credential in a log aggregator most
-  incident responders don't treat as a secrets store. `path` is logged
-  without its query component for the same reason
-  (`tests/test_observability.py::test_access_log_line_shape_and_redaction`
-  asserts a `?secret=…` query string never reaches the log line).
-  `GET /healthz` is excluded from the access log entirely (liveness-probe
-  noise).
-- **Retention sweeps keep three tables bounded; the outbox itself is
-  exempt.** `idempotency_keys` (`RETENTION_IDEMPOTENCY_DAYS`, default 7),
-  `webhook_events` (`RETENTION_WEBHOOKS_DAYS`, default 30), and terminal
-  SENT/FAILED `notifications` (`RETENTION_NOTIFICATIONS_DAYS`, default
-  30) age out on the maintenance loop's clock. PENDING `notifications`
-  rows are never reaped regardless of age — sweeping a row that still
-  needs to send would silently drop a buyer/seller/admin notification,
-  which is worse than an unbounded table. **Stale-webhook-replay note:**
-  once a `webhook_events` row ages past the retention window, a
-  redelivered event for it no longer dedups against that row — but
-  `_apply_payment_event` re-applying the same event is still safe,
-  because the state transitions it drives are themselves terminal-guarded
-  independent of the dedup table: a `payment_succeeded` replay against an
-  already-`REFUNDED` or non-`AWAITING_PAYMENT` job no-ops
-  (`api.py::_apply_payment_event`, "refunded is terminal" /
-  "late success must never resurrect"), and a `payment_failed` replay
-  never downgrades an already-`SUCCEEDED` payment. The dedup table is a
-  fast-path optimization against duplicate provider retries, not the only
-  thing standing between a replay and a double-apply. The analogous gap
-  exists on the client side: an `Idempotency-Key` replayed after its own
-  `RETENTION_IDEMPOTENCY_DAYS` window re-executes the request rather than
-  replaying the cached response — but the money paths stay safe regardless,
-  the same way: the offer/job state machine 409s a repeat accept/decline
-  against an already-resolved offer, a consumed quote 404s or 410s on a
-  second `POST /jobs`, and the charge carries its own provider-side
-  idempotency key (`charge:{job_id}`, independent of the client's header)
-  as an extra short-horizon layer — providers retain such keys briefly
-  (Stripe: ~24h), so it's the state-machine guards, not the provider key,
-  that hold at any age.
-- **Body cap default is 1 MiB (`MAX_BODY_BYTES=1_048_576`).** Checked
-  against a declared `Content-Length` up front (fast rejection, no body
-  read) and independently counted on chunked/streamed bodies so a caller
-  can't dodge the cap by omitting `Content-Length`; either path returns a
-  413 before the oversized body reaches an endpoint or the idempotency
-  store (`BodySizeLimitMiddleware` mounts outside `IdempotencyMiddleware`
-  so a 413 is never itself cached for replay).
-- **`TrustedHostMiddleware`/`CORSMiddleware` ship open by default, narrow
-  in production.** `TRUSTED_HOSTS=["*"]` and `CORS_ORIGINS=[]` (no CORS
-  headers at all) are the out-of-the-box dev posture — a fork deploying
-  behind a real domain sets both explicitly (`TRUSTED_HOSTS` to its
-  hostname(s), `CORS_ORIGINS` to its frontend origin(s)) before going to
-  production; neither is enforced by this template, by design (it's a
-  generic starting point, not a specific deployment).
-- **The idempotency secret-echo standing rule holds, and is tested.**
-  `IdempotencyMiddleware` never stores a `401`/`403` response for replay
-  (`idempotency.py`; `tests/test_idempotency.py::test_no_auth_passes_through_to_401`),
-  so an auth failure can never be cached and replayed as if it had
-  succeeded. Separately, `client_secret` appearing in a buyer's own
-  `GET /v1/jobs/{id}`/accept-path response while `AWAITING_PAYMENT` is not
-  a leak: it's buyer-facing by design (the client needs it to confirm the
-  charge), scoped to the owning buyer only (see the payments update
-  above), and it isn't a case of an idempotency response echoing a
-  *different* principal's secret. The standing rule going forward: no
-  endpoint should echo a secret belonging to a **different** principal
-  into a stored idempotency response; audit any future secret-returning
-  POST against that bar, not against "does it return a secret at all."
-- **The replay record is durable before the response is sent (finding
-  F2b).** `IdempotencyMiddleware` buffers the downstream app's response,
-  commits the `IdempotencyRecord`, and only then forwards the buffered
-  response to the client — never the reverse — so a sequential same-key
-  retry always replays byte-identical rather than racing an in-flight
-  commit and re-executing the operation
-  (`tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical`).
-  A failure storing the record is deliberately non-fatal: it's logged and
-  swallowed rather than raised, because the domain work already committed
-  (`CommitRoute` ran inside the buffered call) — turning a successful
-  operation into a 500 over a missed replay row would be strictly worse
+Every page mutation is a POST; no GET changes state, and the links in
+verification and reset emails render a form that POSTs the token, so
+opening one (or a mail scanner fetching it) never consumes it. Logged-in
+pages answer `Cache-Control: no-store`, and every page sends
+`Referrer-Policy: same-origin`, so tokens in the address bar never leave in
+a Referer header.
+
+The idempotency middleware never stores responses for `/signup`, `/login`
+or `/logout`, so a replay can't resend a `Set-Cookie`.
+
+### The page login path is narrower than the API
+
+`POST /login` rejects any role other than `buyer` or `seller` before calling
+`auth.login`. Correct admin credentials submitted through the form get the
+same generic 401 as a wrong password, with no signal that the role was the
+problem. Admin access is JSON-API only (`POST /v1/auth/login` with
+`role: "admin"`). Regression:
+`tests/test_pages.py::test_login_page_rejects_admin_role`.
+
+### Unauthenticated surface
+
+`GET /healthz`; `/v1/auth/signup`, `login`, `verify`,
+`password-reset/request` and `password-reset/confirm`; `/v1/catalog/*`;
+`POST /v1/payments/webhook` (signature-verified, or 404 in fake mode); and
+the pages `GET /`, `GET /listings/{id}`, `GET /sellers/{id}`, `/static/*`,
+`GET/POST /signup`, `GET/POST /login` and `POST /logout`. The pages render
+the same catalog views as `/v1/catalog/*` and call the same signup and login
+code as `/v1/auth/*`; they expose nothing those endpoints don't. Every
+route, including read-only pages, runs under `CommitRoute`, and an
+import-time check fails if one doesn't.
+
+### XSS boundary
+
+Seller-supplied text (listing title and description, display names) renders
+on pages anyone can open. Jinja2 autoescaping is on for `.html` templates;
+no template uses `|safe` and none builds HTML strings from user data.
+`tests/test_pages.py::test_xss_listing_title_escaped` covers element
+content, and `::test_xss_listing_title_escaped_detail_and_seller` covers the
+`<img alt=…>` attribute, which has different escaping rules. The
+architecture tests, Semgrep rules and an agent edit hook all reject `|safe`
+or disabled autoescape.
+
+## Information asymmetry
+
+- **Separate response models per audience** (`Buyer*`, `Seller*`,
+  `Admin*`, `Catalog*` in `models.py`), never hand-built dicts or ORM rows.
+  `tests/test_architecture.py` checks that role-scoped routes declare typed
+  response models and never return the other side's fields;
+  `tests/test_information_asymmetry.py` checks responses and notification
+  payloads.
+- **Public pages** are scanned as text:
+  `tests/test_pages.py::test_page_source_asymmetry*` fails if the rendered
+  HTML contains `seller_payout`, `margin`, `capacity`, `payments_ready` or an
+  email.
+- **`client_secret`** appears only in the owning buyer's job view, and only
+  while the job is `awaiting_payment`. Admin job routes reuse the buyer job
+  schema without that enrichment, so the field is always empty there, and no
+  seller view has it.
+- **The seller's completion receipt** carries only `job_id`,
+  `seller_payout` and `completed_at` (finding F1 below).
+- **Disputes**: the buyer view never carries the clawback amount, the seller
+  view never carries the refund amount; only the admin view has both.
+  `reason` and `status` are visible to all three.
+- **Reviews**: the buyer sees their own rating aggregate (`GET /v1/profile`),
+  not individual reviews. Each party can read their own job's reviews
+  (rating, comment, no party ids; a hidden comment reads as null). Cross-job
+  review lists are admin-only.
+- **Reports**: the reporter's view carries `status` but never the admin's
+  `resolution_note`.
+- **Notification payloads** are snapshots taken at enqueue time; seller
+  payloads never carry the buyer price, buyer payloads never carry the
+  payout.
+
+## Money paths
+
+- **Concurrency is the database's job.** Quote consumption, job and offer
+  transitions and capacity checks take `SELECT … FOR UPDATE` row locks. On
+  SQLite writes are serialized, so the deterministic race tests hold on
+  both; true-parallel tests run on Postgres (CI runs the suite on both).
+- **Commit before respond.** `CommitRoute` commits the session before the
+  response is sent; a commit failure is reported as a 500, never hidden
+  behind a 200 (finding F2).
+- **Refunds and voids** happen only through the buyer- or admin-owned cancel
+  path and admin dispute resolution; there is no standalone refund endpoint.
+- **Dispute resolution is admin-only and bounded.** `refund_amount` and
+  `clawback_amount` are quantized and range-checked (0 to the buyer price,
+  0 to the payout) before any provider call. Each provider leg has its own
+  key (`refund:{job_id}:dispute`, `reversal:{job_id}:dispute`, distinct from
+  the cancel path's keys). The amounts are committed before the provider is
+  called, so a provider failure leaves them pinned and a retry converges on
+  the same amounts. A partial refund never changes the charge's status.
+  Opening a dispute requires the job's own buyer (404 otherwise), a
+  completed job inside `DISPUTE_WINDOW_DAYS` and no existing dispute.
+- **Provider idempotency keys** are derived from the job (`charge:{job_id}`,
+  `transfer:{job_id}`, `refund:{job_id}`, `acct:{seller_id}`), so a retry
+  replays the provider's original result.
+- **Client idempotency.** Records are keyed on `(principal, key)`, so one
+  caller can never replay another's response. 401, 403 and 5xx responses are
+  never stored (`tests/test_idempotency.py::test_no_auth_passes_through_to_401`),
+  so neither an auth failure nor a pool-exhaustion 503 can be replayed. The
+  record is committed before the response is forwarded, so an immediate
+  same-key retry replays rather than re-executing (finding F2b;
+  `tests/test_live_server.py::test_same_key_immediate_retry_replays_byte_identical`).
+  A failure to store the record is logged and swallowed, because the
+  operation already committed
   (`tests/test_idempotency.py::test_store_failure_never_fails_a_committed_operation`).
-  This doesn't change the documented concurrent-duplicate posture above:
-  two truly simultaneous requests with the same key can still both
-  execute (the unique constraint drops one stored record; the DB row
-  locks downstream keep the duplicate call safe) — this is ordering for
-  the sequential-retry case, not a new exactly-once guarantee.
+  Standing rule: no endpoint may store a secret belonging to a different
+  principal in an idempotency response. `client_secret` in the owning
+  buyer's own response is not such a case.
+- **Fee estimate.** `Payment.fee_estimate` is computed from the admin fee
+  config and stamped once at charge time, never recomputed. The margin floor
+  is enforced net of the estimate at quote time and when a seller is chosen.
+  A fee-config change between quote and accept is applied at the stamp, the
+  same eventual-consistency stance as the floor itself. Payments created
+  before the fee migration carry 0.
+- **Expired idempotency records.** A key replayed after
+  `RETENTION_IDEMPOTENCY_DAYS` re-executes instead of replaying, but the
+  money paths still hold: a repeat accept or decline on a resolved offer is a
+  409, a consumed quote is a 404 or 410, and the charge carries its own
+  provider key. Providers keep such keys only briefly (Stripe: about 24
+  hours), so it is the state-machine guards, not the provider key, that hold
+  at any age.
 
-## Threat model (pilot)
+- **Money-path audit (2026-11).** Every provider call site and every
+  pairing of row locks was checked against five classes: inverted lock
+  order, stale-snapshot dispatch, a replayable 4xx after a provider side
+  effect, retries that do not converge, and resurrection of a terminal
+  state. Two findings were fixed with tests that failed first:
+  - **A1 (medium).** The cancel paths locked the job and then wrote its open
+    offers, while accept, decline and the offer sweep lock offer then job. A
+    cancel racing an accept deadlocked on Postgres and one side got a 500.
+    The cancel paths now claim offers `FOR UPDATE SKIP LOCKED`.
+  - **A2 (critical).** A dispute clawback equal to the seller's whole payout
+    fully reverses the transfer, which the provider reports like a failed
+    transfer. The handler marked the payout FAILED and paged admins, and an
+    admin payout retry would then have paid the seller again. A reversal
+    covered by a pinned clawback now leaves the payout PAID.
+  Six lesser hazards are recorded and deliberately left open (a
+  millisecond-wide lock inversion that heals through the webhook outbox,
+  the provider's roughly 24-hour idempotency-key window, unlocked completion
+  counters, and three others). The lock-order table, the retry table and the
+  paths found safe are in
+  [`docs/money-path-audit-2026-11.md`](docs/money-path-audit-2026-11.md).
 
-Identity comes from an authenticated principal, never from a request body or
-query param. Three roles: `buyer`, `seller`, `admin`, each resolved from an
-`auth_sessions` row (see "Update — real-user auth" above) — not a shared
-secret, not a caller-supplied claim. This is enough to give real users
-distinct, unspoofable, revocable identities; the residuals above (no
-rate-limiting, the reset-timing delta, verification gating nothing) are
-named pilot-grade gaps, not silent ones. See `ROADMAP.md` for what stays
-fork work (admin RBAC, gateway rate-limiting, OAuth/social login).
+## Payment webhooks
 
-## Findings and status
+- **Authenticity.** `POST /v1/payments/webhook` has no bearer token (the
+  provider can't present one). With Stripe configured, `parse_webhook`
+  verifies the provider's signature before anything is applied; an invalid
+  or missing signature is a 400. Startup refuses `STRIPE_SECRET_KEY` without
+  `STRIPE_WEBHOOK_SECRET`.
+- **The unsigned endpoint is closed by default.** The fake provider can't
+  verify anything and its object ids are guessable, so before this change a
+  deployment without Stripe accepted forged payment events. Now, in fake
+  mode, the route answers 404 unless `ALLOW_UNSIGNED_WEBHOOKS=true`, which is
+  meant for local development, tests and the demo only. Startup refuses
+  `ALLOW_UNSIGNED_WEBHOOKS` together with a Stripe key. Covered by
+  `tests/test_webhook_gate.py`. The flag remains a configuration risk: a
+  deployment that sets it without Stripe accepts forged events.
+- **Deduplication.** Every event is recorded in `webhook_events` keyed on
+  the provider's event id before it is applied. Any existing row (applied,
+  failed or dead-lettered) makes a redelivery a `duplicate` no-op; recovering
+  a failed event belongs to the retry job, not to a redelivery racing it. The
+  row is flushed before the apply, so two simultaneous first deliveries meet
+  at the unique constraint and the loser answers `duplicate`, not 500.
+- **What the outbox stores.** When applying an event fails, the row is
+  persisted as `failed` in a fresh session with the attempt count, a
+  next-attempt time and a `last_error`, and the endpoint answers 200
+  `{"status": "deferred"}`. The stored `payload` is the parsed event fields
+  (event id, kind, object id and a few scalars), never the raw body or the
+  signature header. `last_error` is the exception type plus the first line
+  of its message, capped at 512 characters, because database driver errors
+  put the SQL statement and its bound parameters on later lines; those stay
+  in the server log and out of the table, the admin list endpoint and the
+  dead-letter email (`tests/test_webhook_outbox.py::test_last_error_keeps_only_the_first_line`).
+- **Retry and dead letter.** The maintenance loop claims due rows with
+  `SKIP LOCKED` and re-applies each in its own savepoint, with exponential
+  backoff, until it applies or reaches `WEBHOOK_MAX_ATTEMPTS`; then the row
+  is dead-lettered and every admin gets `webhook_dead_letter_admin`, which
+  can't be muted. Admins can list rows and re-queue one; listing and
+  re-queueing require an admin session.
+- **Replay safety does not depend on the dedup table.** Every event branch
+  is safe to apply twice and safe to apply after later events for the same
+  object (`tests/test_webhook_replay.py`): status lattices or transition
+  guards for payments, payouts and accounts, and permanent rows for
+  money-moving effects (a lost chargeback's fee row carries the provider's
+  dispute id). This matters because applied webhook rows age out after
+  `RETENTION_WEBHOOKS_DAYS`; a redelivery after that is applied again and
+  must change nothing. A late success never revives a cancelled or refunded
+  payment, and a late failure never downgrades a succeeded one.
+- **Chargebacks** whose payment id doesn't match a known payment are
+  recorded and ignored, not a 500. An admin's dispute resolution is kept as
+  the dispute's status if a chargeback closes later; the loss and fee are
+  still booked.
 
-All line references were against the v1 scaffold. "Fixed" means closed on the
-hardening branch with a regression test in `tests/test_auth_and_hardening.py`.
+## Moderation and notification floor
 
-### Critical — identity was a caller-supplied string
+- **Reports are limited to counterparties**: a user who shares a job with
+  the reporter, or a review the reporter is a party to; otherwise 403, and a
+  self-report is 422. One report per reporter and target, enforced by a
+  unique constraint, so sequential and concurrent duplicates both get 409.
+  Every report notifies every admin in the same transaction.
+- **Resolving a report is terminal and inert**: a second resolve is 409, and
+  resolving writes only to the report row. Any consequence is a separate
+  admin action.
+- **Suspension blocks acquisition only**: quotes, jobs, reviews, disputes,
+  availability, accepting offers, payment onboarding and filing reports get
+  `403 {"detail": "account suspended"}`. Login, reads, complete, decline and
+  cancel stay open so in-flight work finishes; matching skips suspended
+  sellers. Suspension never calls the payment provider. Admin accounts can't
+  be suspended (422).
+- **Takedown hides, never deletes.** Hiding a review comment removes the
+  text from non-admin views while the rating still counts. Admin views show
+  the raw comment and the hidden flag. Display-name reset is deterministic
+  (`user-{id[:8]}`) and independent of takedown.
+- **A server-side notification floor**: `refund_issued_buyer`,
+  `dispute_resolved_buyer`, `dispute_resolved_seller`, `payout_failed_admin`
+  and `webhook_dead_letter_admin` can't be muted, not through the
+  preferences API (422) and not through a mute row inserted directly into
+  the database, because the floor is checked at enqueue.
+
+## Operational controls
+
+- **Error envelope.** `RequestIdMiddleware` wraps every route. An unhandled
+  exception becomes `{"detail": "internal error", "request_id": …}` with
+  status 500 and no traceback or message in the body; the traceback goes to
+  the log under the same request id. It is middleware rather than an
+  exception handler so the request id survives on exactly these responses.
+  404 and 422 keep FastAPI's shapes
+  (`tests/test_observability.py::test_envelope_hides_internals`,
+  `::test_http_exceptions_not_enveloped`).
+- **Pool exhaustion sheds load.** When a request can't get a database
+  connection within `DB_POOL_TIMEOUT_SECONDS` (default 5), the same
+  middleware answers 503 `{"detail": "server busy, retry shortly"}` with
+  `Retry-After: 1`, logs a warning, and the idempotency layer does not store
+  it (`tests/test_capacity.py::test_pool_exhaustion_sheds_with_503_not_500`).
+  This is load shedding, not a fault: the alternative was every request
+  stalling for 30 seconds and failing with 500. A 503 under load is
+  expected; sustained 503s mean the pool, the threadpool or the database is
+  undersized (see [`docs/DEPLOY.md`](docs/DEPLOY.md)). The live-quote cap
+  (`MAX_ACTIVE_QUOTES`) also answers 503 when reached.
+- **Access logs** record method, path without its query string, status,
+  duration and request id; never headers, cookies, bodies or query strings,
+  because bearer tokens travel in headers and reset or verification tokens
+  in bodies (`tests/test_observability.py::test_access_log_line_shape_and_redaction`;
+  the architecture tests check log calls statically). `/healthz` is not
+  logged.
+- **Retention** deletes old `idempotency_keys`, applied or dead-lettered
+  `webhook_events` and sent or failed `notifications` on the maintenance
+  loop. Pending notifications and failed webhook events are never deleted,
+  whatever their age; dropping either would silently lose a message or a
+  payment event.
+- **Body cap.** `MAX_BODY_BYTES` (default 1 MiB) is checked against a
+  declared `Content-Length` and counted on chunked bodies; either way the
+  answer is 413 before the body reaches a handler or the idempotency store.
+- **Trusted hosts and CORS ship open**: `TRUSTED_HOSTS=["*"]` and
+  `CORS_ORIGINS=[]` (no CORS headers). A deployment must set both. The
+  template does not enforce this.
+
+## Automated checks
+
+- **`.github/workflows/security.yml`** runs on pull requests, pushes to
+  `main`, weekly and on demand:
+  - Semgrep: the repo's own rules in `.semgrep/rules/invariants.yml`
+    (identity fields in request models, Stripe imports outside the adapter,
+    unsafe template output, sensitive logging, non-constant-time secret
+    comparison, raw credentials at rest, float money fields), which must
+    first pass their own test corpus, plus the `p/python` and `p/fastapi`
+    packs. One registry rule is excluded because it flags a log message on
+    the word "password" when the call logs only an email.
+  - `pip-audit` over the locked runtime dependencies.
+  - gitleaks over the full git history, with a checksum-verified binary.
+- **`.github/workflows/ci.yml`** runs the test suite on SQLite and
+  Postgres 16 and the migrations up, down and up on both.
+- **`tests/test_architecture.py`** encodes the statically checkable rules:
+  no identity fields in request bodies, no token minting, hash-only
+  credential columns, argon2 for passwords, cookie flags, per-audience field
+  denylists, typed response models, `Decimal` money, provider access only
+  through the port, autoescape, log calls without headers or bodies, and
+  more.
+- Workflow actions are pinned to commit SHAs, workflows default to
+  read-only `contents` permission, and Dependabot is configured.
+
+- **Background-agent workflows** (`.github/workflows/agent-implement.yml`,
+  `agent-review.yml`). These run a coding agent with repository credentials,
+  so their inputs are the threat: issue bodies, comments, pull-request
+  descriptions and diffs are text written by other people.
+  - Only users with write access can start a run. A job that holds no
+    secrets checks the actor's permission through the collaborators API and,
+    for a pull request, that the head is in this repository; the job holding
+    the API key runs only if that passes. Bot senders are excluded.
+  - The review workflow uses `pull_request`, never `pull_request_target`,
+    skips forks, and reads `CLAUDE.md` and the reviewer definitions from the
+    base branch so a pull request cannot rewrite its own rules.
+  - Each job asks for the minimum permissions. The implementing agent can
+    push a branch and open a pull request; the reviewing agent can read code
+    and write comments. Neither can approve or merge, and tool allowlists
+    exclude web access, `gh api`, force-push and history rewriting. Event
+    text reaches scripts only through environment variables.
+  - The agent's instructions declare issue and pull-request text untrusted.
+    That is a mitigation, not a guarantee: branch protection (a required
+    human approval, required checks, no bypass) is what actually stops an
+    agent's change from reaching the default branch, and it has to be
+    configured by the maintainer (`docs/background-agents.md`).
+  - The API key is the only secret exposed to agent jobs. These workflows
+    have not been executed; they need that secret first.
+
+- **Ops MCP server** (`src/marketplace_mcp/`). It authenticates as an admin
+  with an ordinary revocable session token taken from the environment, and
+  talks only to `/v1/admin/*` over HTTP, so it can do what an admin can do
+  through the API and nothing else; an architecture test checks it never
+  imports the app or the database layer. Write tools are not registered
+  unless `MARKETPLACE_MCP_ENABLE_WRITES` is set, and dispute resolution and
+  job cancellation are not exposed at all. The token is never logged or
+  returned in a tool result. The residual risk is prompt injection: listing
+  titles, report bodies and similar user-written text flow into the agent's
+  context through the read tools. That text is delimited with a per-value
+  random marker and labeled as untrusted, and no tool derives an action from
+  content, but an agent with write tools enabled can still be talked into
+  misusing them. Keep writes off unless needed, prefer per-call approval in
+  the client, and revoke the session when done.
+
+## Residual risks
+
+Named so they are not mistaken for oversights. None is mitigated inside the
+app unless stated.
+
+- **No rate limiting.** Nothing in the app throttles login, signup,
+  password reset or any other endpoint. Password brute force is unthrottled,
+  and the argon2 endpoints are the cheapest way to exhaust CPU and memory.
+  Mitigation belongs at the gateway or edge
+  ([`docs/DEPLOY.md`](docs/DEPLOY.md#edge-rate-limits)); left to a fork.
+- **Email verification is off by default.** `REQUIRE_VERIFIED_EMAIL`
+  requires a verified email to create a job, accept an offer or create a
+  listing. It ships off because without a real mail sender a verification
+  requirement proves nothing; a deployment with mail configured should turn
+  it on.
+- **Timing difference on `password-reset/request`.** Status and body are
+  identical, but the existing-account path does more work (a token insert
+  and a send attempt), so response time leaks a faint signal. Closing it
+  needs equal work on the other path, which isn't built.
+- **Login CSRF.** Authenticated forms carry a session-bound token; signup,
+  login, verify and password reset cannot, and an attacker can log a victim
+  into the attacker's own account.
+- **The browser payment step is unverified against Stripe.** It loads
+  Stripe's script from Stripe's origin and confirms the payment in the
+  browser; settlement is still the signed webhook. A Content-Security-Policy
+  that allows only that script origin is not set (see the next item).
+- **No security response headers.** The app sets no `Content-Security-Policy`,
+  `X-Frame-Options`/`frame-ancestors`, `Strict-Transport-Security` or
+  `X-Content-Type-Options`. Set them at the edge or add middleware before
+  serving pages publicly.
+- **Trusted hosts, CORS and `COOKIE_SECURE` ship in development settings.**
+  A deployment that doesn't change them accepts any `Host` header and sends
+  the session cookie without `Secure`.
+- **`ALLOW_UNSIGNED_WEBHOOKS` is a footgun.** Startup refuses it alongside a
+  Stripe key, but a fake-provider deployment that sets it accepts forged
+  payment events.
+- **Row locks and pooled connections are held across payment-provider
+  calls** in accept, complete and cancel. A slow provider makes those
+  requests hold locks and a pool connection for the length of a network
+  call, which narrows capacity and can turn provider slowness into 503s.
+- **A commit failure after a provider call** leaves the provider briefly
+  ahead of the database. The client gets a truthful 500, and the state
+  converges on retry: charges and refunds through idempotency-key replay,
+  voids through the idempotent cancel.
+- **Simultaneous same-key requests** can both execute (the unique constraint
+  keeps one record); the row locks keep the duplicate safe. This is not
+  exactly-once.
+- **A non-standard JSON body** (`NaN`, `Infinity`) is rejected and never
+  stored but answers 500 (the clean envelope) instead of 422; fixing that
+  needs a stricter JSON parser at the transport level. Low severity
+  (finding N1).
+- **`fee_estimate` is not the provider's actual fee**; reconciling against
+  provider balance transactions is left to a fork.
+- **One admin role with full authority.** Any admin can retune pricing,
+  move money through dispute resolution and suspend users. Admin RBAC is
+  left to a fork.
+- **The fake provider must never serve real traffic.** Selection is by
+  environment (`STRIPE_SECRET_KEY`) with no runtime switch, so this is a
+  deployment risk, not a code path a caller can toggle.
+- **Dependency advisories.** The first run of `pip-audit` against `uv.lock`
+  (2026-11) reported published advisories against the pinned versions of
+  `starlette`, `anyio`, `urllib3`, `idna`, `certifi` and `dnspython`. All
+  were bumped to fixed releases and the audit was clean afterwards. That is
+  a point-in-time result: the weekly security workflow is what keeps it
+  true, so check its latest run for the current state.
+
+## Findings history
+
+### Safe-to-pilot sweep
+
+A read-only sweep of the first scaffold. "Fixed" means closed with a
+regression test in `tests/test_auth_and_hardening.py`. Line references in
+the original sweep were against that scaffold and are not repeated.
+
+**Critical: identity was a caller-supplied string**
+
 | ID | Finding | Status |
-|----|---------|--------|
-| C1 | `/admin/*` fully open — anyone could dump the both-sides ledger and re-tune pricing | **Fixed** — router gated behind `require_admin` |
-| C2 | Seller could read `buyer_price` via `GET /jobs/{id}?role=buyer` | **Fixed** — buyer-role + ownership enforced; `role` param removed |
-| C3 | Buyer could read `seller_payout` via `GET /jobs/offered?seller_id=X` | **Fixed** — seller derived from token, not query |
-| C4 | Full seller impersonation on `accept`/`complete` | **Fixed** — seller derived from token |
+|---|---|---|
+| C1 | `/admin/*` open to anyone: the ledger with both prices, and pricing config | **Fixed**: admin router behind `require_admin` |
+| C2 | A seller could read `buyer_price` via `GET /jobs/{id}?role=buyer` | **Fixed**: buyer role and ownership enforced; `role` parameter removed |
+| C3 | A buyer could read `seller_payout` via `GET /jobs/offered?seller_id=X` | **Fixed**: seller taken from the token |
+| C4 | Full seller impersonation on accept and complete | **Fixed**: seller taken from the token |
 
-### High
+**High**
+
 | ID | Finding | Status |
-|----|---------|--------|
-| H1 | Quote double-consume (TOCTOU) → two jobs from one quote | **Fixed** — module lock; concurrency test |
-| H2 | Double-complete race → duplicate transaction | **Fixed** — locked status CAS; concurrency test |
-| H3 | Unknown adjuster name in a pipeline → 500 on every quote | **Fixed** — validated against `REGISTRY` at config time (422) |
-| H4 | Unbounded memory + no rate limit | **Partly fixed** — expired quotes swept on write, active-quote cap. Rate limiting deferred to the gateway (see ROADMAP) |
-| H5 | `margin_floor` accepted NaN/negative/unbounded | **Fixed** — validated `MarginFloorBody` (finite, bounded) |
+|---|---|---|
+| H1 | Quote double-consume (TOCTOU): two jobs from one quote | **Fixed**: first with a process lock, later replaced by a row lock on the quote |
+| H2 | Double-complete race: duplicate transaction | **Fixed**: locked status transition; concurrency test |
+| H3 | Unknown adjuster name in a pipeline: 500 on every quote | **Fixed**: validated against the registry at config time (422) |
+| H4 | Unbounded memory, no rate limit | **Partly fixed**: expired quotes are reaped and live quotes are capped. **Rate limiting is not in the app** (see residual risks) |
+| H5 | `margin_floor` accepted NaN, negative or unbounded values | **Fixed**: validated, finite and bounded |
 
-### Medium
+**Medium**
+
 | ID | Finding | Status |
-|----|---------|--------|
-| M1 | `inf` base prices passed `Field(gt=0)` | **Fixed** — `allow_inf_nan=False` |
-| M2 | `adjuster_params` unbounded → negative/inf prices | **Fixed** — clamped at read time (`pricing._bounded`) |
-| M3 | Floor enforced on unrounded values, booked on rounded | **Partly fixed** — round-then-check. Full `Decimal` migration deferred |
-| M4 | `available_for` iterated a live dict → 500 | **Fixed** — `list()` snapshot |
-| M5 | Rejection message + exact bump leaked min payout | **Fixed** — generic message; corrected price rounded up off the exact grid |
-| M6 | New-buyer-discount farming via rotating `buyer_id` | **Fixed** — buyer identity is authenticated |
-| M7 | No pagination on list endpoints | **Fixed** — `limit`/`offset` (capped) |
+|---|---|---|
+| M1 | Infinite base prices passed `Field(gt=0)` | **Fixed**: `allow_inf_nan=False` |
+| M2 | Unbounded `adjuster_params` could produce negative or infinite prices | **Fixed**: clamped when read |
+| M3 | Floor checked on unrounded values, booked on rounded ones | **Fixed**: round-then-check at first, then `Decimal` money throughout in the template build |
+| M4 | `available_for` iterated a live dict: 500 | **Fixed**: snapshot |
+| M5 | Rejection message and exact bump leaked the minimum payout | **Fixed**: generic message; corrected price rounded up off the exact grid |
+| M6 | New-buyer discount farmed by rotating `buyer_id` | **Fixed**: buyer identity is authenticated |
+| M7 | No pagination on list endpoints | **Fixed**: `limit`/`offset`, capped, applied in SQL |
 
-### Low / deferred
-- **L1** ID-length caps — **Fixed** (`max_length` on body/id fields).
-- **L2** `POST /jobs` bound no buyer — **Fixed** (quote ownership checked).
-- **L3** No CORS/TrustedHost/security-header middleware — **Fixed** —
-  `TrustedHostMiddleware`/`CORSMiddleware` wired, open by default
-  (`TRUSTED_HOSTS=["*"]`, `CORS_ORIGINS=[]`), narrowed via env vars in
-  production. See "Update — observability & ops".
-- **N1** A hand-crafted non-compliant JSON body (`NaN`/`Infinity`) is
-  correctly rejected (value never stored) but still surfaces as a 500 rather
-  than a clean 422 — **Mitigated**: the global error envelope (see "Update —
-  observability & ops") means that 500 is now a clean, request-id-bearing
-  body with no traceback leak, not a raw crash. A non-standard client is
-  still required to trigger it, and closing the gap to a clean 422 would
-  need transport-level JSON strictness, not app-level validation — left
-  open, low severity.
+**Low**
 
-## Confirmed sound (not re-touched)
-uuid4 IDs (unguessable) · no dynamic code execution from config (pure dict
-lookups) · view-model field separation (`BuyerJobView`/`SellerJobView`,
-`extra="forbid"`) — the old leaks were wrong-endpoint *access*, not field bleed ·
-dependencies current, no known CVEs.
+| ID | Finding | Status |
+|---|---|---|
+| L1 | No length caps on ids | **Fixed**: `max_length` on body and id fields |
+| L2 | `POST /jobs` bound no buyer | **Fixed**: quote ownership checked |
+| L3 | No CORS, trusted-host or security-header middleware | **Partly fixed**: `TrustedHostMiddleware` and `CORSMiddleware` are wired (open by default, narrowed by settings). **No security headers** are set (see residual risks) |
+| N1 | A non-standard JSON body (`NaN`/`Infinity`) is rejected but answers 500 rather than 422 | **Mitigated**: the 500 is the clean envelope with no traceback. Still open at low severity |
+
+### Live try-out findings (2026-07-16)
+
+Found by driving a running server after the suite and reviews were green;
+details in [`docs/tryout-findings-2026-07-16.md`](docs/tryout-findings-2026-07-16.md).
+
+| ID | Finding | Status |
+|---|---|---|
+| F1 | The seller's completion receipt used the admin ledger model, exposing the buyer price and margin | **Fixed**: seller-scoped receipt |
+| F2 | The session committed after the response was sent (read-your-writes race) | **Fixed**: `CommitRoute` commits before responding |
+| F2b | The idempotency record was stored after the response, so an immediate retry could execute twice | **Fixed**: record committed before the response is forwarded |
+| F3 | Documentation error in a dispute endpoint path | **Fixed** |
+| F4 | Creation endpoints disagreed on 200 vs 201 | **Fixed**: creating POSTs return 201 |
+| F5 | A cancel racing a complete could refund a completed job (stale read after a row lock) | **Fixed**: re-read under the lock |
+
+### Later fixes
+
+- **Forged webhooks without Stripe.** The fake provider's webhook accepted
+  unsigned events in any deployment without Stripe. Closed by default (see
+  [Payment webhooks](#payment-webhooks)).
+- **Webhook replay.** An audit of every payment-event branch for second and
+  late application fixed several cases where a retried or out-of-order event
+  could re-notify, overwrite newer state, flip a failed payout back to paid,
+  or book a lost chargeback twice.
+- **Late payment success.** A webhook success arriving after a cancel could
+  revive the payment; it is now ignored.
+
+## Confirmed sound
+
+uuid4 ids (unguessable) · no dynamic code execution from configuration
+(adjusters and strategies are looked up by name in a registry) · response
+model field separation: each view declares only its own fields and FastAPI
+serializes through the declared model, so extra attributes on the source
+object are dropped (the original leaks were access to the wrong endpoint,
+not fields bleeding between models). An earlier version of this document
+said the views used `extra="forbid"`; they don't, and the separation does
+not depend on it.

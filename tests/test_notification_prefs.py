@@ -49,6 +49,7 @@ def test_must_send_is_the_money_floor() -> None:
         EventKind.DISPUTE_RESOLVED_BUYER,
         EventKind.DISPUTE_RESOLVED_SELLER,
         EventKind.PAYOUT_FAILED_ADMIN,
+        EventKind.WEBHOOK_DEAD_LETTER_ADMIN,
     } == MUST_SEND
     assert set(KIND_ROLES) >= MUST_SEND
 
@@ -138,7 +139,7 @@ def test_get_defaults_and_role_scoping(
     seller_rows = client.get("/v1/notification-preferences", headers=auth("seller", "s1")).json()
     assert len(seller_rows) == 4
     admin_rows = client.get("/v1/notification-preferences", headers=admin).json()
-    assert len(admin_rows) == 5
+    assert len(admin_rows) == 6  # incl. the unmutable webhook dead-letter notice
 
 
 def test_put_replace_set_and_end_to_end_mute(

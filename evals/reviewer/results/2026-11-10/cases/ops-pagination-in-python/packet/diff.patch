@@ -1,0 +1,16 @@
+diff --git a/src/marketplace/services/common.py b/src/marketplace/services/common.py
+index f5b55f5..8affeb9 100644
+--- a/src/marketplace/services/common.py
++++ b/src/marketplace/services/common.py
+@@ -23,7 +23,7 @@ def require_active(session: Session, user_id: str) -> None:
+ 
+ 
+ def paginate[T](session: Session, stmt: Select[tuple[T]], limit: int, offset: int) -> list[T]:
+-    """LIMIT/OFFSET in SQL: list endpoints never load a whole table to return
+-    one page. `stmt` must carry a total order (a unique tie-breaker) or rows
+-    can repeat/skip across pages."""
+-    return list(session.scalars(stmt.limit(limit).offset(offset)).all())
++    """One page of an ordered statement. `stmt` must carry a total order (a
++    unique tie-breaker) or rows can repeat/skip across pages."""
++    rows = list(session.scalars(stmt).all())
++    return rows[offset : offset + limit]

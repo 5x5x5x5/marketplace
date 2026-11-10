@@ -23,6 +23,7 @@ os.environ.setdefault("NOTIFY_DRAIN_SECONDS", "1")  # fast maintenance-loop tick
 # fake provider onto the live API.
 os.environ.setdefault("STRIPE_SECRET_KEY", "")
 os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
+os.environ.setdefault("ALLOW_UNSIGNED_WEBHOOKS", "true")  # fake-provider webhooks
 
 import email_validator
 from fastapi.testclient import TestClient
@@ -308,11 +309,56 @@ def _run(c: TestClient) -> None:
         f"retention rows={stats['retention']}"
     )
 
+    # --- Act 9: browse catalog + pinned booking (chosen-seller quote -> job -> offer) ---
+    print("23. Carol lists a rideshare listing; the public catalog shows it with a price_from")
+    listing = c.post(
+        "/v1/seller/listings",
+        json={
+            "service_type_id": sid,
+            "title": "Carol's rides -- book directly",
+            "photo_urls": ["https://placehold.co/600x400"],
+        },
+        headers=carol,
+    ).json()
+    listing_id = listing["id"]
+
+    catalog = c.get("/v1/catalog/listings").json()  # unauthenticated: no headers
+    card = next(row for row in catalog if row["id"] == listing_id)
+    assert Decimal(card["price_from"]) > 0, card
+    print(f"   catalog price_from={card['price_from']}  seller={card['seller']['display_name']}")
+
+    print("   Alice pins her quote to Carol's listing; the job offers only to Carol")
+    pinned_quote = c.post("/v1/quotes", json={"listing_id": listing_id}, headers=alice).json()
+    assert pinned_quote["pinned_seller_id"] == carol_id, pinned_quote
+    pinned_job = c.post("/v1/jobs", json={"quote_id": pinned_quote["id"]}, headers=alice).json()
+    pinned_job_id = pinned_job["id"]
+    pinned_offers = [
+        o for o in c.get("/v1/seller/offers", headers=carol).json() if o["job_id"] == pinned_job_id
+    ]
+    assert len(pinned_offers) == 1 and pinned_offers[0]["seller_id"] == carol_id, pinned_offers
+    print(
+        f"   offer for this job went to seller_id={pinned_offers[0]['seller_id']}"
+        " (Carol, and only Carol)"
+    )
+
+    print("24. Carol accepts + completes the pinned job, then deactivates the listing")
+    c.post(f"/v1/seller/offers/{pinned_offers[0]['id']}/accept", headers=carol)
+    pinned_receipt = c.post(f"/v1/seller/jobs/{pinned_job_id}/complete", headers=carol).json()
+    print(f"   pinned job completed, seller payout = {pinned_receipt['seller_payout']}")
+
+    deactivated = c.put(
+        f"/v1/seller/listings/{listing_id}", json={"active": False}, headers=carol
+    ).json()
+    assert deactivated["active"] is False, deactivated
+    catalog_after = c.get("/v1/catalog/listings").json()
+    assert all(row["id"] != listing_id for row in catalog_after), catalog_after
+    print("   listing deactivated -> catalog no longer shows it")
+
     print(
         "\nAll asserts passed: onboarding ready, async accept resolved via webhook, "
         "payout paid, offer email loop-delivered, moderation loop closed, "
         "notification mute/unmute enforced at enqueue, margin reported net of provider fees, "
-        "ops snapshot live with request-id tracing."
+        "ops snapshot live with request-id tracing, browse catalog + pinned booking live."
     )
 
 

@@ -1,10 +1,11 @@
 """Real-user auth: mail port, signup/login/sessions, verify + reset flows."""
 
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
 from marketplace.mail import ConsoleEmailSender, RecordingEmailSender, get_mail_sender, use_sender
-from tests.conftest import TEST_PASSWORD, AuthFactory
+from tests.conftest import TEST_PASSWORD, AuthFactory, Header
 
 
 def test_mail_sender_swap_roundtrip() -> None:
@@ -262,7 +263,9 @@ def test_mail_outage_never_fails_or_fingerprints_requests(client: TestClient) ->
         use_sender(previous)
 
 
-def test_sweep_deletes_expired_sessions(client: TestClient, auth: AuthFactory) -> None:
+def test_sweep_deletes_expired_sessions(
+    client: TestClient, auth: AuthFactory, admin: Header
+) -> None:
     from datetime import UTC, datetime, timedelta
 
     from sqlalchemy import func, select
@@ -272,17 +275,20 @@ def test_sweep_deletes_expired_sessions(client: TestClient, auth: AuthFactory) -
 
     auth("buyer", "sweepy")  # its session becomes the expired one
     with SessionLocal() as s:
-        row = s.scalar(select(AuthSession))
+        row = s.scalar(select(AuthSession).where(AuthSession.user_id == "sweepy"))
         assert row is not None
         row.expires_at = datetime.now(UTC) - timedelta(hours=1)
         s.commit()
-    # An EXPIRED principal 401s during dependency resolution — the endpoint
-    # body (and its sweep) never runs. A different, live principal must
-    # trigger maintenance.
+    # Expired-row deletes are housekeeping: the maintenance loop and the
+    # admin sweep run them, read paths (e.g. a seller's offer poll) don't.
     live = auth("seller", "sweeper")
-    client.get("/v1/seller/offers", headers=live)  # list_offers calls _sweep
+    client.get("/v1/seller/offers", headers=live)
     with SessionLocal() as s:
-        assert s.scalar(select(func.count()).select_from(AuthSession)) == 1  # only the live one
+        assert s.scalar(select(func.count()).select_from(AuthSession)) == 3  # nothing reaped
+    assert client.post("/v1/admin/jobs/sweep", headers=admin).status_code == 200
+    with SessionLocal() as s:
+        # the seller's and the admin's live sessions remain
+        assert s.scalar(select(func.count()).select_from(AuthSession)) == 2
 
 
 def test_openapi_declares_bearer_security_scheme(client: TestClient) -> None:
@@ -304,3 +310,118 @@ def test_wrong_scheme_still_401s(client: TestClient, auth: AuthFactory) -> None:
     for header in (f"Token {token}", f"Basic {token}", token):
         r = client.get("/v1/auth/me", headers={"Authorization": header})
         assert r.status_code == 401, header
+
+
+# ---------- Cookie sessions (pages.py's POST /signup, /login, /logout) ----------
+
+
+def _signup_form(client: TestClient, role: str, email: str, name: str = "Kim") -> httpx2.Response:
+    return client.post(
+        "/signup",
+        data={"email": email, "password": TEST_PASSWORD, "role": role, "display_name": name},
+        follow_redirects=False,
+    )
+
+
+def _login_form(client: TestClient, role: str, email: str) -> httpx2.Response:
+    return client.post(
+        "/login",
+        data={"email": email, "password": TEST_PASSWORD, "role": role},
+        follow_redirects=False,
+    )
+
+
+def test_login_page_sets_cookie_with_expected_attributes(client: TestClient) -> None:
+    from marketplace.settings import settings as app_settings
+
+    _signup_form(client, "buyer", "cookie1@example.test")
+    r = _login_form(client, "buyer", "cookie1@example.test")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    set_cookie = r.headers["set-cookie"]
+    assert set_cookie.startswith("session_token=")
+    assert "HttpOnly" in set_cookie
+    assert "samesite=lax" in set_cookie.lower()  # case-insensitive per RFC 6265
+    assert "Path=/" in set_cookie
+    assert f"Max-Age={app_settings.session_ttl_hours * 3600}" in set_cookie
+    assert "Secure" not in set_cookie  # cookie_secure defaults False
+
+
+def test_login_page_cookie_secure_follows_settings(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from marketplace.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "cookie_secure", True)
+    _signup_form(client, "buyer", "cookie2@example.test")
+    r = _login_form(client, "buyer", "cookie2@example.test")
+    assert "Secure" in r.headers["set-cookie"]
+
+
+def test_cookie_only_request_reaches_auth_me(client: TestClient) -> None:
+    """The whole API surface, not just the pages — the fallback lives in
+    `_principal`, which every bearer-protected endpoint depends on."""
+    _signup_form(client, "buyer", "cookieme@example.test")
+    r = _login_form(client, "buyer", "cookieme@example.test")
+    token = r.cookies["session_token"]
+    me = client.get("/v1/auth/me", cookies={"session_token": token})
+    assert me.status_code == 200
+    assert me.json()["email"] == "cookieme@example.test"
+
+
+def test_header_beats_stale_cookie_of_different_user(client: TestClient, auth: AuthFactory) -> None:
+    _signup_form(client, "buyer", "cookiestale@example.test")
+    stale = _login_form(client, "buyer", "cookiestale@example.test").cookies["session_token"]
+    other = auth("seller", "other-seller")  # a different user's real bearer header
+    r = client.get("/v1/auth/me", cookies={"session_token": stale}, headers=other)
+    assert r.status_code == 200
+    assert r.json()["id"] == "other-seller"  # header identity wins, not the cookie's buyer
+
+
+def test_logout_page_deletes_row_and_clears_cookie(client: TestClient) -> None:
+    _signup_form(client, "buyer", "logoutme@example.test")
+    token = _login_form(client, "buyer", "logoutme@example.test").cookies["session_token"]
+    # The logout form carries the session-bound CSRF token (pages/csrf.py).
+    from marketplace.pages.csrf import token_for
+
+    r = client.post(
+        "/logout",
+        cookies={"session_token": token},
+        data={"csrf_token": token_for(token)},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    set_cookie = r.headers["set-cookie"]
+    assert "session_token=" in set_cookie
+    assert "Max-Age=0" in set_cookie or 'session_token=""' in set_cookie
+    # The row is gone server-side, not just the client-side cookie: replay
+    # the (deleted) token explicitly rather than trusting the clear.
+    me = client.get("/v1/auth/me", cookies={"session_token": token})
+    assert me.status_code == 401
+
+
+def test_signup_page_creates_user_and_sets_cookie(client: TestClient) -> None:
+    r = _signup_form(client, "buyer", "newsignup@example.test", name="New User")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    token = r.cookies["session_token"]
+    me = client.get("/v1/auth/me", cookies={"session_token": token})
+    assert me.status_code == 200
+    assert me.json()["display_name"] == "New User"
+
+
+def test_login_page_generic_error_identical_wrong_password_vs_unknown_user(
+    client: TestClient,
+) -> None:
+    _signup_form(client, "buyer", "realuser@example.test")
+    wrong_password = client.post(
+        "/login",
+        data={"email": "realuser@example.test", "password": "totally-wrong-pw", "role": "buyer"},
+    )
+    unknown_user = client.post(
+        "/login",
+        data={"email": "ghost-nobody@example.test", "password": TEST_PASSWORD, "role": "buyer"},
+    )
+    assert wrong_password.status_code == unknown_user.status_code == 401
+    assert wrong_password.text == unknown_user.text

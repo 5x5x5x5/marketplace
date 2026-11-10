@@ -1,0 +1,13 @@
+diff --git a/src/marketplace/matching.py b/src/marketplace/matching.py
+index 02e29f6..014ea59 100644
+--- a/src/marketplace/matching.py
++++ b/src/marketplace/matching.py
+@@ -81,7 +81,7 @@ def _priced(
+     out: list[tuple[Candidate, Decimal]] = []
+     for c in candidates:
+         payout = seller_payout_for(c, cfg, supply, demand)
+-        if passes_floor(buyer_price, payout, cfg.margin_floor, cfg.fees):
++        if buyer_price - payout >= effective_floor(buyer_price, cfg.margin_floor):
+             out.append((c, payout))
+     return out
+ 

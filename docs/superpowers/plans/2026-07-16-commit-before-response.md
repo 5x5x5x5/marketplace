@@ -18,7 +18,7 @@
 - TDD binding and audited: failing tests first, RUN them, quote red output in the report.
 - **The wrapper commit MUST go through `run_in_threadpool`** — a bare `session.commit()` in async code puts every write's commit on the event loop (the exact class the webhook offload fixed). Binding constraint.
 - **Do NOT touch money-path locking** — F5's `populate_existing` fixes and all `with_for_update` code are out of scope; the existing PG race tests must pass unmodified.
-- Commit trailer: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks in double-quoted `git commit -m`. Commit ONLY listed files.
+- Commit trailer: `Co-Authored-By: <agent attribution trailer>`. No backticks in double-quoted `git commit -m`. Commit ONLY listed files.
 - Postgres: `postgresql+psycopg://marketplace:marketplace@localhost:5432/marketplace` (`docker compose up -d db`; `sg docker -c "..."` fallback).
 - Branch `fix-commit-ordering` already exists with the spec committed — work there.
 - NOTE: a dev server may be running on port 8000 from the try-out session; never bind it. The live fixture uses an ephemeral port.

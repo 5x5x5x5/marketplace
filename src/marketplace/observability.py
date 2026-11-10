@@ -22,6 +22,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -140,6 +141,18 @@ class RequestIdMiddleware:
 
         try:
             await self.app(scope, receive, send_with_header)
+        except PoolTimeoutError:
+            # Connection pool exhausted past DB_POOL_TIMEOUT_SECONDS: this is
+            # overload, not a bug — tell the client to back off and retry.
+            error_logger.warning("db pool exhausted on %s %s", method, path)
+            status = 503
+            if not started:
+                response = JSONResponse(
+                    {"detail": "server busy, retry shortly", "request_id": rid},
+                    status_code=503,
+                    headers={"x-request-id": rid, "retry-after": "1"},
+                )
+                await response(scope, receive, send)
         except Exception:
             error_logger.exception("unhandled error on %s %s", method, path)
             status = 500

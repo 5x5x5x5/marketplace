@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 CENTS = Decimal("0.01")
 
@@ -71,8 +71,20 @@ class PayoutStatus(StrEnum):
     FAILED = "failed"  # transfer rejected/errored; admin retries via /v1/admin/payouts/{id}/retry
 
 
+class WebhookEventStatus(StrEnum):
+    """Webhook outbox row state. APPLIED covers events recorded but ignored
+    (unknown kinds/ids) too. FAILED is owed a retry (the maintenance loop's
+    retry job owns it; retention never reaps it). DEAD_LETTER is terminal
+    after `webhook_max_attempts`: admins were notified, and an operator can
+    re-queue it via POST /v1/admin/webhooks/{id}/retry."""
+
+    APPLIED = "applied"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
 class EventKind(StrEnum):
-    OFFER_RECEIVED = "offer_received"  # seller: the 2-minute clock is ticking
+    OFFER_RECEIVED = "offer_received"  # seller: the offer TTL clock is ticking
     JOB_ACCEPTED_BUYER = "job_accepted_buyer"
     JOB_COMPLETED_BUYER = "job_completed_buyer"
     JOB_EXPIRED_BUYER = "job_expired_buyer"
@@ -86,6 +98,7 @@ class EventKind(StrEnum):
     CHARGEBACK_OPENED_ADMIN = "chargeback_opened_admin"
     CHARGEBACK_CLOSED_ADMIN = "chargeback_closed_admin"
     REPORT_OPENED_ADMIN = "report_opened_admin"
+    WEBHOOK_DEAD_LETTER_ADMIN = "webhook_dead_letter_admin"
 
 
 class NotificationStatus(StrEnum):
@@ -142,6 +155,8 @@ class QuoteOut(BaseModel):
     buyer_price: Decimal
     created_at: datetime
     expires_at: datetime
+    listing_id: UUID | None
+    pinned_seller_id: str | None
 
 
 class BuyerJobView(BaseModel):
@@ -155,6 +170,7 @@ class BuyerJobView(BaseModel):
     service_type_id: str
     buyer_price: Decimal
     seller_id: str | None
+    pinned_seller_id: str | None = None  # the seller the buyer chose from a listing
     status: JobStatus
     created_at: datetime
     accepted_at: datetime | None
@@ -215,6 +231,89 @@ class SellerCompletionOut(BaseModel):
     job_id: UUID
     seller_payout: Decimal
     completed_at: datetime
+
+
+class ListingCreate(BaseModel):
+    service_type_id: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    photo_urls: list[str] = Field(default_factory=list[str], max_length=12)
+
+    @field_validator("photo_urls")
+    @classmethod
+    def _https_only(cls, v: list[str]) -> list[str]:
+        for url in v:
+            if not url.startswith("https://") or len(url) > 512:
+                raise ValueError("photo_urls must be https:// and at most 512 chars")
+        return v
+
+
+class ListingUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=4000)
+    photo_urls: list[str] | None = Field(default=None, max_length=12)
+    active: bool | None = None
+
+    @field_validator("photo_urls")
+    @classmethod
+    def _https_only(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return v
+        for url in v:
+            if not url.startswith("https://") or len(url) > 512:
+                raise ValueError("photo_urls must be https:// and at most 512 chars")
+        return v
+
+
+class SellerListingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    service_type_id: str
+    title: str
+    description: str
+    photo_urls: list[str]
+    active: bool
+    hidden: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class CatalogSellerOut(BaseModel):
+    """Public seller summary attached to a catalog listing. No `tier`,
+    `capacity`, `payments_ready`, or email — asymmetry doctrine extends to
+    unauthenticated browse, not just buyer/seller views."""
+
+    seller_id: str
+    display_name: str
+    rating: float | None
+    rating_count: int
+
+
+class CatalogListingOut(BaseModel):
+    """Public listing card. `price_from` is indicative only — the buyer
+    pipeline evaluated now, pre-floor; a real quote may bump it upward
+    (see `api._indicative_buyer_price`). No `seller_payout`/`margin`."""
+
+    id: UUID
+    title: str
+    description: str
+    photo_urls: list[str]
+    service_type_id: str
+    price_from: Decimal  # indicative: the buyer pipeline now; a real quote may bump upward
+    seller: CatalogSellerOut
+
+
+class CatalogSellerProfileOut(BaseModel):
+    """Public seller profile: aggregate stats + their currently visible
+    listings. No `capacity`/`payments_ready`/`tier`/email."""
+
+    seller_id: str
+    display_name: str
+    rating: float | None
+    rating_count: int
+    completed_jobs: int
+    listings: list[CatalogListingOut]
 
 
 class PayoutOut(BaseModel):
@@ -387,6 +486,7 @@ class SellerProfileOut(BaseModel):
     rating: float | None
     rating_count: int
     completed_jobs: int
+    payments_ready: bool  # the seller's own onboarding state; never on a public view
 
 
 class BuyerProfileOut(BaseModel):
@@ -429,6 +529,39 @@ class NotificationOut(BaseModel):
     last_error: str | None
     created_at: datetime
     sent_at: datetime | None
+
+
+class WebhookPayloadOut(BaseModel):
+    """The parsed provider event fields stored for replay — exactly the
+    `PaymentEvent` shape. Declared field by field so nothing else stored on
+    the row could ever ride along."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    event_id: str
+    kind: str
+    object_id: str
+    payments_ready: bool | None = None
+    amount_minor: int | None = None
+    outcome: str | None = None
+    related_id: str | None = None
+
+
+class WebhookEventOut(BaseModel):
+    """Admin view of a webhook outbox row."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    provider_event_id: str
+    kind: str
+    object_id: str | None
+    status: WebhookEventStatus
+    attempts: int
+    last_error: str | None
+    received_at: datetime
+    next_attempt_at: datetime | None
+    payload: WebhookPayloadOut | None
 
 
 class AuditOut(BaseModel):
@@ -523,7 +656,8 @@ class ResetConfirmRequest(BaseModel):
 
 
 class QuoteRequest(BaseModel):
-    service_type_id: str = Field(min_length=1, max_length=128)
+    service_type_id: str | None = Field(default=None, min_length=1, max_length=128)
+    listing_id: UUID | None = None
 
 
 class JobCreateRequest(BaseModel):

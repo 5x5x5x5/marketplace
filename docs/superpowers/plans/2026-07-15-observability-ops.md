@@ -17,7 +17,7 @@
 - Pyright strict 0 errors across `src/` and `tests/`. `LogRecord` extras via `setattr`/`getattr`, not attribute access, to stay strict-clean.
 - **PostToolUse formatter strips not-yet-used imports** — add an import and its first use in the SAME edit.
 - TDD is binding and audited: failing tests first, RUN them, quote red output in the report.
-- Commit trailer: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. No backticks in double-quoted `git commit -m`.
+- Commit trailer: `Co-Authored-By: <agent attribution trailer>`. No backticks in double-quoted `git commit -m`.
 - Commit ONLY listed files — never `git add -A`.
 - Postgres: `docker compose up -d db` (container `marketplace-db-1`; `sg docker -c "..."` fallback). URL `postgresql+psycopg://marketplace:marketplace@localhost:5432/marketplace`.
 - **Access-log lines never carry headers, bodies, or query strings** (tokens/reset-tokens live there) — method, path, status, duration_ms, request_id only. Security boundary.

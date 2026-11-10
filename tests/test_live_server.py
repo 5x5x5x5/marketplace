@@ -12,7 +12,38 @@ import uvicorn
 from fastapi.testclient import TestClient
 
 from marketplace import api
-from tests.conftest import AuthFactory
+from tests.conftest import TEST_PASSWORD, AuthFactory
+
+
+def test_cookie_only_auth_over_socket(live_server: str) -> None:
+    """I3: every existing cookie test is TestClient-only — the exact blind
+    spot that hid F2 (a real socket exposes response-vs-commit ordering that
+    TestClient's synchronous dependency teardown cannot). Signup over a real
+    socket, keep ONLY the Set-Cookie session token (no Authorization header
+    anywhere), and use it from a *second*, otherwise-empty client to prove
+    the session row is durable and independently resolvable — not an
+    artifact of the same in-process client that created it. This proves
+    CommitRoute commits the session row before the 303's cookie reaches the
+    wire over a real socket."""
+    with httpx.Client(base_url=live_server, timeout=10) as signup_client:
+        r = signup_client.post(
+            "/signup",
+            data={
+                "email": "socket-cookie@example.test",
+                "password": TEST_PASSWORD,
+                "role": "buyer",
+                "display_name": "Socket Cookie",
+            },
+            follow_redirects=False,
+        )
+        assert r.status_code == 303, r.text
+        session_token = r.cookies["session_token"]
+
+    with httpx.Client(base_url=live_server, timeout=10) as fresh_client:
+        me = fresh_client.get("/v1/auth/me", cookies={"session_token": session_token})
+    assert me.status_code == 200, me.text
+    assert me.json()["email"] == "socket-cookie@example.test"
+    assert me.json()["display_name"] == "Socket Cookie"
 
 
 def _start_second_server() -> tuple[str, uvicorn.Server, threading.Thread]:

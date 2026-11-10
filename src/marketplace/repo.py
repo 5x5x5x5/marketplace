@@ -2,11 +2,12 @@
 
 Plain functions (no repository interface — one implementation). They load the
 pure `PricingConfig`/`Candidate` snapshots the pricing core needs, and answer the
-counting queries the lifecycle needs. Counts are simple per-row where clarity
-beats a join; fine at pilot scale (ponytail: revisit if a service type ever has
-thousands of live sellers).
+counting queries the lifecycle needs. Loads that run per candidate seller are
+batched (a fixed number of queries per call, not one per seller) because they
+sit on the quote and re-match paths.
 """
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -125,42 +126,87 @@ def active_job_count(session: Session, seller_id: str) -> int:
     return n or 0
 
 
+def active_job_counts(session: Session, seller_ids: list[str]) -> dict[str, int]:
+    """`active_job_count` for many sellers in one grouped query (absent = 0)."""
+    if not seller_ids:
+        return {}
+    rows = session.execute(
+        select(Job.seller_id, func.count())
+        .where(
+            Job.seller_id.in_(seller_ids),
+            Job.status.in_([JobStatus.ACCEPTED, JobStatus.AWAITING_PAYMENT]),
+        )
+        .group_by(Job.seller_id)
+    ).all()
+    return {seller_id: int(n) for seller_id, n in rows if seller_id is not None}
+
+
 def eligible_candidates(
     session: Session, service_type_id: str, exclude: set[str]
 ) -> list[Candidate]:
-    """Available sellers with spare capacity, minus `exclude` (already offered/declined)."""
-    avails = session.scalars(
-        select(Availability).where(Availability.service_type_id == service_type_id)
+    """Available sellers with spare capacity, minus `exclude` (already offered/declined).
+
+    A fixed number of queries however many sellers are available: one for
+    availability joined to payments-ready profiles, one for suspensions, one
+    grouped count for current load. A seller with no profile can't have been
+    onboarded, so the inner join drops them exactly as `payments_ready` would."""
+    rows = session.execute(
+        select(Availability, SellerProfile)
+        .join(SellerProfile, SellerProfile.id == Availability.seller_id)
+        .where(
+            Availability.service_type_id == service_type_id,
+            SellerProfile.payments_ready.is_(True),  # can't be paid -> can't be offered work
+        )
+        .order_by(Availability.since, Availability.seller_id)
     ).all()
-    if not avails:
+    rows = [(a, prof) for a, prof in rows if a.seller_id not in exclude]
+    if not rows:
         return []
+    ids = [a.seller_id for a, _ in rows]
     suspended = set(
         session.scalars(
-            select(User.id).where(
-                User.id.in_([a.seller_id for a in avails]),
-                User.status == UserStatus.SUSPENDED,
-            )
+            select(User.id).where(User.id.in_(ids), User.status == UserStatus.SUSPENDED)
         ).all()
     )
+    loads = active_job_counts(session, ids)
     out: list[Candidate] = []
-    for a in avails:
-        if a.seller_id in exclude or a.seller_id in suspended:
+    for a, prof in rows:
+        if a.seller_id in suspended:
             continue
-        prof = get_or_create_seller(session, a.seller_id)
-        if not prof.payments_ready:
-            continue  # can't be paid → can't be offered work
         cand = Candidate(
             seller_id=a.seller_id,
             tier=prof.tier,
             rating=prof.rating,
             completed_jobs=prof.completed_jobs,
             available_since=a.since,
-            active_jobs=active_job_count(session, a.seller_id),
+            active_jobs=loads.get(a.seller_id, 0),
             capacity=prof.capacity,
         )
         if cand.has_capacity:
             out.append(cand)
     return out
+
+
+def candidate_for_seller(session: Session, seller_id: str) -> Candidate | None:
+    """Build a `Candidate` for one specific seller, regardless of availability.
+
+    The pinned floor probe (and pinned offer creation) need this seller's
+    payout math even when the question isn't "is anyone available" but "is
+    THIS seller available" — that's checked separately, by the caller, via
+    `Availability`/`_listing_bookable`. Returns None if the seller has no
+    profile (mirrors `eligible_candidates`'s Candidate construction)."""
+    prof = session.get(SellerProfile, seller_id)
+    if prof is None:
+        return None
+    return Candidate(
+        seller_id=seller_id,
+        tier=prof.tier,
+        rating=prof.rating,
+        completed_jobs=prof.completed_jobs,
+        available_since=datetime.now(UTC),
+        active_jobs=active_job_count(session, seller_id),
+        capacity=prof.capacity,
+    )
 
 
 def sellers_seen_for_job(session: Session, job_id: UUID) -> set[str]:

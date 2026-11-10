@@ -1,0 +1,44 @@
+Review the commit at HEAD in this repository (diff range `main...HEAD`, one commit).
+
+Commit message:
+
+> Derive the payout retry key from the job like every other key
+>
+> Outbound keys are derived from the job id so a retry replays the original
+> operation. retry_payout was the one call site minting a second key shape.
+
+The diff follows. Read the touched code in full in its files, as your instructions say, and report in your standard output format.
+
+```diff
+diff --git a/src/marketplace/services/payouts.py b/src/marketplace/services/payouts.py
+index ff01c83..c80623a 100644
+--- a/src/marketplace/services/payouts.py
++++ b/src/marketplace/services/payouts.py
+@@ -66,23 +66,15 @@ def retry_payout(
+     seller = session.get(SellerProfile, payout.seller_id)
+     if seller is None or seller.provider_account_id is None:
+         raise ConflictError("seller has no payment account yet")
+-    # If no transfer was ever created (plain outage), replaying the original key
+-    # is the safe retry — it can never double-pay. But if a transfer WAS created
+-    # and later reversed (transfer.reversed → FAILED), replaying that key would
+-    # return the same reversed transfer and record PAID with no money moved, so
+-    # the retry must force a new transfer under a fresh key.
+-    retry_key = (
+-        f"transfer:{payout.job_id}"
+-        if payout.provider_transfer_id is None
+-        else f"transfer:{payout.job_id}:retry:{payout.provider_transfer_id}"
+-    )
++    # Same key as the original transfer: a retry replays rather than
++    # double-paying.
+     try:
+         transfer = provider.transfer_to_seller(
+             provider_account_id=seller.provider_account_id,
+             amount=payout.amount,
+             currency=payout.currency,
+             job_id=str(payout.job_id),
+-            idempotency_key=retry_key,
++            idempotency_key=f"transfer:{payout.job_id}",
+         )
+     except PaymentError as exc:
+         logger.warning("transfer retry failed for payout %s: %s", payout_id, exc)
+```

@@ -41,13 +41,16 @@ _EVENT_KINDS = {
 class StripeProvider:
     name = "stripe"
 
-    def __init__(self, secret_key: str, webhook_secret: str) -> None:
+    def __init__(self, secret_key: str, webhook_secret: str, publishable_key: str = "") -> None:
         # An empty secret would make construct_event compute HMACs with an empty
         # key — forged webhooks would pass "verification". Fail fast instead.
         if not webhook_secret:
             raise RuntimeError("STRIPE_WEBHOOK_SECRET is required when STRIPE_SECRET_KEY is set")
         self._client = stripe.StripeClient(secret_key)
         self._webhook_secret = webhook_secret
+        # Public by design: Stripe.js in the buyer's browser needs it to
+        # mount the Payment Element on a PaymentIntent's client secret.
+        self.browser_key: str | None = publishable_key or None
 
     def create_seller_account(self, seller_id: str, *, idempotency_key: str) -> AccountResult:
         try:

@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Important at _notify_cancelled: one snapshot dict is enqueued for both roles, so 'the seller's row stores the buyer price ... the buyer's row stores the seller payout'. Names which amount reaches which party."
+    }
+  ]
+}

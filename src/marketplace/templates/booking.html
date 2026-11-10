@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "_macros.html" import when %}
+
+{% block title %}Booking — Marketplace{% endblock %}
+
+{% block head %}
+{% if browser_key %}
+<script src="https://js.stripe.com/endive/stripe.js"></script>
+<script src="/static/payment.js" defer></script>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <p class="panel-kicker"><a href="/bookings">My bookings</a></p>
+  <h1>Booking{% if seller %} with {{ seller.display_name }}{% endif %}</h1>
+  <div
+    id="booking-status"
+    aria-live="polite"
+    {% if live %}hx-get="/bookings/{{ job.id }}/status?shown={{ job.status.value }}" hx-trigger="every 4s" hx-swap="innerHTML"{% endif %}
+  >
+    {% include "_booking_status.html" %}
+  </div>
+
+  <dl class="facts">
+    <dt>Price</dt>
+    <dd>${{ job.buyer_price }}</dd>
+    <dt>Service</dt>
+    <dd>{{ job.service_type_id }}</dd>
+    <dt>Booked</dt>
+    <dd>{{ when(job.created_at) }}</dd>
+    {% if job.completed_at %}
+    <dt>Completed</dt>
+    <dd>{{ when(job.completed_at) }}</dd>
+    {% endif %}
+    <dt>Reference</dt>
+    <dd class="mono">{{ job.id }}</dd>
+  </dl>
+
+  {% if payment_pending %}
+  <section class="payment">
+    <h2>Payment</h2>
+    {% if browser_key %}
+    <form
+      id="payment-form"
+      data-publishable-key="{{ browser_key }}"
+      data-client-secret="{{ client_secret }}"
+      data-return-url="{{ return_url }}"
+    >
+      <div id="payment-element"></div>
+      <button id="payment-submit" type="submit" class="button">Pay ${{ job.buyer_price }}</button>
+      <p id="payment-message" class="form-error" role="alert"></p>
+    </form>
+    {% else %}
+    <p>Your payment is being confirmed by the payment provider. This page updates by itself.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <div class="actions">
+    {% if can_cancel %}
+    <form method="post" action="/bookings/{{ job.id }}/cancel">
+      {% include "_csrf.html" %}
+      <button type="submit" class="button button-secondary">Cancel booking</button>
+    </form>
+    {% endif %}
+    {% if live %}<a href="/bookings/{{ job.id }}">Refresh status</a>{% endif %}
+  </div>
+</section>
+{% endblock %}

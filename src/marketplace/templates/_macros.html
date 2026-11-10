@@ -1,0 +1,15 @@
+{% macro status_label(status) -%}
+{%- set s = status.value if status.value is defined else status -%}
+{%- if s == "pending" -%}Waiting for the seller
+{%- elif s == "awaiting_payment" -%}Awaiting payment
+{%- elif s == "accepted" -%}Confirmed
+{%- elif s == "completed" -%}Completed
+{%- elif s == "expired" -%}Expired
+{%- elif s == "cancelled" -%}Cancelled
+{%- elif s == "offered" -%}Open
+{%- elif s == "declined" -%}Declined
+{%- else -%}{{ s }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro when(dt) -%}{{ dt.strftime("%d %b %Y, %H:%M UTC") }}{%- endmacro %}

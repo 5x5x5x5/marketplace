@@ -1,0 +1,51 @@
+id = "money-a1-cancel-blocking-offer-lock"
+kind = "bug"
+class = "money-path/lock-order"
+origin = "A1 (docs/money-path-audit-2026-11.md). Fixed in 7287d30 'Skip offers locked by accept/decline/sweep when a cancel expires them'."
+synthetic = false
+invariant = "Canonical lock order Offer -> SellerProfile -> Job; a path already holding the Job lock claims Offer rows FOR UPDATE SKIP LOCKED, never a blocking lock."
+location = "src/marketplace/services/offers.py: expire_open_offers (called by cancel_job and admin_cancel_job)"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Expire every open offer when a job is cancelled
+
+SKIP LOCKED could leave an offer OFFERED on a cancelled job until the TTL
+sweep caught it, and sellers kept seeing it in their offer list. Wait for
+the row instead so a cancel always closes all of the job's offers.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at expire_open_offers / the cancel
+paths stating that cancel holds the Job lock and now blocks on an Offer lock,
+while accept_offer (or decline, or the offer-expiry sweep) holds that Offer
+and waits for the Job: an inverted lock order that deadlocks on Postgres
+(one side killed, 500).
+PARTIAL: flags a lock-order or deadlock risk without naming the opposing path
+or the Job-then-Offer inversion, or names it only at Minor severity.
+MISSED: anything else.
+'''
+
+[[edits]]
+file = "src/marketplace/services/offers.py"
+old = '''
+    # Callers already hold the Job lock, and accept/decline/the offer sweep
+    # lock Offer -> Job: waiting here for an offer one of them holds is a
+    # deadlock. SKIP LOCKED leaves that offer to its holder, which finds the
+    # job no longer PENDING once we commit (accept 409s, decline and the
+    # sweep do not re-match).
+    for offer in session.scalars(
+        select(Offer)
+        .where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+        .with_for_update(skip_locked=True)
+    ).all():
+'''
+new = '''
+    # Every open offer on a cancelled job must end EXPIRED; skipping a locked
+    # one would leave it OFFERED until its TTL.
+    for offer in session.scalars(
+        select(Offer)
+        .where(Offer.job_id == job_id, Offer.status == OfferStatus.OFFERED)
+        .with_for_update()
+    ).all():
+'''

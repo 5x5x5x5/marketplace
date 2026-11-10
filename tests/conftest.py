@@ -15,6 +15,9 @@ os.environ.setdefault("DATABASE_URL", f"sqlite+pysqlite:///{tempfile.mkdtemp()}/
 # fake provider onto the live API.
 os.environ.setdefault("STRIPE_SECRET_KEY", "")
 os.environ.setdefault("STRIPE_WEBHOOK_SECRET", "")
+os.environ.setdefault("STRIPE_PUBLISHABLE_KEY", "")
+os.environ.setdefault("FAKE_CHARGES_PENDING", "false")  # tests script pending charges per call
+os.environ.setdefault("ALLOW_UNSIGNED_WEBHOOKS", "true")  # fake-provider webhooks
 os.environ.setdefault("SMTP_HOST", "")  # the suite must never send real mail
 
 import socket

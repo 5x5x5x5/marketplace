@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "clean",
+      "rationale": "'No findings.' The added ordering changes no lock, guard or provider call."
+    }
+  ]
+}

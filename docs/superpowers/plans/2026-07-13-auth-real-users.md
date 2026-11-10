@@ -16,7 +16,7 @@
 - Gate after every task: `uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest -q` — all green, pyright **strict**.
 - **Never gate a commit/merge on a piped test command** (`pytest | tail` returns tail's exit code). Run the gate bare, or check `$?` explicitly.
 - The PostToolUse formatter deletes not-yet-used imports. Add an import in the same edit as the code that uses it; if an import vanishes, re-add it after the usage lands.
-- No backticks in double-quoted `git commit -m`. Stage exact paths, never `git add -A`. End commit messages with: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
+- No backticks in double-quoted `git commit -m`. Stage exact paths, never `git add -A`. End commit messages with: `Co-Authored-By: <agent attribution trailer>`
 - Identity comes from the authenticated principal, never a request body.
 - ORM entities never leave the API layer (Pydantic views only).
 - The pricing/matching core (`pricing.py`, `matching.py`, `config.py`) and all payments code paths stay untouched except where this plan names them.
@@ -154,7 +154,7 @@ Run: `uv run ruff check . && uv run ruff format --check . && uv run pyright && u
 git add src/marketplace/mail.py src/marketplace/settings.py tests/test_auth.py pyproject.toml uv.lock
 git commit -m "Add outbound-email port and auth settings
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -279,7 +279,7 @@ Run: `uv run ruff check . && uv run ruff format --check . && uv run pyright && u
 git add src/marketplace/models.py src/marketplace/entities.py migrations/versions/ tests/test_auth.py
 git commit -m "Add User, AuthSession, EmailToken entities and migration
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -572,7 +572,7 @@ git commit -m "Swap the trust path: DB-backed sessions replace pilot HMAC tokens
 mint_token, HMAC verify, and MARKETPLACE_SECRET are deleted. The
 principal seam kept its signatures, so no endpoint changed.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -843,7 +843,7 @@ Run: `uv run ruff check . && uv run ruff format --check . && uv run pyright && u
 git add src/marketplace/models.py src/marketplace/auth.py src/marketplace/api.py tests/test_auth.py
 git commit -m "Add signup, login, logout, me endpoints and admin bootstrap
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1122,7 +1122,7 @@ git commit -m "Add email verification and password reset over the mail port
 Reset revokes every session; reset requests never confirm account
 existence; expired sessions and tokens fall to the lazy sweep.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---
@@ -1189,7 +1189,7 @@ Expected: gate green; demo exit 0; three migrations apply from scratch; the grep
 git add scripts/demo.py .env.example README.md CLAUDE.md SECURITY.md ROADMAP.md
 git commit -m "Document real-user auth: demo signup flows, env, security model
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: <agent attribution trailer>"
 ```
 
 ---

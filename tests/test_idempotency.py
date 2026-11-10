@@ -127,6 +127,120 @@ def test_auth_paths_never_stored_even_with_key_and_bearer(client: TestClient) ->
     assert again.json()["token"] != login_token
 
 
+def _signup_cookie(client: TestClient, email: str, headers: Header | None = None) -> str:
+    r = client.post(
+        "/signup",
+        data={
+            "email": email,
+            "password": TEST_PASSWORD,
+            "role": "buyer",
+            "display_name": "Cookie Buyer",
+        },
+        headers=headers or {},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    return r.cookies["session_token"]
+
+
+def test_cookie_only_post_is_idempotent(client: TestClient, basic_service: str) -> None:
+    """I1: peek_principal must resolve the session_token cookie too, not just
+    the Authorization header — a cookie-only POST with an Idempotency-Key
+    must replay the same quote on a retry, not re-execute (Phase 3's booking
+    forms are cookie+key)."""
+    token = _signup_cookie(client, "idem-cookie@example.test")
+    key = {"Idempotency-Key": "cookie-quote-key"}
+    r1 = client.post(
+        "/v1/quotes",
+        json={"service_type_id": basic_service},
+        cookies={"session_token": token},
+        headers=key,
+    )
+    r2 = client.post(
+        "/v1/quotes",
+        json={"service_type_id": basic_service},
+        cookies={"session_token": token},
+        headers=key,
+    )
+    assert r1.status_code == r2.status_code == 201, (r1.text, r2.text)
+    assert r1.json()["id"] == r2.json()["id"]  # replayed, not re-executed
+
+
+def test_header_principal_wins_over_cookie_for_idempotency_storage(
+    client: TestClient, basic_service: str, auth: AuthFactory
+) -> None:
+    """A request carrying both a valid header and a valid (different-user)
+    cookie must store under the HEADER principal — same header-first order
+    as auth._resolve_principal, not a new resolution rule."""
+    cookie_token = _signup_cookie(client, "idem-cookie-2@example.test")
+    header = auth("buyer", "alice") | {"Idempotency-Key": "header-wins-key"}
+    r = client.post(
+        "/v1/quotes",
+        json={"service_type_id": basic_service},
+        cookies={"session_token": cookie_token},
+        headers=header,
+    )
+    assert r.status_code == 201, r.text
+    with SessionLocal() as s:
+        row = s.scalar(select(IdempotencyRecord).where(IdempotencyRecord.key == "header-wins-key"))
+    assert row is not None
+    assert row.principal == "buyer:alice"  # header identity, not the cookie's
+
+
+def test_page_signup_never_stored_even_with_bearer_and_key(
+    client: TestClient, auth: AuthFactory
+) -> None:
+    """I2: /signup (pages.py) issues a raw session token via Set-Cookie and a
+    303 redirect; a stored replay would omit both, breaking the redirect. It
+    must never be captured — even with a stray Authorization header attached
+    (mirrors test_auth_paths_never_stored_even_with_key_and_bearer for
+    /v1/auth/*)."""
+    stray_bearer = auth("buyer", "alice")
+    r = client.post(
+        "/signup",
+        data={
+            "email": "page-idem-signup@example.test",
+            "password": TEST_PASSWORD,
+            "role": "buyer",
+            "display_name": "Page Idem",
+        },
+        headers=stray_bearer | {"Idempotency-Key": "page-signup-key"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    with SessionLocal() as s:
+        rows = s.scalars(select(IdempotencyRecord)).all()
+    assert all(row.path != "/signup" for row in rows)
+
+
+def test_page_login_never_stored_even_with_key(client: TestClient) -> None:
+    """I2: /login (pages.py) likewise must never be captured."""
+    client.post(
+        "/signup",
+        data={
+            "email": "page-idem-login@example.test",
+            "password": TEST_PASSWORD,
+            "role": "buyer",
+            "display_name": "Page Idem Login",
+        },
+        follow_redirects=False,
+    )
+    r = client.post(
+        "/login",
+        data={
+            "email": "page-idem-login@example.test",
+            "password": TEST_PASSWORD,
+            "role": "buyer",
+        },
+        headers={"Idempotency-Key": "page-login-key"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303, r.text
+    with SessionLocal() as s:
+        rows = s.scalars(select(IdempotencyRecord)).all()
+    assert all(row.path != "/login" for row in rows)
+
+
 def test_store_failure_never_fails_a_committed_operation(
     client: TestClient,
     basic_service: str,
@@ -157,3 +271,38 @@ def test_store_failure_never_fails_a_committed_operation(
         )
     assert r.status_code == 201, r.text  # the job was created and committed
     assert any("idempotency store failed" in rec.getMessage() for rec in caplog.records)
+
+
+def test_page_posts_are_exempt_by_router_membership() -> None:
+    """Every POST route of the pages router answers with a redirect or HTML,
+    which the JSON replay store cannot represent; the exemption is decided by
+    router membership, so a JSON route is never exempt by accident."""
+    from marketplace.pages import is_page_post
+
+    for path in ("/signup", "/login", "/logout"):
+        assert is_page_post(path), path
+    for path in ("/v1/jobs", "/v1/quotes", "/", "/listings/x"):
+        assert not is_page_post(path), path
+
+
+def test_page_post_with_an_idempotency_key_stores_no_record(
+    client: TestClient, basic_service: str
+) -> None:
+    """End to end: a cookie-session buyer posts a page form carrying the header.
+    The page answers 303, which a stored replay could not reproduce, so nothing
+    may be captured, however the exemption is decided."""
+    from tests.page_helpers import csrf_of
+    from tests.test_pages import _market  # pyright: ignore[reportPrivateUsage]
+
+    _, buyer, lid, _ = _market(basic_service, "Rides")
+    with SessionLocal() as s:  # the market setup itself posted no keyed request
+        assert s.scalar(select(func.count()).select_from(IdempotencyRecord)) == 0
+    r = buyer.post(
+        f"/listings/{lid}/quote",
+        data={"csrf_token": csrf_of(buyer, f"/listings/{lid}")},
+        headers={"Idempotency-Key": "page-quote-1"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and r.headers["location"].startswith("/quotes/")
+    with SessionLocal() as s:
+        assert s.scalar(select(func.count()).select_from(IdempotencyRecord)) == 0

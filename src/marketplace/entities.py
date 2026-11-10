@@ -17,6 +17,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -45,6 +46,7 @@ from .models import (
     ReportTargetKind,
     UserRole,
     UserStatus,
+    WebhookEventStatus,
 )
 
 
@@ -138,6 +140,26 @@ class SellerProfile(Base):
         return (self.rating_sum / self.rating_count) if self.rating_count else None
 
 
+class Listing(Base):
+    """A seller's public offering of a service type — presentation only.
+    Pricing stays platform-owned: a listing never carries a price. `active`
+    is the seller's toggle; `hidden` is an admin takedown the seller cannot
+    undo (moderation parity with review comments)."""
+
+    __tablename__ = "listings"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    service_type_id: Mapped[str] = mapped_column(ForeignKey("service_types.id"), index=True)
+    title: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(4000), default="")
+    photo_urls: Mapped[list[str]] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(default=True)
+    hidden: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TS, default=_now, onupdate=_now)
+
+
 class BuyerProfile(Base):
     __tablename__ = "buyer_profiles"
 
@@ -169,11 +191,21 @@ class Quote(Base):
     service_type_id: Mapped[str] = mapped_column(String(128))
     buyer_price: Mapped[Decimal] = mapped_column(_MONEY)
     created_at: Mapped[datetime] = mapped_column(_TS, default=_now)
-    expires_at: Mapped[datetime] = mapped_column(_TS)
+    # indexed: the live-quote cap counts and the housekeeping sweep deletes by it
+    expires_at: Mapped[datetime] = mapped_column(_TS, index=True)
+    listing_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("listings.id"), default=None)
+    pinned_seller_id: Mapped[str | None] = mapped_column(String(128), default=None)
 
 
 class Job(Base):
     __tablename__ = "jobs"
+    # Composite indexes for the hot counts: in-flight demand per service type
+    # (every quote) and in-flight load per seller (matching, accept). Without
+    # them those counts scan every historical job of the type or seller.
+    __table_args__ = (
+        Index("ix_jobs_service_type_id_status", "service_type_id", "status"),
+        Index("ix_jobs_seller_id_status", "seller_id", "status"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     quote_id: Mapped[uuid.UUID] = mapped_column(Uuid)
@@ -181,6 +213,7 @@ class Job(Base):
     service_type_id: Mapped[str] = mapped_column(String(128), index=True)
     buyer_price: Mapped[Decimal] = mapped_column(_MONEY)
     seller_id: Mapped[str | None] = mapped_column(String(128), index=True, default=None)
+    pinned_seller_id: Mapped[str | None] = mapped_column(String(128), default=None)
     seller_payout: Mapped[Decimal | None] = mapped_column(_MONEY, default=None)
     status: Mapped[JobStatus] = mapped_column(
         _enum(JobStatus), default=JobStatus.PENDING, index=True
@@ -328,7 +361,13 @@ class Payout(Base):
 
 
 class WebhookEvent(Base):
-    """Processed provider events — the dedup ledger (replayed events no-op)."""
+    """Webhook outbox: the dedup ledger and the retry/dead-letter record.
+
+    Every inbound event gets a row keyed on `provider_event_id` before it is
+    applied, and ANY existing row (whatever its status) makes a redelivery a
+    no-op. A handler failure leaves the row FAILED with backoff fields for
+    the retry job. `payload` is the parsed `PaymentEvent` fields needed to
+    re-apply the event, never the raw body or signature."""
 
     __tablename__ = "webhook_events"
 
@@ -336,6 +375,17 @@ class WebhookEvent(Base):
     provider_event_id: Mapped[str] = mapped_column(String(256), unique=True)
     kind: Mapped[str] = mapped_column(String(64))
     received_at: Mapped[datetime] = mapped_column(_TS, default=_now)
+    # The provider object the event is about (payment/account/transfer/
+    # dispute id): lets a handler ask whether the same object's event was
+    # already applied under a different event id.
+    object_id: Mapped[str | None] = mapped_column(String(256), default=None, index=True)
+    status: Mapped[WebhookEventStatus] = mapped_column(
+        _enum(WebhookEventStatus), default=WebhookEventStatus.APPLIED, index=True
+    )
+    attempts: Mapped[int] = mapped_column(default=0)
+    last_error: Mapped[str | None] = mapped_column(String(512), default=None)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(_TS, default=None, index=True)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
 
 
 class IdempotencyRecord(Base):

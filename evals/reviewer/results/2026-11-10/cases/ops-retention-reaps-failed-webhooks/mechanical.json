@@ -1,0 +1,49 @@
+{
+  "case": "ops-retention-reaps-failed-webhooks",
+  "static": {
+    "ruff_check": "pass",
+    "ruff_format": "pass",
+    "pyright": "pass"
+  },
+  "architecture": {
+    "status": "pass",
+    "exit_code": 0,
+    "tests_reported": 36,
+    "failed": {},
+    "summary": "36 passed in 2.47s",
+    "seconds": 7
+  },
+  "tests_sqlite": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones": "AssertionError: assert {'recent_appl...'recent_dead'} == {'old_failed'...'recent_dead'}"
+    },
+    "summary": "1 failed, 488 passed, 11 skipped, 12 warnings in 71.29s (0:01:11)",
+    "seconds": 75,
+    "confirmed": [
+      "tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones"
+    ]
+  },
+  "tests_pg": {
+    "status": "fail",
+    "exit_code": 1,
+    "tests_reported": 500,
+    "failed": {
+      "tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones": "AssertionError: assert {'recent_appl...'recent_dead'} == {'old_failed'...'recent_dead'}"
+    },
+    "summary": "1 failed, 499 passed, 12 warnings in 92.03s (0:01:32)",
+    "seconds": 96,
+    "confirmed": [
+      "tests/test_webhook_outbox.py::test_retention_spares_failed_rows_and_reaps_terminal_ones"
+    ]
+  },
+  "semgrep": {
+    "status": "ran",
+    "findings": [],
+    "errors": []
+  },
+  "seconds": 199,
+  "case_sha256": "f88a8b5455c726ef28d7871e6fc3b9c0a1633528dc92458b63156ec31a03e342"
+}

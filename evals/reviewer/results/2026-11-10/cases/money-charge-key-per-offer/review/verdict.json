@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "caught",
+      "rationale": "Important at accept_offer: 'Charge key now varies per offer, so a re-offered job can charge the buyer twice', with the first PaymentIntent orphaned. The reviewer rated its own confidence medium."
+    }
+  ]
+}

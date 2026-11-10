@@ -1,0 +1,4 @@
+Derive the payout retry key from the job like every other key
+
+Outbound keys are derived from the job id so a retry replays the original
+operation. retry_payout was the one call site minting a second key shape.

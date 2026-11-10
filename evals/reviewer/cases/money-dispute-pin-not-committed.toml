@@ -1,0 +1,49 @@
+id = "money-dispute-pin-not-committed"
+kind = "bug"
+class = "money-path/mid-handler-commit"
+origin = "32a6f31 'Close disputes final-review findings: partial-reversal mapping, pinned resolve retries, ...' and 51252f1; the pin-and-commit precedent in CLAUDE.md. Also the precondition A2's fix relies on (b63c870)."
+synthetic = false
+invariant = "A handler that must persist state ahead of a possible error response commits mid-handler: resolve_dispute pins refund/clawback and commits before calling the provider."
+location = "src/marketplace/services/disputes.py: resolve_dispute"
+reviewer = "money-path-reviewer"
+reviewer_fit = "in-scope"
+removes_explanatory_comment = true
+commit_message = '''
+Leave the dispute commit to CommitRoute
+
+resolve_dispute committed mid-call, which released the dispute lock before
+the provider legs ran and split one resolution across two transactions.
+Flush the pinned amounts instead and let the route commit once, atomically,
+on success.
+'''
+rubric = '''
+CAUGHT: a Critical or Important finding at resolve_dispute stating that
+without the commit the pinned refund/clawback amounts roll back when a
+provider leg fails (502, which CommitRoute never commits), so a retry can
+use different amounts after a leg already moved money; and/or that the
+clawback pin is no longer visible to the transfer_failed webhook while the
+reversal runs, so a full clawback reads as a failed payout.
+PARTIAL: says the mid-handler commit is deliberate/required without the
+retry-divergence or webhook-visibility consequence, or only at Minor severity.
+MISSED: anything else, including endorsing the single-transaction argument.
+'''
+
+[[edits]]
+file = "src/marketplace/services/disputes.py"
+old = '''
+    # Pin the amounts now that every 4xx guard has passed, and commit: a
+    # provider leg below may still fail and 502, but the pin survives that
+    # rollback (get_session's except-block only rolls back work since the
+    # last commit), so a retry is forced to converge on these amounts instead
+    # of silently changing them after a leg may have already executed.
+    dispute.refund_amount = refund_amount
+    dispute.clawback_amount = clawback_amount
+    session.commit()
+'''
+new = '''
+    # Pin the amounts now that every 4xx guard has passed; a retry must
+    # converge on these amounts.
+    dispute.refund_amount = refund_amount
+    dispute.clawback_amount = clawback_amount
+    session.flush()
+'''

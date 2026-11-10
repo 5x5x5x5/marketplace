@@ -1,0 +1,10 @@
+{
+  "grader": "coordinating agent (single grader; knew the seeded defect; rubric fixed before the review ran)",
+  "runs": [
+    {
+      "output": "run-1.md",
+      "verdict": "clean",
+      "rationale": "'No findings.' A timestamp on the seller's own offer row; no money or buyer identity."
+    }
+  ]
+}
