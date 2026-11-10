@@ -47,7 +47,7 @@ handler, its `response_model`, and the model's fields in `models.py`.
    checks that distinguish "exists" from "not yours" where the neighbouring
    endpoints don't.
 7. **Catalog drift**: visibility or pricing logic re-implemented outside
-   `catalog.py`; `pages.py` importing `api.py`.
+   `catalog.py`; `pages/` importing `api.py` or `routers/`.
 8. **Pages**: `|safe`, `Markup`, HTML built in Python, an unquoted
    attribute; a template context carrying a field the `Catalog*Out` view
    doesn't.

@@ -57,10 +57,10 @@ to sellers; fixed by giving it no party ids at all).
 - Visibility, bookability, and the public "from" price live once in
   `catalog.py` (`visible_listings_stmt`, `listing_bookable`,
   `seller_publicly_visible`, `indicative_buyer_price`, the view builders).
-  Both `/v1/catalog/*` and `pages.py` call it. An earlier draft hand-rolled
+  Both `/v1/catalog/*` and the pages (`pages/`) call it. An earlier draft hand-rolled
   the visibility check in two places and they drifted twice; a new consumer
   (feed, admin page, search) extends `catalog.py` instead.
-- `pages.py` never imports `api.py` (cycle); move shared logic down into a
+- `pages/` never imports `api.py` or `routers/` (cycle); move shared logic down into a
   module both import.
 - Pages render from the same `Catalog*Out` objects, so the template context
   carries no field the JSON view wouldn't.
