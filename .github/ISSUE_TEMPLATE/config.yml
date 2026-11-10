@@ -1,0 +1,7 @@
+# Free-form issues are off: the agent workflow treats a well-formed issue as a
+# specification, and a blank issue has no acceptance criteria to check.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/5x5x5x5/marketplace/security/advisories/new
+    about: Use a private advisory, never a public issue. See SECURITY.md.
