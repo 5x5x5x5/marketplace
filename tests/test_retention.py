@@ -6,10 +6,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from marketplace import api
 from marketplace.db import SessionLocal
 from marketplace.entities import IdempotencyRecord, Notification, WebhookEvent
 from marketplace.models import EventKind, NotificationStatus
+from marketplace.services import maintenance
 from tests.conftest import AuthFactory
 
 
@@ -60,7 +60,7 @@ def test_retention_reaps_old_keeps_young(client: TestClient, auth: AuthFactory) 
         _seed(s, idem_age=6, hook_age=29, note_age=29, note_status=NotificationStatus.SENT)
         s.commit()
     with SessionLocal() as s:
-        api._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
+        maintenance._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
         s.commit()
     with SessionLocal() as s:
         assert len(s.scalars(select(IdempotencyRecord)).all()) == 1
@@ -75,7 +75,7 @@ def test_pending_outbox_rows_are_immortal(client: TestClient, auth: AuthFactory)
         _seed(s, idem_age=1.5, hook_age=1.5, note_age=400, note_status=NotificationStatus.FAILED)
         s.commit()
     with SessionLocal() as s:
-        api._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
+        maintenance._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
         s.commit()
     with SessionLocal() as s:
         kept = s.scalars(select(Notification)).all()
@@ -89,7 +89,7 @@ def test_retention_sweep_is_idempotent(client: TestClient, auth: AuthFactory) ->
         s.commit()
     for _ in range(2):
         with SessionLocal() as s:
-            api._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
+            maintenance._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
             s.commit()
     with SessionLocal() as s:
         assert s.scalars(select(IdempotencyRecord)).all() == []

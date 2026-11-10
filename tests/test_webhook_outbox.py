@@ -30,6 +30,7 @@ from marketplace.models import EventKind, JobStatus, PaymentStatus, WebhookEvent
 from marketplace.notifications import drain_once
 from marketplace.payments.fake import FakeProvider
 from marketplace.payments.port import PaymentEvent
+from marketplace.services import maintenance, webhooks
 from marketplace.settings import settings
 from tests.conftest import IS_POSTGRES, AuthFactory, Header
 from tests.test_payments import pending_accept
@@ -106,7 +107,7 @@ def test_last_error_keeps_only_the_first_line(
     def noisy(_s: Session, _e: PaymentEvent) -> None:
         raise RuntimeError("constraint violated\n[SQL: INSERT ...]\n[parameters: secret-ish]")
 
-    monkeypatch.setattr(api, "_apply_payment_event", noisy)
+    monkeypatch.setattr(webhooks, "_apply_payment_event", noisy)
     assert post_event(client, event_id="evt_noisy", kind="ignored", object_id="x") == {
         "status": "deferred"
     }
@@ -178,7 +179,7 @@ def test_retry_job_skips_rows_not_yet_due(
     job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
     defer(client, monkeypatch, event_id="evt_later", kind="payment_succeeded", object_id=pid)
 
-    api._run_webhook_retry_once()  # pyright: ignore[reportPrivateUsage]  # backoff not elapsed
+    webhooks.run_webhook_retry_once()  # backoff not elapsed
 
     assert row("evt_later").status is WebhookEventStatus.FAILED
     assert _job_state(job_id) == (JobStatus.AWAITING_PAYMENT, PaymentStatus.PENDING)
@@ -314,7 +315,7 @@ def test_persist_failed_never_demotes_applied_row() -> None:
         s.add(WebhookEvent(provider_event_id="evt_won", kind="ignored", attempts=0))
         s.commit()
     event = PaymentEvent(event_id="evt_won", kind="ignored", object_id="x")
-    api._persist_failed_webhook(event, RuntimeError("lost the race"))  # pyright: ignore[reportPrivateUsage]
+    webhooks._persist_failed_webhook(event, RuntimeError("lost the race"))  # pyright: ignore[reportPrivateUsage]
     won = row("evt_won")
     assert (won.status, won.attempts, won.last_error) == (WebhookEventStatus.APPLIED, 0, None)
 
@@ -332,7 +333,7 @@ def test_persist_failed_never_touches_dead_letter_row() -> None:
         )
         s.commit()
     event = PaymentEvent(event_id="evt_dl", kind="ignored", object_id="x")
-    api._persist_failed_webhook(event, RuntimeError("straggler"))  # pyright: ignore[reportPrivateUsage]
+    webhooks._persist_failed_webhook(event, RuntimeError("straggler"))  # pyright: ignore[reportPrivateUsage]
     dl = row("evt_dl")
     assert (dl.status, dl.attempts, dl.last_error) == (
         WebhookEventStatus.DEAD_LETTER,
@@ -354,7 +355,7 @@ def test_persist_failed_advances_existing_failed_row() -> None:
         )
         s.commit()
     event = PaymentEvent(event_id="evt_again", kind="ignored", object_id="x")
-    api._persist_failed_webhook(event, RuntimeError("still broken"))  # pyright: ignore[reportPrivateUsage]
+    webhooks._persist_failed_webhook(event, RuntimeError("still broken"))  # pyright: ignore[reportPrivateUsage]
     again = row("evt_again")
     assert again.status is WebhookEventStatus.FAILED
     assert again.attempts == 2
@@ -374,10 +375,10 @@ def test_concurrent_first_delivery_loser_answers_duplicate(
     def never_seen(_session: Session, _event_id: str) -> bool:
         return False
 
-    monkeypatch.setattr(api, "_webhook_seen", never_seen)
+    monkeypatch.setattr(webhooks, "_webhook_seen", never_seen)
 
     event = PaymentEvent(event_id="evt_race", kind="ignored", object_id="x")
-    assert api._process_webhook(event) == {"status": "duplicate"}  # pyright: ignore[reportPrivateUsage]
+    assert webhooks.process_webhook(event) == {"status": "duplicate"}
 
     with SessionLocal() as s:
         rows = s.scalars(select(WebhookEvent).where(WebhookEvent.provider_event_id == "evt_race"))
@@ -390,7 +391,7 @@ def test_persist_failed_insert_race_falls_back_to_the_winner_row(
     """Two failing first deliveries both try to create the FAILED row; the
     loser's insert hits the unique constraint, re-selects the winner's row,
     and advances it once instead of raising."""
-    real = api._record_webhook_failure  # pyright: ignore[reportPrivateUsage]
+    real = webhooks._record_webhook_failure  # pyright: ignore[reportPrivateUsage]
     sneaked = False
 
     def sneak_in_first(session: Session, r: WebhookEvent, exc: Exception) -> None:
@@ -410,9 +411,9 @@ def test_persist_failed_insert_race_falls_back_to_the_winner_row(
                 other.commit()
         real(session, r, exc)
 
-    monkeypatch.setattr(api, "_record_webhook_failure", sneak_in_first)
+    monkeypatch.setattr(webhooks, "_record_webhook_failure", sneak_in_first)
     event = PaymentEvent(event_id="evt_double", kind="ignored", object_id="x")
-    api._persist_failed_webhook(event, RuntimeError("boom"))  # pyright: ignore[reportPrivateUsage]
+    webhooks._persist_failed_webhook(event, RuntimeError("boom"))  # pyright: ignore[reportPrivateUsage]
 
     with SessionLocal() as s:
         rows = s.scalars(
@@ -430,7 +431,7 @@ def test_parallel_first_deliveries_apply_once_and_never_500(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job_id, pid = pending_accept(client, auth, basic_service, fake_payments)
-    real = api._apply_payment_event  # pyright: ignore[reportPrivateUsage]
+    real = webhooks._apply_payment_event  # pyright: ignore[reportPrivateUsage]
     applies: list[str] = []
 
     def slow_apply(session: Session, event: PaymentEvent) -> None:
@@ -438,7 +439,7 @@ def test_parallel_first_deliveries_apply_once_and_never_500(
         time.sleep(0.3)  # hold the winner's uncommitted row while the loser arrives
         real(session, event)
 
-    monkeypatch.setattr(api, "_apply_payment_event", slow_apply)
+    monkeypatch.setattr(webhooks, "_apply_payment_event", slow_apply)
     barrier = threading.Barrier(2)
 
     def deliver() -> tuple[int, dict[str, str]]:
@@ -480,7 +481,7 @@ def test_retention_spares_failed_rows_and_reaps_terminal_ones() -> None:
             )
         s.commit()
     with SessionLocal() as s:
-        api._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
+        maintenance._sweep_retention(s)  # pyright: ignore[reportPrivateUsage]
         s.commit()
     with SessionLocal() as s:
         kept = {r.provider_event_id for r in s.scalars(select(WebhookEvent)).all()}
@@ -581,7 +582,7 @@ def test_admin_requeues_dead_letter_and_the_job_applies_it(
     with SessionLocal() as s:
         assert s.scalar(select(AuditLog).where(AuditLog.action == "retry_webhook")) is not None
 
-    api._run_webhook_retry_once()  # pyright: ignore[reportPrivateUsage]  # due now: no time travel
+    webhooks.run_webhook_retry_once()  # due now: no time travel
 
     assert row("evt_dead_letter").status is WebhookEventStatus.APPLIED
     with SessionLocal() as s:

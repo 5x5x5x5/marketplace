@@ -7,10 +7,8 @@ from uuid import UUID
 
 from fastapi.testclient import TestClient
 
-from marketplace.api import (
-    _listing_bookable,  # pyright: ignore[reportPrivateUsage]
-    _visible_listings_stmt,  # pyright: ignore[reportPrivateUsage]
-)
+from marketplace.catalog import listing_bookable as _listing_bookable
+from marketplace.catalog import visible_listings_stmt as _visible_listings_stmt
 from marketplace.db import SessionLocal
 from marketplace.entities import Listing, SellerProfile
 from tests.conftest import AuthFactory, Header

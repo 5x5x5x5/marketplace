@@ -10,11 +10,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from marketplace import api
 from marketplace.db import SessionLocal
 from marketplace.entities import Notification, Payment, Payout, WebhookEvent
 from marketplace.models import EventKind, WebhookEventStatus
 from marketplace.payments.port import PaymentEvent
+from marketplace.services import webhooks
 from tests.conftest import AuthFactory
 from tests.test_payments import accept_first_offer, new_job, onboard_and_avail
 
@@ -25,14 +25,14 @@ def fail_events(monkeypatch: pytest.MonkeyPatch, *event_ids: str) -> set[str]:
     """Make the handler raise for the given event ids (and only those). The
     returned set is live: discard an id to let its retries succeed."""
     failing = set(event_ids)
-    real: ApplyFn = api._apply_payment_event  # pyright: ignore[reportPrivateUsage]
+    real: ApplyFn = webhooks._apply_payment_event  # pyright: ignore[reportPrivateUsage]
 
     def flaky(session: Session, event: PaymentEvent) -> None:
         if event.event_id in failing:
             raise RuntimeError(f"simulated handler failure for {event.event_id}")
         real(session, event)
 
-    monkeypatch.setattr(api, "_apply_payment_event", flaky)
+    monkeypatch.setattr(webhooks, "_apply_payment_event", flaky)
     return failing
 
 
@@ -62,13 +62,13 @@ def make_due() -> None:
 def retry_now() -> None:
     """Run the retry job with every FAILED row due."""
     make_due()
-    api._run_webhook_retry_once()  # pyright: ignore[reportPrivateUsage]
+    webhooks.run_webhook_retry_once()
 
 
 def replay(event: PaymentEvent) -> None:
     """Apply an event straight through the handler, as the retry job does."""
     with SessionLocal() as s:
-        api._apply_payment_event(s, event)  # pyright: ignore[reportPrivateUsage]
+        webhooks._apply_payment_event(s, event)  # pyright: ignore[reportPrivateUsage]
         s.commit()
 
 
