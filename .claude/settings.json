@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(uv sync)",
+      "Bash(uv sync --frozen *)",
+      "Bash(uv run ruff check *)",
+      "Bash(uv run ruff format *)",
+      "Bash(uv run pyright *)",
+      "Bash(uv run pytest *)",
+      "Bash(uv run python scripts/demo.py)",
+      "Bash(uv run alembic heads *)",
+      "Bash(uv run alembic history *)",
+      "Bash(uv run alembic current *)",
+      "Bash(uv run alembic check *)",
+      "Bash(.claude/skills/gate/gate.sh *)"
+    ],
+    "deny": [
+      "Bash(docker compose down -v *)",
+      "Bash(docker compose down --volumes *)",
+      "Read(./.env)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/session_start.sh"],
+            "timeout": 300,
+            "statusMessage": "Syncing dependencies (cloud session)"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_edit.py"],
+            "timeout": 10,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/format_lint.py"],
+            "timeout": 60,
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ]
+  }
+}
