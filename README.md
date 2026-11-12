@@ -42,30 +42,16 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run 
 
 # See the whole lifecycle headless
 uv run python scripts/demo.py
-
-# Run the API locally (SQLite by default)
-uv run uvicorn marketplace.api:app --reload
 ```
 
-Against Postgres:
+`demo.py` is the fastest tour: it runs the whole lifecycle (quote → match →
+escrow → complete → dispute → refund → moderation → stats) in-process and
+prints each step.
+
+### Drive it from Swagger
 
 ```bash
-cp .env.example .env          # DATABASE_URL points at the compose Postgres
-docker compose up -d db
-uv run alembic upgrade head   # apply migrations (SQLite dev auto-creates tables)
-uv run uvicorn marketplace.api:app --reload
-```
-
-The test suite runs against whatever `DATABASE_URL` points at, so `DATABASE_URL=postgresql+psycopg://… uv run pytest` exercises the same suite on Postgres (where the `FOR UPDATE` locks are real).
-
-## Try it in 10 minutes
-
-The fastest tour is headless: `uv run python scripts/demo.py` runs the whole
-lifecycle (quote → match → escrow → complete → dispute → refund → moderation →
-stats) in-process and prints each step. To drive it yourself from Swagger:
-
-```bash
-# 1. Start the API (the admin account is seeded from these two vars)
+# 1. Start the API — SQLite by default (the admin account is seeded from these two vars)
 ADMIN_EMAIL=admin@marketplace-demo.dev ADMIN_PASSWORD=try-it-admin-password \
     uv run uvicorn marketplace.api:app --reload
 
@@ -88,9 +74,21 @@ job end to end:
 
 Everything else in this README is reachable the same way: cancel a job and
 watch the refund, file a dispute as the buyer, mute a notification kind,
-suspend a user. Re-run `seed.py` any time for fresh tokens (sessions expire
-after `SESSION_TTL_HOURS`, default 72). No Stripe key is needed — the
-deterministic fake provider handles all money movement locally.
+suspend a user. Re-run `seed.py` any time for fresh tokens. No Stripe key is
+needed — the deterministic fake provider handles all money movement locally.
+
+### Against Postgres
+
+```bash
+cp .env.example .env          # DATABASE_URL points at the compose Postgres
+docker compose up -d db
+uv run alembic upgrade head   # apply migrations (SQLite dev auto-creates tables)
+uv run uvicorn marketplace.api:app --reload
+```
+
+The test suite runs against whatever `DATABASE_URL` points at, so
+`DATABASE_URL=postgresql+psycopg://… uv run pytest` exercises the same suite on
+Postgres (where the `FOR UPDATE` locks are real).
 
 ## Auth
 
@@ -126,68 +124,44 @@ headers = {"Authorization": f"Bearer {r.json()['token']}"}
 session on that account).
 
 Outbound mail (verification/reset links) goes through an `EmailSender` port
-(`src/marketplace/mail.py`); the shipped adapter just logs the message, so
-links land in the server log until a fork plugs in a real sender (SES, Resend,
-Postmark, …). The links themselves (`BASE_URL/verify?token=…`,
+(`src/marketplace/mail.py`): set `SMTP_HOST` and they are sent for real;
+unset, the console adapter logs them, so links land in the server log (see
+Notifications). The links themselves (`BASE_URL/verify?token=…`,
 `BASE_URL/password-reset/confirm?token=…`) must be fronted by the fork's own
 app — the API has **no GET handlers** for those paths; the token rides the
 query string into whatever serves `BASE_URL`, which then relays it to
 `POST /v1/auth/verify` or `POST /v1/auth/password-reset/confirm`. Email
-verification doesn't gate anything yet — signup and login
-both work on an unverified account — because there's no real sender to make a
-verification requirement meaningful. A fork wires that gate in alongside its
-mail adapter.
+verification doesn't gate anything — signup and login both work on an
+unverified account. Requiring it is left to the fork.
 
 ## Endpoints (all under `/v1`)
+
+The full reference is the generated OpenAPI at `/docs` on a running API. By
+role:
+
+- **Auth** (`/auth`) — signup, login, logout, `me`, email verification,
+  password reset.
+- **Buyer** — quotes, jobs (create, list, cancel), reviewing the seller,
+  disputing a completed job, own rating profile.
+- **Seller** (`/seller`) — capacity profile, payout onboarding, availability,
+  offers (accept/decline), completing jobs, reviewing the buyer, reading
+  disputes on own jobs.
+- **Buyer and seller** — `/reports`: file a report, list your own.
+- **Admin** (`/admin`) — runtime config (service types, pipelines, margin
+  floor, matching strategy, adjuster params, fee estimate), seller
+  tier/capacity, buyer rating aggregates, transactions, payouts,
+  notifications, margins summary, audit log, stats, job list/cancel/sweep,
+  user suspend/reinstate/display-name reset, review hide/unhide, report and
+  dispute resolution.
+- **All roles** — `/notification-preferences`: read and replace your own
+  mutes, limited to the kinds your role receives.
+- **Payments** — `POST /payments/webhook`: provider event sink,
+  unauthenticated, signature-verified.
 
 Convention: POSTs that create a durable resource (signup, quotes, jobs,
 reviews, disputes, reports) return 201; POSTs that act on an existing
 resource (accept, decline, complete, cancel, login, logout, verify, resolve,
 suspend, reinstate, hide, unhide, etc.) return 200.
-
-**Auth** (`/v1/auth/…`) — see the Auth section above.
-
-**Buyer** — `POST /quotes` · `POST /jobs` · `GET /jobs` · `GET /jobs/{id}` ·
-`POST /jobs/{id}/cancel` · `GET /profile` (own rating aggregate) ·
-`POST /jobs/{id}/review` · `GET /jobs/{id}/reviews` (own job's review(s),
-no party ids) · `POST /reports` · `GET /reports` (own filed
-reports; shared with seller, see Seller list)
-
-**Seller** (`/v1/seller/…`) — `PUT|GET /profile` (own capacity) ·
-`POST /payments/onboard` · `POST|DELETE /availability[/{service_type_id}]` ·
-`GET /offers` · `GET /jobs` · `POST /offers/{id}/accept` ·
-`POST /offers/{id}/decline` · `POST /jobs/{id}/complete` ·
-`POST /jobs/{id}/review` (rate the buyer) ·
-`GET /jobs/{id}/reviews` (own job's review(s), no party ids) ·
-`POST /v1/reports` ·
-`GET /v1/reports` (shared with buyer, not `/seller`-prefixed — see Buyer list)
-
-**Admin** (`/v1/admin/…`) — `GET /config` · `PUT /config/service_types/{id}` ·
-`PUT /config/pipelines/{id}` · `PUT /config/margin_floor` ·
-`PUT /config/matching_strategy` · `PUT /config/adjuster_params/{name}` ·
-`PUT /config/fees` (pct/fixed provider-fee estimate) ·
-`PUT /sellers/{id}` (tier/capacity) · `GET /buyers` (rating aggregates) ·
-`GET /transactions` · `GET /payouts` ·
-`POST /payouts/{id}/retry` · `GET /notifications` ·
-`POST /notifications/drain` · `GET /margins/summary` · `GET /audit` ·
-`GET /stats` (operator snapshot — jobs/payments/payouts/notifications/
-disputes/reports/users/quotes/retention counts, uptime) ·
-`GET /jobs` · `POST /jobs/{id}/cancel` · `POST /jobs/sweep` ·
-`POST /users/{id}/suspend` · `POST /users/{id}/reinstate` ·
-`POST /users/{id}/reset_display_name` · `GET /reviews/{kind}` (`buyer`|`seller`) ·
-`POST /reviews/{kind}/{id}/hide` · `POST /reviews/{kind}/{id}/unhide` ·
-`GET /reports` · `POST /reports/{id}/resolve`
-
-**Payments** — `POST /payments/webhook` (provider event sink, unauthenticated,
-signature-verified)
-
-**Disputes** — Buyer: `POST /jobs/{id}/dispute` · `GET /jobs/{id}/dispute`.
-Seller: `GET /v1/seller/jobs/{id}/dispute`. Admin: `GET /disputes` ·
-`POST /disputes/{id}/resolve`
-
-**Notification preferences** (`/v1/notification-preferences`, all roles) —
-`GET` · `PUT` (replace-set; scoped to the authenticated principal's own
-role-eligible kinds — a buyer can't see or mute seller/admin kinds)
 
 ## Job & offer state machine
 
@@ -276,12 +250,8 @@ Stripe chargebacks (`charge.dispute.created`/`closed`) ride the same
 rather than fighting it; evidence submission stays in the Stripe dashboard (a
 fork's job). A lost chargeback books a `chargeback_loss` adjustment for the
 disputed amount plus a `chargeback_fee` (`CHARGEBACK_FEE_USD`, default
-15.00). An admin's `resolved` status is preserved even if a chargeback closes
-on the same job afterward — the loss/fee still lands in the ledger, but the
-status field keeps recording the arbitration outcome; on a still-`open`
-dispute, the latest provider outcome wins the status instead (one dispute
-row per job, so repeat chargebacks re-annotate and re-adjudicate the same
-row rather than duplicating it).
+15.00). How a chargeback interacts with an admin resolution on the same job
+is covered in `SECURITY.md`.
 
 Dispute views stay asymmetric like everything else: `BuyerDisputeOut` never
 carries the clawback amount, `SellerDisputeOut` never carries the refund
@@ -354,3 +324,13 @@ role here), OAuth/social login, automatic abuse signals/limits
 (report-count thresholds, auto-suspend — fork-specific heuristics, not a
 generic default), and seller bidding (this is a managed marketplace, not
 an auction).
+
+## More docs
+
+- `SECURITY.md` — security posture: findings, fixes, and the invariants the
+  code enforces.
+- `ROADMAP.md` — what was built, in what order, and what's left to forks.
+- `.env.example` — the environment settings.
+- `docs/tryout-findings-2026-07-16.md` — bugs found driving the live API, and
+  their fixes.
+- `LICENSE` — MIT.
