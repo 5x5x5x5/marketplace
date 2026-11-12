@@ -75,7 +75,10 @@ invariants.
   on every chained write); never re-add a commit there. Every router sets
   `route_class=CommitRoute` (`routers/*.py`, `auth.py`, `pages/*.py`); the import-time
   `_assert_commit_routes` invariant fails fast if a router is added without
-  it — widened in the pages-foundation phase to cover *every* route in the
+  it (it walks routes with `fastapi.routing.iter_route_contexts`; since
+  FastAPI 0.162 `app.routes` no longer lists the routes of included routers,
+  so any code that loops over it directly sees almost nothing and passes
+  blind) — widened in the pages-foundation phase to cover *every* route in the
   app, not just `/v1/*` (`_COMMIT_EXEMPT = {"/healthz"}` is the one deliberate
   hole; a mount like `/static`'s `StaticFiles` app isn't an `APIRoute` so it
   never trips the check). A page route that renders read-only HTML today

@@ -4,7 +4,7 @@ here rather than in front of an agent."""
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -71,7 +71,7 @@ def _token(admin: Header) -> str:
 @asynccontextmanager
 async def ops(
     admin: Header, *, writes: bool = False, token: str | None = None
-) -> AsyncIterator[Client]:
+) -> AsyncGenerator[Client]:
     settings = Settings("http://test", token or _token(admin), writes_enabled=writes)
     http = AdminClient(
         settings.base_url, settings.token, transport=httpx.ASGITransport(app=api.app)

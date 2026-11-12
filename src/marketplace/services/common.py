@@ -34,7 +34,7 @@ def require_verified_email(session: Session, user_id: str) -> None:
         raise EmailNotVerifiedError("verify your email address first")
 
 
-def paginate[T](session: Session, stmt: Select[tuple[T]], limit: int, offset: int) -> list[T]:
+def paginate[T](session: Session, stmt: Select[T], limit: int, offset: int) -> list[T]:
     """LIMIT/OFFSET in SQL: list endpoints never load a whole table to return
     one page. `stmt` must carry a total order (a unique tie-breaker) or rows
     can repeat/skip across pages."""

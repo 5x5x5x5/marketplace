@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from pydantic import BaseModel
 
 from marketplace import entities, models
@@ -128,7 +128,14 @@ def _field_names(model: type[BaseModel]) -> set[str]:
 
 
 def _api_routes() -> list[APIRoute]:
-    return [r for r in app.routes if isinstance(r, APIRoute)]
+    # FastAPI >= 0.162 keeps included routers nested; iter_route_contexts walks them.
+    routes: list[APIRoute] = []
+    for ctx in iter_route_contexts(app.routes):
+        route = ctx.original_route
+        if isinstance(route, APIRoute):
+            assert ctx.path == route.path, "an include-time prefix would make route.path wrong here"
+            routes.append(route)
+    return routes
 
 
 def _route_role(route: APIRoute) -> str | None:
@@ -180,7 +187,7 @@ def test_request_bodies_never_carry_buyer_or_seller_id() -> None:
         names = _body_field_names(route)
         checked += bool(names)
         for forbidden in sorted(names & {"buyer_id", "seller_id"}):
-            bad.append(f"{sorted(route.methods)} {route.path}: body field {forbidden!r}")
+            bad.append(f"{sorted(route.methods or ())} {route.path}: body field {forbidden!r}")
     assert checked > 10, "found almost no request bodies; route discovery is broken"
     assert not bad, f"request bodies must not accept caller-supplied identity:\n  {_fmt(bad)}"
 
@@ -327,7 +334,7 @@ def test_every_page_post_requires_csrf_except_the_allowlist() -> None:
     page_posts = [
         r
         for r in _api_routes()
-        if "POST" in r.methods and r.endpoint.__module__.startswith(f"{PKG}.pages")
+        if "POST" in (r.methods or ()) and r.endpoint.__module__.startswith(f"{PKG}.pages")
     ]
     assert len(page_posts) > 10, "no page POST routes found; route discovery is broken"
     paths = {r.path for r in page_posts}

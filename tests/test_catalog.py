@@ -213,7 +213,7 @@ def test_catalog_visibility_matches_bookable_matrix(
 
 _FORBIDDEN = {"seller_payout", "margin", "capacity", "email", "payments_ready", "tier"}
 
-type _JSON = None | bool | int | float | str | list["_JSON"] | dict[str, "_JSON"]
+type _JSON = bool | int | float | str | list["_JSON"] | dict[str, "_JSON"] | None
 
 
 def _keys(obj: _JSON) -> set[str]:

@@ -17,14 +17,14 @@ for uvicorn, tests and scripts).
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
@@ -49,7 +49,7 @@ logger = logging.getLogger("marketplace")
 
 
 @asynccontextmanager
-async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def _lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Re-assert at startup too: the module-level check fails open for any
     # router registered after it (e.g. a conditional include below it).
     _assert_commit_routes(app)
@@ -134,13 +134,17 @@ def _assert_commit_routes(app: FastAPI) -> None:
     (pages.py) mutates no state today, but a future page/form route missing
     route_class=CommitRoute must fail the same way an API route would.
     Mounts (e.g. the /static StaticFiles app) aren't APIRoute instances and
-    are skipped; /healthz is the sole deliberate exemption."""
+    are skipped; /healthz is the sole deliberate exemption.
+
+    FastAPI >= 0.162 no longer flattens included routers into `app.routes`,
+    so a plain loop over it sees none of them and this check passes blind;
+    `iter_route_contexts` walks into them."""
     rogue = [
-        route.path
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        and not isinstance(route, CommitRoute)
-        and route.path not in _COMMIT_EXEMPT
+        ctx.path
+        for ctx in iter_route_contexts(app.routes)
+        if isinstance(ctx.original_route, APIRoute)
+        and not isinstance(ctx.original_route, CommitRoute)
+        and ctx.path not in _COMMIT_EXEMPT
     ]
     if rogue:
         raise RuntimeError(f"routes missing route_class=CommitRoute (finding F2): {rogue}")
