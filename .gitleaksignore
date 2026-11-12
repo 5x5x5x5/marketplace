@@ -1,0 +1,8 @@
+# False positives in git history, by gitleaks fingerprint. Add an entry only
+# after reading the flagged line; a real secret is rotated, never ignored.
+
+# Fake fixture value "rk_test_restricted" in a test that rejects non-pk keys.
+e0625f8f69394ec7a35928ed4f5dc60a589b04fe:tests/test_payment_settings.py:stripe-access-token:31
+
+# A function signature in a design spec: StripeProvider(..., publishable_key="").
+5410e8f7fa510dff6cd053d524abf9f3923e981f:docs/superpowers/specs/2026-11-10-booking-pages-design.md:generic-api-key:238
