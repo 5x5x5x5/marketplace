@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 940" role="img" aria-label="Money moves from the buyer's card to the platform's balance when the seller accepts, then the seller's payout moves on when the job completes. Cancellations, disputes and chargebacks move money back.">
+  <style>
+    text{font-family:Georgia,'Noto Serif','Times New Roman',serif;fill:#23201b}
+    .h{font-size:30px;font-weight:bold}
+    .sub{font-size:16px;font-style:italic;fill:#7a7265}
+    .l{font-size:15px}
+    .s{font-size:13px;fill:#7a7265}
+    .b{font-weight:bold}
+    .a{fill:#b4472a}
+    .n{font-size:14px;font-weight:bold;fill:#fffdf8}
+    .box{fill:#fffdf8;stroke:#23201b;stroke-width:1.5}
+    .life{stroke:#a59c8a;stroke-width:1.5;stroke-dasharray:2 6}
+    .chip{fill:#fffdf8;stroke:#cfc6b4;stroke-width:1.5}
+    .ct{font-size:13px}
+    .go{stroke:#23201b;stroke-width:3;fill:none}
+  </style>
+  <defs>
+    <marker id="ai" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#23201b"/></marker>
+    <marker id="aa" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#b4472a"/></marker>
+  </defs>
+  <rect width="1200" height="940" fill="#f7f2e8"/>
+
+  <text x="60" y="70" class="h">Follow the money</text>
+  <text x="60" y="98" class="sub">One $20.00 job. The pills show where each party stands after every step.</text>
+
+  <!-- lifelines -->
+  <line x1="450" y1="185" x2="450" y2="880" class="life"/>
+  <line x1="740" y1="185" x2="740" y2="880" class="life"/>
+  <line x1="1030" y1="185" x2="1030" y2="880" class="life"/>
+
+  <!-- lane headers -->
+  <rect x="345" y="130" width="210" height="55" rx="6" class="box"/>
+  <text x="450" y="154" text-anchor="middle" class="l b">Alice's card</text>
+  <text x="450" y="173" text-anchor="middle" class="s">the buyer</text>
+  <rect x="635" y="130" width="210" height="55" rx="6" class="box"/>
+  <text x="740" y="154" text-anchor="middle" class="l b">Platform balance</text>
+  <text x="740" y="173" text-anchor="middle" class="s">money held in the middle</text>
+  <rect x="925" y="130" width="210" height="55" rx="6" class="box"/>
+  <text x="1030" y="154" text-anchor="middle" class="l b">Carol's account</text>
+  <text x="1030" y="173" text-anchor="middle" class="s">the seller</text>
+
+  <!-- 1 -->
+  <circle cx="75" cy="245" r="13" fill="#23201b"/><text x="75" y="250" text-anchor="middle" class="n">1</text>
+  <text x="98" y="250" class="l b">Carol accepts the job</text>
+  <text x="98" y="270" class="s">Alice's card is charged the</text>
+  <text x="98" y="287" class="s">full price straight away.</text>
+  <line x1="450" y1="245" x2="736" y2="245" stroke="#b4472a" stroke-width="3" marker-end="url(#aa)"/>
+  <text x="595" y="235" text-anchor="middle" class="l b a">$20.00 charged</text>
+  <rect x="380" y="268" width="140" height="26" rx="13" class="chip"/><text x="450" y="286" text-anchor="middle" class="ct">−$20.00</text>
+  <rect x="670" y="268" width="140" height="26" rx="13" class="chip"/><text x="740" y="286" text-anchor="middle" class="ct">holding $20.00</text>
+  <rect x="960" y="268" width="140" height="26" rx="13" class="chip"/><text x="1030" y="286" text-anchor="middle" class="ct">$0.00</text>
+
+  <!-- 2 -->
+  <circle cx="75" cy="350" r="13" fill="#23201b"/><text x="75" y="355" text-anchor="middle" class="n">2</text>
+  <text x="98" y="355" class="l b">The work happens</text>
+  <text x="98" y="375" class="s">Nothing moves. The money</text>
+  <text x="98" y="392" class="s">waits with the platform.</text>
+  <rect x="660" y="343" width="160" height="26" rx="13" class="chip"/><text x="740" y="361" text-anchor="middle" class="ct">still holding $20.00</text>
+
+  <!-- 3 -->
+  <circle cx="75" cy="445" r="13" fill="#23201b"/><text x="75" y="450" text-anchor="middle" class="n">3</text>
+  <text x="98" y="450" class="l b">Carol finishes the job</text>
+  <text x="98" y="470" class="s">Her payout is sent. What is</text>
+  <text x="98" y="487" class="s">left is the platform's spread.</text>
+  <line x1="740" y1="445" x2="1026" y2="445" class="go" marker-end="url(#ai)"/>
+  <text x="885" y="435" text-anchor="middle" class="l b">$14.00 paid out</text>
+  <rect x="380" y="468" width="140" height="26" rx="13" class="chip"/><text x="450" y="486" text-anchor="middle" class="ct">−$20.00</text>
+  <rect x="670" y="468" width="140" height="26" rx="13" fill="#b4472a"/><text x="740" y="486" text-anchor="middle" class="ct b" style="fill:#fffdf8">keeps $6.00</text>
+  <rect x="960" y="468" width="140" height="26" rx="13" class="chip"/><text x="1030" y="486" text-anchor="middle" class="ct">+$14.00</text>
+  <rect x="620" y="504" width="240" height="22" fill="#f7f2e8"/>
+  <text x="740" y="520" text-anchor="middle" class="s">about $0.88 of it pays the card fee</text>
+
+  <!-- divider -->
+  <rect x="60" y="556" width="1080" height="44" fill="#f7f2e8"/>
+  <line x1="60" y1="566" x2="1140" y2="566" stroke="#cfc6b4" stroke-width="1"/>
+  <text x="60" y="596" font-size="19" font-style="italic">When something goes wrong</text>
+
+  <!-- A -->
+  <circle cx="75" cy="650" r="13" fill="#f7f2e8" stroke="#23201b" stroke-width="1.5"/><text x="75" y="655" text-anchor="middle" class="n" style="fill:#23201b">A</text>
+  <text x="98" y="655" class="l b">Cancelled after payment</text>
+  <text x="98" y="675" class="s">An admin cancels after step 1.</text>
+  <text x="98" y="692" class="s">The whole charge goes back.</text>
+  <line x1="740" y1="650" x2="454" y2="650" class="go" marker-end="url(#ai)"/>
+  <text x="595" y="640" text-anchor="middle" class="l b">$20.00 refunded</text>
+  <rect x="380" y="673" width="140" height="26" rx="13" class="chip"/><text x="450" y="691" text-anchor="middle" class="ct">$0.00</text>
+  <rect x="670" y="673" width="140" height="26" rx="13" class="chip"/><text x="740" y="691" text-anchor="middle" class="ct">$0.00</text>
+  <rect x="960" y="673" width="140" height="26" rx="13" class="chip"/><text x="1030" y="691" text-anchor="middle" class="ct">$0.00</text>
+
+  <!-- B -->
+  <circle cx="75" cy="750" r="13" fill="#f7f2e8" stroke="#23201b" stroke-width="1.5"/><text x="75" y="755" text-anchor="middle" class="n" style="fill:#23201b">B</text>
+  <text x="98" y="755" class="l b">Buyer disputes after step 3</text>
+  <text x="98" y="775" class="s">Within 7 days. An admin sets a</text>
+  <text x="98" y="792" class="s">refund and a clawback separately.</text>
+  <line x1="740" y1="750" x2="454" y2="750" class="go" marker-end="url(#ai)"/>
+  <text x="595" y="740" text-anchor="middle" class="l b">$6.00 refund</text>
+  <line x1="1030" y1="750" x2="744" y2="750" class="go" marker-end="url(#ai)"/>
+  <text x="885" y="740" text-anchor="middle" class="l b">$4.00 clawback</text>
+  <rect x="380" y="773" width="140" height="26" rx="13" class="chip"/><text x="450" y="791" text-anchor="middle" class="ct">−$14.00</text>
+  <rect x="670" y="773" width="140" height="26" rx="13" fill="#b4472a"/><text x="740" y="791" text-anchor="middle" class="ct b" style="fill:#fffdf8">keeps $4.00</text>
+  <rect x="960" y="773" width="140" height="26" rx="13" class="chip"/><text x="1030" y="791" text-anchor="middle" class="ct">+$10.00</text>
+
+  <!-- C -->
+  <circle cx="75" cy="850" r="13" fill="#f7f2e8" stroke="#23201b" stroke-width="1.5"/><text x="75" y="855" text-anchor="middle" class="n" style="fill:#23201b">C</text>
+  <text x="98" y="855" class="l b">The bank reverses the charge</text>
+  <text x="98" y="875" class="s">A chargeback. If it is lost, the</text>
+  <text x="98" y="892" class="s">platform books it plus a $15 fee.</text>
+  <line x1="740" y1="850" x2="454" y2="850" class="go" stroke-dasharray="8 5" marker-end="url(#ai)"/>
+  <text x="595" y="840" text-anchor="middle" class="l b">pulled back by the bank</text>
+
+  <text x="60" y="922" class="s">Every correction is a new line in the ledger. Earlier entries are never edited.</text>
+</svg>
