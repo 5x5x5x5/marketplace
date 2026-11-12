@@ -1,7 +1,7 @@
 """Capacity: connection-pool sizing and load shedding on pool exhaustion."""
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -104,7 +104,7 @@ class QueryLog:
 
 
 @contextmanager
-def record_queries() -> Iterator[QueryLog]:
+def record_queries() -> Generator[QueryLog]:
     log = QueryLog()
 
     def _before(

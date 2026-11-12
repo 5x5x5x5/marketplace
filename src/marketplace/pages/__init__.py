@@ -6,7 +6,7 @@ and seller pages that book, pay, accept and complete.
 import `api` or `routers`."""
 
 from fastapi import APIRouter
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 
 from ..db import CommitRoute
 from . import account, buyer, seller, storefront
@@ -16,11 +16,14 @@ pages_router = APIRouter(route_class=CommitRoute, tags=["pages"])
 for _module in (storefront, account, buyer, seller):
     pages_router.include_router(_module.router)
 
+# iter_route_contexts, not pages_router.routes: FastAPI >= 0.162 keeps included
+# routers nested, so a plain loop would find no routes and exempt nothing.
 _PAGE_POSTS = [
-    route
-    for route in pages_router.routes
-    if isinstance(route, APIRoute) and "POST" in route.methods
+    ctx.original_route
+    for ctx in iter_route_contexts(pages_router.routes)
+    if isinstance(ctx.original_route, APIRoute) and "POST" in (ctx.methods or ())
 ]
+assert _PAGE_POSTS, "no page POST routes found; route discovery is broken"
 
 
 def is_page_post(path: str) -> bool:

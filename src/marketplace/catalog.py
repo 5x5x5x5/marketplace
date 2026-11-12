@@ -68,7 +68,7 @@ def listing_bookable(session: Session, listing: Listing) -> bool:
     return seller is not None and seller.payments_ready
 
 
-def visible_listings_stmt() -> Select[tuple[Listing, User, SellerProfile]]:
+def visible_listings_stmt() -> Select[Listing, User, SellerProfile]:
     """Select of (Listing, User, SellerProfile) rows visible to the public
     catalog: listing active, not admin-hidden, seller account ACTIVE, seller
     payments onboarded. Row-equivalent of `listing_bookable` above.
@@ -92,7 +92,7 @@ def visible_listings_stmt() -> Select[tuple[Listing, User, SellerProfile]]:
 
 def visible_listings_page(
     limit: int, offset: int, service_type_id: str | None = None
-) -> Select[tuple[Listing, User, SellerProfile]]:
+) -> Select[Listing, User, SellerProfile]:
     """One page of `visible_listings_stmt`, newest first, bounded in SQL.
 
     The `Listing.id` tie-breaker makes the order total, so LIMIT/OFFSET pages
@@ -155,7 +155,7 @@ def catalog_listing_out(
 
 
 def catalog_listings_for_rows(
-    session: Session, rows: Sequence[Row[tuple[Listing, User, SellerProfile]]]
+    session: Session, rows: Sequence[Row[Listing, User, SellerProfile]]
 ) -> list[CatalogListingOut]:
     """Map visible (Listing, User, SellerProfile) rows to catalog cards,
     memoizing `indicative_buyer_price` per service_type_id (one pipeline
