@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 740" role="img" aria-label="One job has two prices: the buyer pays $20.00, the seller earns $14.00, and the platform keeps the $6.00 difference. Neither side sees the other's number.">
+  <style>
+    text{font-family:Georgia,'Noto Serif','Times New Roman',serif;fill:#23201b}
+    .h{font-size:30px;font-weight:bold}
+    .sub{font-size:16px;font-style:italic;fill:#7a7265}
+    .l{font-size:15px}
+    .s{font-size:13px;fill:#7a7265}
+    .cap{font-size:12px;letter-spacing:1.5px;fill:#7a7265}
+    .b{font-weight:bold}
+    .big{font-size:40px;font-weight:bold}
+    .a{fill:#b4472a}
+    .box{fill:#fffdf8;stroke:#23201b;stroke-width:1.5}
+  </style>
+  <defs>
+    <marker id="ai" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#23201b"/></marker>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#f7f2e8"/><line x1="0" y1="0" x2="0" y2="6" stroke="#7a7265" stroke-width="2"/></pattern>
+  </defs>
+  <rect width="1200" height="740" fill="#f7f2e8"/>
+
+  <text x="60" y="70" class="h">One job, two prices</text>
+  <text x="60" y="98" class="sub">The platform decides what the buyer pays and what the seller earns separately, and keeps the difference.</text>
+
+  <!-- buyer -->
+  <rect x="60" y="150" width="320" height="250" rx="6" class="box"/>
+  <text x="220" y="185" text-anchor="middle" class="cap">ALICE, THE BUYER, SEES</text>
+  <rect x="130" y="210" width="180" height="105" rx="8" fill="#f7f2e8" stroke="#23201b" stroke-width="1.5"/>
+  <text x="220" y="240" text-anchor="middle" class="s">Ride across town</text>
+  <text x="220" y="292" text-anchor="middle" class="big">$20.00</text>
+  <text x="220" y="350" text-anchor="middle" class="l">her price</text>
+  <text x="220" y="378" text-anchor="middle" class="s" font-style="italic">never shown what the seller earns</text>
+
+  <!-- platform -->
+  <rect x="440" y="150" width="320" height="250" rx="6" class="box"/>
+  <text x="600" y="185" text-anchor="middle" class="cap">THE PLATFORM SEES BOTH</text>
+  <text x="680" y="232" text-anchor="end" font-size="22">$20.00 in</text>
+  <text x="680" y="266" text-anchor="end" font-size="22">− $14.00 out</text>
+  <line x1="520" y1="280" x2="680" y2="280" stroke="#23201b" stroke-width="1.5"/>
+  <text x="600" y="328" text-anchor="middle" class="big a">$6.00</text>
+  <text x="600" y="356" text-anchor="middle" class="l">the spread it keeps</text>
+  <text x="600" y="382" text-anchor="middle" class="s" font-style="italic">only admin screens show both numbers</text>
+
+  <!-- seller -->
+  <rect x="820" y="150" width="320" height="250" rx="6" class="box"/>
+  <text x="980" y="185" text-anchor="middle" class="cap">CAROL, THE SELLER, SEES</text>
+  <rect x="890" y="210" width="180" height="105" rx="8" fill="#f7f2e8" stroke="#23201b" stroke-width="1.5"/>
+  <text x="980" y="240" text-anchor="middle" class="s">Ride across town</text>
+  <text x="980" y="292" text-anchor="middle" class="big">$14.00</text>
+  <text x="980" y="350" text-anchor="middle" class="l">her payout</text>
+  <text x="980" y="378" text-anchor="middle" class="s" font-style="italic">never shown what the buyer pays</text>
+
+  <!-- one-way glass -->
+  <line x1="410" y1="150" x2="410" y2="400" stroke="#7a7265" stroke-width="2" stroke-dasharray="3 6"/>
+  <line x1="790" y1="150" x2="790" y2="400" stroke="#7a7265" stroke-width="2" stroke-dasharray="3 6"/>
+  <text x="410" y="138" text-anchor="middle" class="s">one-way glass</text>
+  <text x="790" y="138" text-anchor="middle" class="s">one-way glass</text>
+  <line x1="440" y1="262" x2="384" y2="262" stroke="#23201b" stroke-width="1.5" marker-end="url(#ai)"/>
+  <line x1="760" y1="262" x2="816" y2="262" stroke="#23201b" stroke-width="1.5" marker-end="url(#ai)"/>
+
+  <!-- where the $20 goes: 54px per dollar -->
+  <text x="60" y="462" class="l b">Where Alice's $20.00 goes</text>
+  <line x1="816" y1="468" x2="1140" y2="468" stroke="#b4472a" stroke-width="1.5"/>
+  <line x1="816" y1="462" x2="816" y2="474" stroke="#b4472a" stroke-width="1.5"/>
+  <line x1="1140" y1="462" x2="1140" y2="474" stroke="#b4472a" stroke-width="1.5"/>
+  <text x="978" y="458" text-anchor="middle" class="l b a">$6.00 spread</text>
+  <rect x="60" y="482" width="756" height="60" fill="#fffdf8" stroke="#23201b" stroke-width="1.5"/>
+  <rect x="816" y="482" width="47.5" height="60" fill="url(#hatch)" stroke="#23201b" stroke-width="1.5"/>
+  <rect x="863.5" y="482" width="276.5" height="60" fill="#b4472a" stroke="#23201b" stroke-width="1.5"/>
+  <text x="438" y="518" text-anchor="middle" class="l"><tspan class="b">$14.00</tspan> to Carol, paid out when the job is done</text>
+  <text x="1002" y="518" text-anchor="middle" class="l b" style="fill:#fffdf8">$5.12 the platform keeps</text>
+  <line x1="840" y1="542" x2="840" y2="572" stroke="#7a7265" stroke-width="1.5"/>
+  <text x="840" y="590" text-anchor="middle" class="s">$0.88 estimated card-processing fee</text>
+
+  <text x="60" y="648" class="l b">The safety rule</text>
+  <text x="60" y="672" class="l">A quote only goes out if the spread covers a minimum margin plus the card fee. If it would not, the buyer's price is</text>
+  <text x="60" y="694" class="l">raised to make room; if that takes too big a jump, the quote is refused.</text>
+  <text x="60" y="722" class="s">Figures come from the repository's demo run (scripts/demo.py).</text>
+</svg>

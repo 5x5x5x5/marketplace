@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 850" role="img" aria-label="Buyers, sellers and admins all come in through one front desk. Inside the service are the pricing and matching rules, the ledger, an email outbox and a night watch. Two plugs connect it to a payment provider and an email service.">
+  <style>
+    text{font-family:Georgia,'Noto Serif','Times New Roman',serif;fill:#23201b}
+    .h{font-size:30px;font-weight:bold}
+    .sub{font-size:16px;font-style:italic;fill:#7a7265}
+    .l{font-size:16px}
+    .s{font-size:13px;fill:#7a7265}
+    .t{font-size:13px}
+    .b{font-weight:bold}
+    .m{font-family:'DejaVu Sans Mono',Menlo,Consolas,monospace;font-size:11.5px;fill:#7a7265}
+    .n{font-size:13px;font-weight:bold;fill:#fffdf8}
+    .box{fill:#fffdf8;stroke:#23201b;stroke-width:1.5}
+    .out{fill:#f7f2e8;stroke:#23201b;stroke-width:1.5}
+    .go{stroke:#23201b;stroke-width:1.5;fill:none}
+  </style>
+  <defs>
+    <marker id="ai" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#23201b"/></marker>
+  </defs>
+  <rect width="1200" height="850" fill="#f7f2e8"/>
+
+  <text x="60" y="70" class="h">Inside the service</text>
+  <text x="60" y="98" class="sub">One program. People come in through one front desk; money and mail go out through two plugs.</text>
+
+  <!-- the building -->
+  <rect x="270" y="140" width="640" height="550" rx="10" fill="#efe8d9" stroke="#23201b" stroke-width="2.5"/>
+  <text x="270" y="130" class="s">THE MARKETPLACE SERVICE</text>
+
+  <!-- people -->
+  <rect x="50" y="200" width="160" height="70" rx="6" class="out"/>
+  <text x="130" y="230" text-anchor="middle" class="l b">Buyers</text>
+  <text x="130" y="252" text-anchor="middle" class="s">get prices, book jobs</text>
+  <rect x="50" y="330" width="160" height="70" rx="6" class="out"/>
+  <text x="130" y="360" text-anchor="middle" class="l b">Sellers</text>
+  <text x="130" y="382" text-anchor="middle" class="s">take offers, finish jobs</text>
+  <rect x="50" y="460" width="160" height="70" rx="6" class="out"/>
+  <text x="130" y="490" text-anchor="middle" class="l b">Admins</text>
+  <text x="130" y="512" text-anchor="middle" class="s">pricing and disputes</text>
+  <line x1="210" y1="235" x2="288" y2="235" class="go" marker-end="url(#ai)"/>
+  <line x1="210" y1="365" x2="288" y2="365" class="go" marker-end="url(#ai)"/>
+  <line x1="210" y1="495" x2="288" y2="495" class="go" marker-end="url(#ai)"/>
+
+  <!-- front desk -->
+  <rect x="290" y="180" width="150" height="490" rx="6" class="box"/>
+  <text x="365" y="212" text-anchor="middle" class="l b">Front desk</text>
+  <text x="365" y="240" text-anchor="middle" class="t">Checks who you</text>
+  <text x="365" y="258" text-anchor="middle" class="t">are, every time.</text>
+  <text x="365" y="290" text-anchor="middle" class="t">Shows each role</text>
+  <text x="365" y="308" text-anchor="middle" class="t">only its own</text>
+  <text x="365" y="326" text-anchor="middle" class="t">numbers.</text>
+  <text x="365" y="650" text-anchor="middle" class="m">api.py · auth.py</text>
+
+  <!-- rooms -->
+  <rect x="500" y="180" width="250" height="110" rx="6" class="box"/>
+  <text x="516" y="206" class="l b">Pricing and matching rules</text>
+  <text x="516" y="228" class="t">Set the buyer price and the seller</text>
+  <text x="516" y="246" class="t">payout; pick who gets the offer.</text>
+  <text x="516" y="274" class="m">pricing.py · matching.py</text>
+
+  <rect x="500" y="315" width="250" height="110" rx="6" class="box"/>
+  <text x="516" y="341" class="l b">The ledger</text>
+  <text x="516" y="363" class="t">Every job, offer, charge and payout.</text>
+  <text x="516" y="381" class="t">Corrections are added, never erased.</text>
+  <text x="516" y="409" class="m">database · entities.py</text>
+
+  <rect x="500" y="450" width="250" height="95" rx="6" class="box"/>
+  <text x="516" y="476" class="l b">Outbox</text>
+  <text x="516" y="498" class="t">Emails wait here, queued together</text>
+  <text x="516" y="516" class="t">with the event that caused them.</text>
+  <text x="516" y="536" class="m">notifications.py</text>
+
+  <rect x="500" y="570" width="250" height="100" rx="6" class="box"/>
+  <text x="516" y="596" class="l b">Night watch</text>
+  <text x="516" y="618" class="t">Runs on a clock, even when nobody</text>
+  <text x="516" y="636" class="t">is using the service.</text>
+  <text x="516" y="658" class="m">maintenance loop</text>
+
+  <!-- plugs -->
+  <rect x="790" y="205" width="100" height="85" rx="6" class="box"/>
+  <text x="840" y="240" text-anchor="middle" class="t b">Payments</text>
+  <text x="840" y="258" text-anchor="middle" class="t">plug</text>
+  <text x="840" y="278" text-anchor="middle" class="m">payments/</text>
+  <rect x="790" y="455" width="100" height="85" rx="6" class="box"/>
+  <text x="840" y="490" text-anchor="middle" class="t b">Mail</text>
+  <text x="840" y="508" text-anchor="middle" class="t">plug</text>
+  <text x="840" y="528" text-anchor="middle" class="m">mail.py</text>
+
+  <!-- outside world -->
+  <rect x="970" y="195" width="180" height="105" rx="6" class="out"/>
+  <text x="1060" y="228" text-anchor="middle" class="l b">Payment provider</text>
+  <text x="1060" y="252" text-anchor="middle" class="s">Stripe, or a built-in</text>
+  <text x="1060" y="270" text-anchor="middle" class="s">stand-in for demos</text>
+  <rect x="970" y="450" width="180" height="95" rx="6" class="out"/>
+  <text x="1060" y="483" text-anchor="middle" class="l b">Email service</text>
+  <text x="1060" y="507" text-anchor="middle" class="s">any mail provider,</text>
+  <text x="1060" y="525" text-anchor="middle" class="s">or just the log</text>
+
+  <!-- arrows -->
+  <line x1="440" y1="235" x2="498" y2="235" class="go" marker-end="url(#ai)"/>
+  <line x1="440" y1="370" x2="498" y2="370" class="go" marker-end="url(#ai)"/>
+  <path d="M365 180V160H840V203" class="go" marker-end="url(#ai)"/>
+  <line x1="890" y1="232" x2="968" y2="232" class="go" marker-end="url(#ai)"/>
+  <line x1="970" y1="264" x2="892" y2="264" class="go" marker-end="url(#ai)"/>
+  <line x1="625" y1="425" x2="625" y2="448" class="go" marker-end="url(#ai)"/>
+  <line x1="750" y1="497" x2="788" y2="497" class="go" marker-end="url(#ai)"/>
+  <line x1="890" y1="497" x2="968" y2="497" class="go" marker-end="url(#ai)"/>
+  <path d="M500 620C466 620 466 400 498 400" class="go" marker-end="url(#ai)"/>
+  <line x1="700" y1="570" x2="700" y2="547" class="go" marker-end="url(#ai)"/>
+
+  <!-- step badges -->
+  <g fill="#b4472a">
+    <circle cx="248" cy="235" r="11"/><circle cx="468" cy="235" r="11"/><circle cx="468" cy="370" r="11"/>
+    <circle cx="610" cy="160" r="11"/><circle cx="930" cy="232" r="11"/>
+    <circle cx="650" cy="437" r="11"/><circle cx="930" cy="497" r="11"/>
+    <circle cx="475" cy="510" r="11"/><circle cx="724" cy="558" r="11"/>
+  </g>
+  <text x="248" y="240" text-anchor="middle" class="n">1</text>
+  <text x="468" y="240" text-anchor="middle" class="n">2</text>
+  <text x="468" y="375" text-anchor="middle" class="n">3</text>
+  <text x="610" y="165" text-anchor="middle" class="n">4</text>
+  <text x="930" y="237" text-anchor="middle" class="n">4</text>
+  <text x="650" y="442" text-anchor="middle" class="n">5</text>
+  <text x="930" y="502" text-anchor="middle" class="n">5</text>
+  <text x="475" y="515" text-anchor="middle" class="n">6</text>
+  <text x="724" y="563" text-anchor="middle" class="n">6</text>
+
+  <!-- legend -->
+  <g fill="#b4472a">
+    <circle cx="71" cy="735" r="11"/><circle cx="71" cy="770" r="11"/><circle cx="71" cy="805" r="11"/>
+    <circle cx="631" cy="735" r="11"/><circle cx="631" cy="770" r="11"/><circle cx="631" cy="805" r="11"/>
+  </g>
+  <text x="71" y="740" text-anchor="middle" class="n">1</text>
+  <text x="92" y="740" class="t">Every request, from any role, comes through the front desk.</text>
+  <text x="71" y="775" text-anchor="middle" class="n">2</text>
+  <text x="92" y="775" class="t">The rules work out the price and, later, which seller gets the offer.</text>
+  <text x="71" y="810" text-anchor="middle" class="n">3</text>
+  <text x="92" y="810" class="t">Each step is saved in the ledger before anyone is told it happened.</text>
+  <text x="631" y="740" text-anchor="middle" class="n">4</text>
+  <text x="652" y="740" class="t">The provider charges cards and pays sellers, then confirms back.</text>
+  <text x="631" y="775" text-anchor="middle" class="n">5</text>
+  <text x="652" y="775" class="t">Emails are queued with the event, then sent through the mail plug.</text>
+  <text x="631" y="810" text-anchor="middle" class="n">6</text>
+  <text x="652" y="810" class="t">The night watch expires stale offers and unpaid jobs, and sends the mail.</text>
+</svg>
