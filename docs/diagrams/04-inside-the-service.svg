@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 850" role="img" aria-label="Buyers, sellers and admins all come in through one front desk. Inside the service are the pricing and matching rules, the ledger, an email outbox and a night watch. Two plugs connect it to a payment provider and an email service.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 890" role="img" aria-label="Visitors, buyers, sellers and admins come in through one front desk with two doors, web pages and an API. Behind it sits the business logic, which uses the pricing and matching rules, the catalog, the ledger, an email outbox and a night watch. Two plugs connect the service to a payment provider and an email service.">
   <style>
     text{font-family:Georgia,'Noto Serif','Times New Roman',serif;fill:#23201b}
     .h{font-size:30px;font-weight:bold}
@@ -16,128 +16,160 @@
   <defs>
     <marker id="ai" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" viewBox="0 0 10 10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#23201b"/></marker>
   </defs>
-  <rect width="1200" height="850" fill="#f7f2e8"/>
+  <rect width="1320" height="890" fill="#f7f2e8"/>
 
   <text x="60" y="70" class="h">Inside the service</text>
   <text x="60" y="98" class="sub">One program. People come in through one front desk; money and mail go out through two plugs.</text>
 
   <!-- the building -->
-  <rect x="270" y="140" width="640" height="550" rx="10" fill="#efe8d9" stroke="#23201b" stroke-width="2.5"/>
+  <rect x="270" y="140" width="780" height="570" rx="10" fill="#efe8d9" stroke="#23201b" stroke-width="2.5"/>
   <text x="270" y="130" class="s">THE MARKETPLACE SERVICE</text>
 
   <!-- people -->
-  <rect x="50" y="200" width="160" height="70" rx="6" class="out"/>
-  <text x="130" y="230" text-anchor="middle" class="l b">Buyers</text>
-  <text x="130" y="252" text-anchor="middle" class="s">get prices, book jobs</text>
-  <rect x="50" y="330" width="160" height="70" rx="6" class="out"/>
-  <text x="130" y="360" text-anchor="middle" class="l b">Sellers</text>
-  <text x="130" y="382" text-anchor="middle" class="s">take offers, finish jobs</text>
-  <rect x="50" y="460" width="160" height="70" rx="6" class="out"/>
-  <text x="130" y="490" text-anchor="middle" class="l b">Admins</text>
-  <text x="130" y="512" text-anchor="middle" class="s">pricing and disputes</text>
-  <line x1="210" y1="235" x2="288" y2="235" class="go" marker-end="url(#ai)"/>
-  <line x1="210" y1="365" x2="288" y2="365" class="go" marker-end="url(#ai)"/>
-  <line x1="210" y1="495" x2="288" y2="495" class="go" marker-end="url(#ai)"/>
+  <rect x="40" y="180" width="170" height="62" rx="6" class="out"/>
+  <text x="125" y="206" text-anchor="middle" class="l b">Visitors</text>
+  <text x="125" y="227" text-anchor="middle" class="s">browse, no login</text>
+  <rect x="40" y="270" width="170" height="62" rx="6" class="out"/>
+  <text x="125" y="296" text-anchor="middle" class="l b">Buyers</text>
+  <text x="125" y="317" text-anchor="middle" class="s">get prices, book, pay</text>
+  <rect x="40" y="360" width="170" height="62" rx="6" class="out"/>
+  <text x="125" y="386" text-anchor="middle" class="l b">Sellers</text>
+  <text x="125" y="407" text-anchor="middle" class="s">list, accept, complete</text>
+  <rect x="40" y="450" width="170" height="62" rx="6" class="out"/>
+  <text x="125" y="476" text-anchor="middle" class="l b">Admins</text>
+  <text x="125" y="497" text-anchor="middle" class="s">pricing and disputes</text>
+  <line x1="210" y1="211" x2="288" y2="211" class="go" marker-end="url(#ai)"/>
+  <line x1="210" y1="301" x2="288" y2="301" class="go" marker-end="url(#ai)"/>
+  <line x1="210" y1="391" x2="288" y2="391" class="go" marker-end="url(#ai)"/>
+  <line x1="210" y1="481" x2="288" y2="481" class="go" marker-end="url(#ai)"/>
 
   <!-- front desk -->
-  <rect x="290" y="180" width="150" height="490" rx="6" class="box"/>
-  <text x="365" y="212" text-anchor="middle" class="l b">Front desk</text>
-  <text x="365" y="240" text-anchor="middle" class="t">Checks who you</text>
-  <text x="365" y="258" text-anchor="middle" class="t">are, every time.</text>
-  <text x="365" y="290" text-anchor="middle" class="t">Shows each role</text>
-  <text x="365" y="308" text-anchor="middle" class="t">only its own</text>
-  <text x="365" y="326" text-anchor="middle" class="t">numbers.</text>
-  <text x="365" y="650" text-anchor="middle" class="m">api.py · auth.py</text>
+  <rect x="290" y="180" width="140" height="510" rx="6" class="box"/>
+  <text x="360" y="212" text-anchor="middle" class="l b">Front desk</text>
+  <text x="360" y="240" text-anchor="middle" class="t">Two doors: web</text>
+  <text x="360" y="258" text-anchor="middle" class="t">pages for people,</text>
+  <text x="360" y="276" text-anchor="middle" class="t">an API for apps.</text>
+  <text x="360" y="308" text-anchor="middle" class="t">Checks who you</text>
+  <text x="360" y="326" text-anchor="middle" class="t">are, every time.</text>
+  <text x="360" y="358" text-anchor="middle" class="t">Shows each role</text>
+  <text x="360" y="376" text-anchor="middle" class="t">only its own</text>
+  <text x="360" y="394" text-anchor="middle" class="t">numbers.</text>
+  <text x="360" y="652" text-anchor="middle" class="m">pages/ · routers/</text>
+  <text x="360" y="670" text-anchor="middle" class="m">auth.py</text>
+
+  <!-- business logic -->
+  <rect x="480" y="180" width="140" height="510" rx="6" class="box"/>
+  <text x="550" y="212" text-anchor="middle" class="l b">Business logic</text>
+  <text x="550" y="240" text-anchor="middle" class="t">Booking, offers,</text>
+  <text x="550" y="258" text-anchor="middle" class="t">payments,</text>
+  <text x="550" y="276" text-anchor="middle" class="t">disputes.</text>
+  <text x="550" y="308" text-anchor="middle" class="t">Every rule lives</text>
+  <text x="550" y="326" text-anchor="middle" class="t">here once, so the</text>
+  <text x="550" y="344" text-anchor="middle" class="t">pages and the API</text>
+  <text x="550" y="362" text-anchor="middle" class="t">cannot disagree.</text>
+  <text x="550" y="670" text-anchor="middle" class="m">services/</text>
 
   <!-- rooms -->
-  <rect x="500" y="180" width="250" height="110" rx="6" class="box"/>
-  <text x="516" y="206" class="l b">Pricing and matching rules</text>
-  <text x="516" y="228" class="t">Set the buyer price and the seller</text>
-  <text x="516" y="246" class="t">payout; pick who gets the offer.</text>
-  <text x="516" y="274" class="m">pricing.py · matching.py</text>
+  <rect x="670" y="180" width="240" height="86" rx="6" class="box"/>
+  <text x="684" y="204" class="l b">Pricing and matching</text>
+  <text x="684" y="224" class="t">Set both prices; choose which</text>
+  <text x="684" y="241" class="t">seller gets the offer.</text>
+  <text x="684" y="258" class="m">pricing.py · matching.py</text>
 
-  <rect x="500" y="315" width="250" height="110" rx="6" class="box"/>
-  <text x="516" y="341" class="l b">The ledger</text>
-  <text x="516" y="363" class="t">Every job, offer, charge and payout.</text>
-  <text x="516" y="381" class="t">Corrections are added, never erased.</text>
-  <text x="516" y="409" class="m">database · entities.py</text>
+  <rect x="670" y="286" width="240" height="86" rx="6" class="box"/>
+  <text x="684" y="310" class="l b">Catalog</text>
+  <text x="684" y="330" class="t">What the public may see, and</text>
+  <text x="684" y="347" class="t">the "from" price on a listing.</text>
+  <text x="684" y="364" class="m">catalog.py</text>
 
-  <rect x="500" y="450" width="250" height="95" rx="6" class="box"/>
-  <text x="516" y="476" class="l b">Outbox</text>
-  <text x="516" y="498" class="t">Emails wait here, queued together</text>
-  <text x="516" y="516" class="t">with the event that caused them.</text>
-  <text x="516" y="536" class="m">notifications.py</text>
+  <rect x="670" y="392" width="240" height="86" rx="6" class="box"/>
+  <text x="684" y="416" class="l b">The ledger</text>
+  <text x="684" y="436" class="t">Every job, charge and payout.</text>
+  <text x="684" y="453" class="t">Fixes are added, never erased.</text>
+  <text x="684" y="470" class="m">database · entities.py</text>
 
-  <rect x="500" y="570" width="250" height="100" rx="6" class="box"/>
-  <text x="516" y="596" class="l b">Night watch</text>
-  <text x="516" y="618" class="t">Runs on a clock, even when nobody</text>
-  <text x="516" y="636" class="t">is using the service.</text>
-  <text x="516" y="658" class="m">maintenance loop</text>
+  <rect x="670" y="498" width="240" height="86" rx="6" class="box"/>
+  <text x="684" y="522" class="l b">Outbox</text>
+  <text x="684" y="542" class="t">Emails wait here, queued with</text>
+  <text x="684" y="559" class="t">the event that caused them.</text>
+  <text x="684" y="576" class="m">notifications.py</text>
+
+  <rect x="670" y="604" width="240" height="86" rx="6" class="box"/>
+  <text x="684" y="628" class="l b">Night watch</text>
+  <text x="684" y="648" class="t">Runs on a clock, even when</text>
+  <text x="684" y="665" class="t">nobody is using the service.</text>
+  <text x="684" y="682" class="m">services/maintenance.py</text>
 
   <!-- plugs -->
-  <rect x="790" y="205" width="100" height="85" rx="6" class="box"/>
-  <text x="840" y="240" text-anchor="middle" class="t b">Payments</text>
-  <text x="840" y="258" text-anchor="middle" class="t">plug</text>
-  <text x="840" y="278" text-anchor="middle" class="m">payments/</text>
-  <rect x="790" y="455" width="100" height="85" rx="6" class="box"/>
-  <text x="840" y="490" text-anchor="middle" class="t b">Mail</text>
-  <text x="840" y="508" text-anchor="middle" class="t">plug</text>
-  <text x="840" y="528" text-anchor="middle" class="m">mail.py</text>
+  <rect x="935" y="200" width="95" height="85" rx="6" class="box"/>
+  <text x="982" y="234" text-anchor="middle" class="t b">Payments</text>
+  <text x="982" y="252" text-anchor="middle" class="t">plug</text>
+  <text x="982" y="272" text-anchor="middle" class="m">payments/</text>
+  <rect x="935" y="498" width="95" height="86" rx="6" class="box"/>
+  <text x="982" y="532" text-anchor="middle" class="t b">Mail</text>
+  <text x="982" y="550" text-anchor="middle" class="t">plug</text>
+  <text x="982" y="570" text-anchor="middle" class="m">mail.py</text>
 
   <!-- outside world -->
-  <rect x="970" y="195" width="180" height="105" rx="6" class="out"/>
-  <text x="1060" y="228" text-anchor="middle" class="l b">Payment provider</text>
-  <text x="1060" y="252" text-anchor="middle" class="s">Stripe, or a built-in</text>
-  <text x="1060" y="270" text-anchor="middle" class="s">stand-in for demos</text>
-  <rect x="970" y="450" width="180" height="95" rx="6" class="out"/>
-  <text x="1060" y="483" text-anchor="middle" class="l b">Email service</text>
-  <text x="1060" y="507" text-anchor="middle" class="s">any mail provider,</text>
-  <text x="1060" y="525" text-anchor="middle" class="s">or just the log</text>
+  <rect x="1110" y="190" width="180" height="105" rx="6" class="out"/>
+  <text x="1200" y="223" text-anchor="middle" class="l b">Payment provider</text>
+  <text x="1200" y="247" text-anchor="middle" class="s">Stripe, or a built-in</text>
+  <text x="1200" y="265" text-anchor="middle" class="s">stand-in for demos</text>
+  <rect x="1110" y="494" width="180" height="95" rx="6" class="out"/>
+  <text x="1200" y="527" text-anchor="middle" class="l b">Email service</text>
+  <text x="1200" y="551" text-anchor="middle" class="s">any mail provider,</text>
+  <text x="1200" y="569" text-anchor="middle" class="s">or just the log</text>
 
   <!-- arrows -->
-  <line x1="440" y1="235" x2="498" y2="235" class="go" marker-end="url(#ai)"/>
-  <line x1="440" y1="370" x2="498" y2="370" class="go" marker-end="url(#ai)"/>
-  <path d="M365 180V160H840V203" class="go" marker-end="url(#ai)"/>
-  <line x1="890" y1="232" x2="968" y2="232" class="go" marker-end="url(#ai)"/>
-  <line x1="970" y1="264" x2="892" y2="264" class="go" marker-end="url(#ai)"/>
-  <line x1="625" y1="425" x2="625" y2="448" class="go" marker-end="url(#ai)"/>
-  <line x1="750" y1="497" x2="788" y2="497" class="go" marker-end="url(#ai)"/>
-  <line x1="890" y1="497" x2="968" y2="497" class="go" marker-end="url(#ai)"/>
-  <path d="M500 620C466 620 466 400 498 400" class="go" marker-end="url(#ai)"/>
-  <line x1="700" y1="570" x2="700" y2="547" class="go" marker-end="url(#ai)"/>
+  <line x1="430" y1="301" x2="478" y2="301" class="go" marker-end="url(#ai)"/>
+  <line x1="620" y1="223" x2="668" y2="223" class="go" marker-end="url(#ai)"/>
+  <line x1="620" y1="329" x2="668" y2="329" class="go" marker-end="url(#ai)"/>
+  <line x1="620" y1="425" x2="668" y2="425" class="go" marker-end="url(#ai)"/>
+  <path d="M550 180V160H982V198" class="go" marker-end="url(#ai)"/>
+  <line x1="1030" y1="228" x2="1108" y2="228" class="go" marker-end="url(#ai)"/>
+  <line x1="1110" y1="260" x2="1032" y2="260" class="go" marker-end="url(#ai)"/>
+  <line x1="790" y1="478" x2="790" y2="496" class="go" marker-end="url(#ai)"/>
+  <line x1="910" y1="541" x2="933" y2="541" class="go" marker-end="url(#ai)"/>
+  <line x1="1030" y1="541" x2="1108" y2="541" class="go" marker-end="url(#ai)"/>
+  <path d="M670 650C636 650 636 455 668 455" class="go" marker-end="url(#ai)"/>
+  <line x1="860" y1="604" x2="860" y2="586" class="go" marker-end="url(#ai)"/>
 
   <!-- step badges -->
   <g fill="#b4472a">
-    <circle cx="248" cy="235" r="11"/><circle cx="468" cy="235" r="11"/><circle cx="468" cy="370" r="11"/>
-    <circle cx="610" cy="160" r="11"/><circle cx="930" cy="232" r="11"/>
-    <circle cx="650" cy="437" r="11"/><circle cx="930" cy="497" r="11"/>
-    <circle cx="475" cy="510" r="11"/><circle cx="724" cy="558" r="11"/>
+    <circle cx="248" cy="211" r="11"/><circle cx="450" cy="301" r="11"/>
+    <circle cx="640" cy="223" r="11"/><circle cx="640" cy="329" r="11"/><circle cx="640" cy="425" r="11"/>
+    <circle cx="770" cy="160" r="11"/><circle cx="1070" cy="228" r="11"/>
+    <circle cx="1070" cy="541" r="11"/>
+    <circle cx="645" cy="555" r="11"/>
   </g>
-  <text x="248" y="240" text-anchor="middle" class="n">1</text>
-  <text x="468" y="240" text-anchor="middle" class="n">2</text>
-  <text x="468" y="375" text-anchor="middle" class="n">3</text>
-  <text x="610" y="165" text-anchor="middle" class="n">4</text>
-  <text x="930" y="237" text-anchor="middle" class="n">4</text>
-  <text x="650" y="442" text-anchor="middle" class="n">5</text>
-  <text x="930" y="502" text-anchor="middle" class="n">5</text>
-  <text x="475" y="515" text-anchor="middle" class="n">6</text>
-  <text x="724" y="563" text-anchor="middle" class="n">6</text>
+  <text x="248" y="216" text-anchor="middle" class="n">1</text>
+  <text x="450" y="306" text-anchor="middle" class="n">2</text>
+  <text x="640" y="228" text-anchor="middle" class="n">3</text>
+  <text x="640" y="334" text-anchor="middle" class="n">3</text>
+  <text x="640" y="430" text-anchor="middle" class="n">4</text>
+  <text x="770" y="165" text-anchor="middle" class="n">5</text>
+  <text x="1070" y="233" text-anchor="middle" class="n">5</text>
+  <text x="1070" y="546" text-anchor="middle" class="n">6</text>
+  <text x="645" y="560" text-anchor="middle" class="n">7</text>
 
   <!-- legend -->
   <g fill="#b4472a">
-    <circle cx="71" cy="735" r="11"/><circle cx="71" cy="770" r="11"/><circle cx="71" cy="805" r="11"/>
-    <circle cx="631" cy="735" r="11"/><circle cx="631" cy="770" r="11"/><circle cx="631" cy="805" r="11"/>
+    <circle cx="71" cy="755" r="11"/><circle cx="71" cy="787" r="11"/><circle cx="71" cy="819" r="11"/><circle cx="71" cy="851" r="11"/>
+    <circle cx="701" cy="755" r="11"/><circle cx="701" cy="787" r="11"/><circle cx="701" cy="819" r="11"/>
   </g>
-  <text x="71" y="740" text-anchor="middle" class="n">1</text>
-  <text x="92" y="740" class="t">Every request, from any role, comes through the front desk.</text>
-  <text x="71" y="775" text-anchor="middle" class="n">2</text>
-  <text x="92" y="775" class="t">The rules work out the price and, later, which seller gets the offer.</text>
-  <text x="71" y="810" text-anchor="middle" class="n">3</text>
-  <text x="92" y="810" class="t">Each step is saved in the ledger before anyone is told it happened.</text>
-  <text x="631" y="740" text-anchor="middle" class="n">4</text>
-  <text x="652" y="740" class="t">The provider charges cards and pays sellers, then confirms back.</text>
-  <text x="631" y="775" text-anchor="middle" class="n">5</text>
-  <text x="652" y="775" class="t">Emails are queued with the event, then sent through the mail plug.</text>
-  <text x="631" y="810" text-anchor="middle" class="n">6</text>
-  <text x="652" y="810" class="t">The night watch expires stale offers and unpaid jobs, and sends the mail.</text>
+  <text x="71" y="760" text-anchor="middle" class="n">1</text>
+  <text x="92" y="760" class="t">Everyone comes through the front desk. Admins have no web pages, only the API.</text>
+  <text x="71" y="792" text-anchor="middle" class="n">2</text>
+  <text x="92" y="792" class="t">Pages and API hand every request to the same business logic.</text>
+  <text x="71" y="824" text-anchor="middle" class="n">3</text>
+  <text x="92" y="824" class="t">It asks the rules for prices and a seller, and the catalog what to show.</text>
+  <text x="71" y="856" text-anchor="middle" class="n">4</text>
+  <text x="92" y="856" class="t">Each step is saved in the ledger before anyone is told it happened.</text>
+  <text x="701" y="760" text-anchor="middle" class="n">5</text>
+  <text x="722" y="760" class="t">The provider charges cards and pays sellers, then confirms back.</text>
+  <text x="701" y="792" text-anchor="middle" class="n">6</text>
+  <text x="722" y="792" class="t">Queued emails leave the outbox through the mail plug.</text>
+  <text x="701" y="824" text-anchor="middle" class="n">7</text>
+  <text x="722" y="824" class="t">The night watch expires stale offers and unpaid jobs, sends the mail,</text>
+  <text x="722" y="842" class="t">and retries payment confirmations that failed.</text>
 </svg>

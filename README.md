@@ -156,6 +156,14 @@ way through Swagger.
 
 ## How it works
 
+The platform prices both sides of every job and keeps the difference:
+
+![One job, two prices: the buyer pays $20.00, the seller earns $14.00, the platform keeps the $6.00 spread](docs/diagrams/01-one-job-two-prices.svg)
+
+Three more diagrams, drawn for readers who won't open the code, are in
+[`docs/diagrams/`](docs/diagrams/): the job lifecycle as a route map, where
+the money sits after each step, and the parts of the service.
+
 ### Dispatch: the platform picks the seller
 
 1. A seller posts availability for a service type and has a **capacity**:
@@ -277,7 +285,7 @@ tests/                      pytest; tests/test_architecture.py holds the invaria
 src/marketplace_mcp/        ops MCP server: the admin API as operator tools (HTTP client only)
 scripts/                    demo.py (headless lifecycle), seed.py (demo data + tokens)
 loadtest/                   Locust harness and staged runner
-docs/                       deployment guide, agent setup, phase specs/plans, try-out findings
+docs/                       deployment guide, diagrams, agent setup, phase specs/plans, try-out findings
 .claude/                    agent skills, reviewer subagents, hooks
 evals/                      reviewer evaluation: real past bugs re-seeded as review cases
 .semgrep/                   Semgrep rules for the security invariants, with a test corpus

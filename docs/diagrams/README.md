@@ -6,6 +6,9 @@ reading the code. Read them in order; each is a standalone SVG.
 Every dollar figure comes from the demo run (`uv run python scripts/demo.py`):
 a $20.00 job, a $14.00 payout, a $6.00 spread.
 
+For what the product looks like in a browser, see
+[`../screenshots/`](../screenshots/).
+
 ## 1. One job, two prices
 
 The business model. The buyer and the seller each see only their own number;
@@ -15,8 +18,9 @@ the platform sees both and keeps the difference.
 
 ## 2. The journey of one job
 
-Every state a job can be in, drawn as a route map: the trip everyone hopes
-for, and the ways a job can leave it.
+Every state a job can be in, drawn as a route map. A job starts one of two
+ways: dispatch (the platform picks the seller) or browse (the buyer picks a
+listing). Both then follow the same line, with the same ways off it.
 
 ![The journey of one job](02-job-journey.svg)
 
