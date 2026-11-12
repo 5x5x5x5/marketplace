@@ -73,4 +73,4 @@ jobs:
           echo "$GITLEAKS_SHA256  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
       - name: Scan full history
-        run: '"$RUNNER_TEMP/gitleaks" detect --source . --redact --no-banner --exit-code 1'
+        run: '"$RUNNER_TEMP/gitleaks" detect --source . --redact --verbose --no-banner --exit-code 1'
