@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-label="Route map of one job: quote, job posted, offer sent, accepted and paid, completed. Side branches show re-offering to the next seller, waiting for payment, expiry and cancellation.">
+  <style>
+    text{font-family:Georgia,'Noto Serif','Times New Roman',serif;fill:#23201b}
+    .h{font-size:30px;font-weight:bold}
+    .sub{font-size:16px;font-style:italic;fill:#7a7265}
+    .l{font-size:16px}
+    .s{font-size:13px;fill:#7a7265}
+    .b{font-weight:bold}
+    .m{font-family:'DejaVu Sans Mono',Menlo,Consolas,monospace;font-size:12px;fill:#7a7265}
+    .st{fill:#f7f2e8;stroke:#23201b;stroke-width:3.5}
+    .br{stroke:#a59c8a;stroke-width:4;fill:none}
+    .end{fill:#a59c8a}
+  </style>
+  <defs>
+    <marker id="am" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" viewBox="0 0 10 10" refX="7" refY="5" orient="auto"><path d="M0 0L10 5L0 10z" fill="#a59c8a"/></marker>
+  </defs>
+  <rect width="1200" height="720" fill="#f7f2e8"/>
+
+  <text x="60" y="70" class="h">The journey of one job</text>
+  <text x="60" y="98" class="sub">The heavy line is the trip everyone hopes for. The grey lines are the ways off it.</text>
+
+  <!-- afterwards -->
+  <line x1="1050" y1="245" x2="1050" y2="318" stroke="#a59c8a" stroke-width="1.5" stroke-dasharray="3 4"/>
+  <rect x="900" y="150" width="250" height="95" rx="6" fill="#fffdf8" stroke="#a59c8a" stroke-width="1.5"/>
+  <text x="916" y="175" class="l b" font-size="15">Afterwards</text>
+  <text x="916" y="196" class="s">Both sides can review each other.</text>
+  <text x="916" y="214" class="s">The buyer has 7 days to open a</text>
+  <text x="916" y="232" class="s">dispute (see the money diagram).</text>
+
+  <!-- dead ends -->
+  <line x1="400" y1="330" x2="400" y2="500" class="br"/>
+  <line x1="650" y1="330" x2="650" y2="500" class="br"/>
+  <line x1="920" y1="330" x2="920" y2="500" class="br"/>
+
+  <!-- detour: waiting for payment -->
+  <path d="M560 330C610 330 610 250 660 250C710 250 710 330 760 330" class="br"/>
+  <circle cx="660" cy="250" r="8" fill="#f7f2e8" stroke="#a59c8a" stroke-width="3.5"/>
+  <text x="665" y="166" text-anchor="middle" class="b" font-size="15">Waiting for payment</text>
+  <text x="665" y="185" text-anchor="middle" class="s">if the card needs an extra step;</text>
+  <text x="665" y="202" text-anchor="middle" class="s">the seller's slot is held, up to 30 min</text>
+  <text x="665" y="222" text-anchor="middle" class="m">awaiting_payment</text>
+
+  <!-- loop: next seller -->
+  <path d="M486 316C436 236 564 236 516 312" class="br" marker-end="url(#am)"/>
+  <text x="432" y="205" text-anchor="middle" class="s">Declined, or no reply in</text>
+  <text x="432" y="222" text-anchor="middle" class="s">2 minutes: try the next seller</text>
+
+  <!-- main line -->
+  <line x1="110" y1="330" x2="1050" y2="330" stroke="#b4472a" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="110" cy="330" r="12" class="st"/>
+  <circle cx="300" cy="330" r="12" class="st"/>
+  <circle cx="500" cy="330" r="12" class="st"/>
+  <circle cx="790" cy="330" r="12" class="st"/>
+  <circle cx="1050" cy="330" r="12" class="st"/>
+
+  <text x="110" y="370" text-anchor="middle" class="l b">Quote</text>
+  <text x="110" y="390" text-anchor="middle" class="m">quote</text>
+  <text x="110" y="412" text-anchor="middle" class="s">Buyer asks for a price</text>
+
+  <text x="300" y="370" text-anchor="middle" class="l b">Job posted</text>
+  <text x="300" y="390" text-anchor="middle" class="m">pending</text>
+  <text x="300" y="412" text-anchor="middle" class="s">Buyer takes the price</text>
+
+  <text x="500" y="370" text-anchor="middle" class="l b">Offer sent</text>
+  <text x="500" y="390" text-anchor="middle" class="m">offered</text>
+  <text x="500" y="412" text-anchor="middle" class="s">Platform picks a seller</text>
+
+  <text x="790" y="370" text-anchor="middle" class="l b">Accepted and paid</text>
+  <text x="790" y="390" text-anchor="middle" class="m">accepted</text>
+  <text x="790" y="412" text-anchor="middle" class="s">Seller says yes; card charged</text>
+
+  <text x="1050" y="370" text-anchor="middle" class="l b">Completed</text>
+  <text x="1050" y="390" text-anchor="middle" class="m">completed</text>
+  <text x="1050" y="412" text-anchor="middle" class="s">Seller finishes; seller paid</text>
+
+  <!-- terminus labels -->
+  <circle cx="400" cy="500" r="9" class="end"/>
+  <text x="400" y="532" text-anchor="middle" class="b" font-size="15">Expired</text>
+  <text x="400" y="552" text-anchor="middle" class="s">No seller could take it, or the</text>
+  <text x="400" y="570" text-anchor="middle" class="s">payment never arrived. No charge.</text>
+  <text x="400" y="590" text-anchor="middle" class="m">expired</text>
+
+  <circle cx="650" cy="500" r="9" class="end"/>
+  <text x="650" y="532" text-anchor="middle" class="b" font-size="15">Cancelled by the buyer</text>
+  <text x="650" y="552" text-anchor="middle" class="s">Before a seller is locked in.</text>
+  <text x="650" y="570" text-anchor="middle" class="s">No charge.</text>
+  <text x="650" y="590" text-anchor="middle" class="m">cancelled</text>
+
+  <circle cx="920" cy="500" r="9" class="end"/>
+  <text x="920" y="532" text-anchor="middle" class="b" font-size="15">Cancelled by an admin</text>
+  <text x="920" y="552" text-anchor="middle" class="s">After payment: the buyer</text>
+  <text x="920" y="570" text-anchor="middle" class="s">gets a full refund.</text>
+  <text x="920" y="590" text-anchor="middle" class="m">cancelled</text>
+
+  <!-- legend -->
+  <line x1="60" y1="660" x2="1140" y2="660" stroke="#cfc6b4" stroke-width="1"/>
+  <line x1="60" y1="690" x2="110" y2="690" stroke="#b4472a" stroke-width="8" stroke-linecap="round"/>
+  <text x="124" y="695" class="s">the hoped-for trip</text>
+  <line x1="300" y1="690" x2="350" y2="690" class="br"/>
+  <text x="364" y="695" class="s">a way off the line</text>
+  <text x="560" y="695" class="m">like_this</text>
+  <text x="634" y="695" class="s">is the status name the software uses</text>
+</svg>
