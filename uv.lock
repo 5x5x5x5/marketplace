@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -875,6 +875,7 @@ wheels = [
 name = "marketplace"
 version = "0.1.0"
 source = { editable = "." }
+default-groups = ["dev", "mcp"]
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
@@ -910,7 +911,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.20.1" },
     { name = "fastapi", specifier = ">=0.162.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.8" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.9" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3.1" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.14.3" },
     { name = "pydantic-settings", specifier = ">=2.16.2" },
