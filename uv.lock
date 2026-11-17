@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -875,6 +875,7 @@ wheels = [
 name = "marketplace"
 version = "0.1.0"
 source = { editable = "." }
+default-groups = ["dev", "mcp"]
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
@@ -911,7 +912,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.162.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.8" },
-    { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3.1" },
+    { name = "pwdlib", extras = ["argon2"], specifier = ">=0.4.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.14.3" },
     { name = "pydantic-settings", specifier = ">=2.16.2" },
     { name = "python-multipart", specifier = ">=0.0.33" },
@@ -1250,11 +1251,11 @@ wheels = [
 
 [[package]]
 name = "pwdlib"
-version = "0.3.1"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/78/a6/644f28a21cb68920d06b264e72b864ac9bff2377f4757dd4648b5110b3ad/pwdlib-0.3.1.tar.gz", hash = "sha256:2ffd1955c92190d5bfbdc5071bf7d422568b83f943453ebd3d43d031ccba37b1", size = 216951, upload-time = "2026-08-12T08:38:38.383Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/9f/63dc5850fe793c0c13637792dd2494ff5ae6f7b95e334fd2b89a2d5803c9/pwdlib-0.4.0.tar.gz", hash = "sha256:123fd269d0980416f3a2a7b0c3a183f3b2f8580bb44bdadadde93e4bf7582f9d", size = 226803, upload-time = "2026-11-14T10:06:30.026Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6b/2e/51979293b2337f508597d13ee20db1ac1d43e48086b2ed7de6da213ed46b/pwdlib-0.3.1-py3-none-any.whl", hash = "sha256:944fa439198bed8ac3ea63dac76ea4ae43e2a35f4f21e9e725e82d3c2b97d6a5", size = 9272, upload-time = "2026-08-12T08:38:37.483Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/6c/63119c0eba65efbe799e291a2cc9532ecaf7abc03d3f20e888df3fddff79/pwdlib-0.4.0-py3-none-any.whl", hash = "sha256:ef34f40b43efd610fce615391027f08bdb1403fcccda9897978f69275b61b2ee", size = 9470, upload-time = "2026-11-14T10:06:28.478Z" },
 ]
 
 [package.optional-dependencies]
